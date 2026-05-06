@@ -229,6 +229,9 @@ def classify(
     if not issue_number:
         label = NEEDS_REPAIR_LABEL
         reasons.append("missing linked issue")
+    elif issue is None:
+        label = NEEDS_REPAIR_LABEL
+        reasons.append(f"linked issue #{issue_number} could not be verified")
     if str(pr.get("state") or "") != "OPEN":
         label = NEEDS_REPAIR_LABEL
         reasons.append(f"state is {pr.get('state')}")
@@ -252,17 +255,19 @@ def classify(
         if blockers:
             label = NEEDS_REPAIR_LABEL
             reasons.extend(f"dependency blocked: {blocker}" for blocker in blockers)
-    if has_superseded_signal(pr, issue) or duplicate_issue:
+    superseded = has_superseded_signal(pr, issue) or duplicate_issue
+    manual_validation = issue_has_manual_validation(issue)
+    if superseded:
         label = SUPERSEDED_LABEL
         if duplicate_issue:
             reasons.append("duplicate linked issue PR")
         else:
             reasons.append("superseded/stale signal")
     overlaps = overlap_numbers or []
-    if overlaps and label == APPROVED_LABEL:
-        label = MANUAL_LABEL
+    if overlaps and label != SUPERSEDED_LABEL:
+        label = NEEDS_REPAIR_LABEL
         reasons.append("overlaps open local-agent PRs: " + ", ".join(f"#{n}" for n in overlaps))
-    if issue_has_manual_validation(issue) and label == APPROVED_LABEL:
+    if manual_validation and label != SUPERSEDED_LABEL:
         label = MANUAL_LABEL
         reasons.append("manual or deployed validation required")
     if not reasons:
@@ -279,6 +284,58 @@ def classify(
     )
 
 
+def review_comment_body(decision: ReviewDecision) -> str:
+    return (
+        "<!-- atlas-agent-review -->\n"
+        f"Automated local review classified this PR as `{decision.label}`.\n\n"
+        "Reasons:\n"
+        + "\n".join(f"- {reason}" for reason in decision.reasons)
+    )
+
+
+def post_review_comment(decision: ReviewDecision) -> None:
+    body = review_comment_body(decision)
+    payload = common.gh_json_or_none(
+        ["pr", "view", str(decision.number), "--repo", decision.repo, "--json", "comments"],
+        retries=2,
+    ) or {}
+    for comment in payload.get("comments") or []:
+        if "<!-- atlas-agent-review -->" not in str(comment.get("body") or ""):
+            continue
+        comment_id = str(comment.get("id") or "")
+        if not comment_id:
+            return
+        proc = common.run(
+            [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { issueComment { id } } }",
+                "-f",
+                f"id={comment_id}",
+                "-f",
+                f"body={body}",
+            ],
+            check=False,
+        )
+        if proc.returncode != 0 and comment_id.isdigit():
+            common.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{decision.repo}/issues/comments/{comment_id}",
+                    "-X",
+                    "PATCH",
+                    "-f",
+                    f"body={body}",
+                ],
+                check=False,
+            )
+        return
+    common.run(["gh", "pr", "comment", str(decision.number), "--repo", decision.repo, "--body", body], check=False)
+
+
 def ensure_review_labels(repo: str) -> None:
     for label, color in REVIEW_LABELS.items():
         common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
@@ -288,16 +345,10 @@ def apply_decision(decision: ReviewDecision, *, comment: bool) -> None:
     ensure_review_labels(decision.repo)
     for label in REVIEW_LABELS:
         if label != decision.label:
-            common.run(["gh", "pr", "edit", str(decision.number), "--repo", decision.repo, "--remove-label", label], check=False)
-    common.run(["gh", "pr", "edit", str(decision.number), "--repo", decision.repo, "--add-label", decision.label])
+            common.run(["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--remove-label", label], check=False)
+    common.run(["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", decision.label])
     if comment:
-        body = (
-            "<!-- atlas-agent-review -->\n"
-            f"Automated local review classified this PR as `{decision.label}`.\n\n"
-            "Reasons:\n"
-            + "\n".join(f"- {reason}" for reason in decision.reasons)
-        )
-        common.run(["gh", "pr", "comment", str(decision.number), "--repo", decision.repo, "--body", body], check=False)
+        post_review_comment(decision)
 
 
 def scan(args: argparse.Namespace) -> list[ReviewDecision]:
