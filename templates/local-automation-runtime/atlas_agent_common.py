@@ -207,10 +207,11 @@ def dependency_refs_from_body(repo: str, body: str) -> list[tuple[str, int, str]
     lowered = body.lower()
     if "open dependencies:" not in lowered:
         return refs
-    if re.search(r"(?im)^\s*open dependencies:\s*`?none`?\s*$", body):
+    header = r"(?:-\s*)?open dependencies"
+    if re.search(rf"(?im)^\s*{header}:\s*`?none`?\s*$", body):
         return refs
 
-    match = re.search(r"(?ims)^\s*open dependencies:\s*(.*?)(?:\n\s*\n|\n[A-Z][A-Za-z ]+:\s*|$)", body)
+    match = re.search(rf"(?ims)^\s*{header}:\s*(.*?)(?:\n\s*\n|\n\s*(?:-\s*)?[A-Z][A-Za-z ]+:\s*|$)", body)
     block = match.group(1) if match else body
     for owner, name, kind, number in re.findall(
         r"github\.com/([^/\s]+)/([^/\s]+)/(issues|pull)/(\d+)",
@@ -234,7 +235,8 @@ def dependency_refs_from_body(repo: str, body: str) -> list[tuple[str, int, str]
 def issue_dependency_blockers(repo: str, issue: dict[str, Any]) -> list[str]:
     body = str(issue.get("body") or "")
     lowered = body.lower()
-    if "open dependencies:" not in lowered or re.search(r"(?im)^\s*open dependencies:\s*`?none`?\s*$", body):
+    header = r"(?:-\s*)?open dependencies"
+    if "open dependencies:" not in lowered or re.search(rf"(?im)^\s*{header}:\s*`?none`?\s*$", body):
         return []
     refs = dependency_refs_from_body(repo, body)
     if not refs:
