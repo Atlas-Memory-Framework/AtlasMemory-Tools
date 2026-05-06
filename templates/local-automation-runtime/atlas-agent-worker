@@ -1,0 +1,477 @@
+#!/usr/bin/env python3
+import fnmatch
+import json
+import os
+import pathlib
+import shlex
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+
+def run(cmd, cwd=None, check=True, capture=True, env=None):
+    print(f"+ {cmd}", flush=True)
+    p = subprocess.run(
+        cmd,
+        cwd=cwd,
+        shell=True,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+        env=env,
+    )
+    if check and p.returncode != 0:
+        raise RuntimeError(f"Command failed: {cmd}\n{p.stdout or ''}")
+    return p.stdout or ""
+
+
+def gh_json(cmd):
+    out = run(cmd)
+    return json.loads(out) if out.strip() else None
+
+
+def now_id():
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def require_env(name):
+    val = os.environ.get(name)
+    if not val:
+        raise SystemExit(f"Missing env var: {name}")
+    return val
+
+
+def env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        raise SystemExit(f"{name} must be an integer")
+
+
+def label_names(issue):
+    return {label["name"] for label in issue.get("labels", [])}
+
+
+def trusted_author(issue):
+    trusted = {
+        item.strip()
+        for item in os.environ.get("AGENT_TRUSTED_AUTHORS", "").split(",")
+        if item.strip()
+    }
+    if not trusted:
+        return False
+    author = (issue.get("author") or {}).get("login")
+    return author in trusted
+
+
+def issue_is_ready(issue):
+    labels = label_names(issue)
+    return (
+        os.environ["AGENT_READY_LABEL"] in labels
+        and os.environ["AGENT_RUNNING_LABEL"] not in labels
+        and trusted_author(issue)
+    )
+
+
+def safe_branch(issue_number, job_id):
+    return f"agent/issue-{issue_number}/{job_id}"
+
+
+def quote_path(path):
+    return shlex.quote(str(path))
+
+
+def acquire_file_lock(path, stale_seconds=3600, wait_seconds=300):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + wait_seconds
+    while True:
+        if path.exists() and time.time() - path.stat().st_mtime > stale_seconds:
+            path.unlink(missing_ok=True)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            if time.time() >= deadline:
+                raise RuntimeError(f"Timed out waiting for lock: {path}")
+            time.sleep(2)
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"pid": os.getpid(), "created_at": now_id()}) + "\n")
+        return path
+
+
+def release_file_lock(path):
+    if path:
+        path.unlink(missing_ok=True)
+
+
+def podman_command():
+    configured = os.environ.get("AGENT_PODMAN_CMD", "").strip()
+    return configured or "podman"
+
+
+def changed_paths(repo_dir):
+    rows = run("git diff --name-status --diff-filter=ACMRTUXB", cwd=repo_dir).splitlines()
+    paths = []
+    statuses = []
+    for row in rows:
+        parts = row.split("\t")
+        if not parts:
+            continue
+        statuses.append(parts[0])
+        if parts[0].startswith("R") and len(parts) >= 3:
+            paths.append(parts[2])
+        elif len(parts) >= 2:
+            paths.append(parts[1])
+    return paths, statuses
+
+
+def executable_paths(repo_dir):
+    out = run("git diff --summary", cwd=repo_dir)
+    paths = []
+    for line in out.splitlines():
+        marker = "create mode 100755 "
+        if marker in line:
+            paths.append(line.split(marker, 1)[1].strip())
+    return paths
+
+
+def blocked_policy_violations(paths, labels):
+    workflow_patterns = [
+        ".github/workflows/**",
+        ".github/actions/**",
+    ]
+    infra_patterns = [
+        "**/*secret*",
+        "**/*token*",
+        ".env*",
+        "deploy/**",
+        "infra/**",
+        "terraform/**",
+    ]
+
+    violations = []
+    allow_workflows = os.environ["AGENT_ALLOW_WORKFLOWS_LABEL"] in labels
+    allow_infra = os.environ["AGENT_ALLOW_INFRA_LABEL"] in labels
+
+    for path in paths:
+        if not allow_workflows and any(fnmatch.fnmatch(path, pat) for pat in workflow_patterns):
+            violations.append(f"{path} requires {os.environ['AGENT_ALLOW_WORKFLOWS_LABEL']}")
+        if not allow_infra and any(fnmatch.fnmatch(path, pat) for pat in infra_patterns):
+            violations.append(f"{path} requires {os.environ['AGENT_ALLOW_INFRA_LABEL']}")
+    return violations
+
+
+def build_prompt(issue, repo):
+    return f"""You are working on GitHub issue #{issue["number"]} in repo {repo}.
+
+Title:
+{issue.get("title", "")}
+
+Body:
+{issue.get("body", "")}
+
+Comments:
+{json.dumps(issue.get("comments", []), indent=2)}
+
+Instructions:
+- Make the smallest correct change that addresses the issue.
+- Do not change workflows, secrets, auth, deployment, or infrastructure.
+- Run relevant tests if available.
+- Leave a clear summary of changes and a Tests section with exact commands and results in your final response.
+"""
+
+
+def comment_issue(repo, number, job_dir, body):
+    comment_file = job_dir / "comment.md"
+    comment_file.write_text(body, encoding="utf-8")
+    run(
+        f"gh issue comment {number} --repo {shlex.quote(repo)} "
+        f"--body-file {quote_path(comment_file)}",
+        check=False,
+    )
+
+
+def clear_running_labels(repo, number, done=False, failed=False):
+    run(
+        f'gh issue edit {number} --repo {shlex.quote(repo)} '
+        f'--remove-label "{os.environ["AGENT_READY_LABEL"]}"',
+        check=False,
+    )
+    run(
+        f'gh issue edit {number} --repo {shlex.quote(repo)} '
+        f'--remove-label "{os.environ["AGENT_RUNNING_LABEL"]}"',
+        check=False,
+    )
+    if done:
+        run(
+            f'gh issue edit {number} --repo {shlex.quote(repo)} '
+            f'--add-label "{os.environ["AGENT_DONE_LABEL"]}"',
+            check=False,
+        )
+    if failed:
+        run(
+            f'gh issue edit {number} --repo {shlex.quote(repo)} '
+            f'--add-label "{os.environ["AGENT_FAILED_LABEL"]}"',
+            check=False,
+        )
+
+
+def process_issue(issue, publish):
+    repo = require_env("AGENT_REPO")
+    base_branch = os.environ.get("AGENT_BASE_BRANCH", "main")
+    repos_dir = pathlib.Path(require_env("AGENT_REPOS")).expanduser()
+    jobs_dir = pathlib.Path(require_env("AGENT_JOBS")).expanduser()
+    codex_home = pathlib.Path(require_env("AGENT_CODEX_HOME")).expanduser()
+    image = require_env("AGENT_CODEX_IMAGE")
+
+    number = issue["number"]
+    job_id = now_id()
+    branch = safe_branch(number, job_id)
+    job_dir = jobs_dir / f"issue-{number}-{job_id}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        run(
+            f'gh issue edit {number} --repo {shlex.quote(repo)} '
+            f'--add-label "{os.environ["AGENT_RUNNING_LABEL"]}"'
+        )
+
+        issue_full = gh_json(
+            f"gh issue view {number} --repo {shlex.quote(repo)} "
+            "--json number,title,body,comments,labels,author,url"
+        )
+        labels = label_names(issue_full)
+        (job_dir / "issue.json").write_text(json.dumps(issue_full, indent=2), encoding="utf-8")
+        (job_dir / "prompt.md").write_text(build_prompt(issue_full, repo), encoding="utf-8")
+
+        safe_repo = repo.replace("/", "__")
+        repo_dir = repos_dir / safe_repo
+        worktree_dir = jobs_dir / "checkouts" / safe_repo / f"issue-{number}-{job_id}"
+        worktree_dir.parent.mkdir(parents=True, exist_ok=True)
+        cache_lock = None
+        try:
+            cache_lock = acquire_file_lock(jobs_dir / "repo-cache-locks" / f"{safe_repo}.lock")
+            if not repo_dir.exists():
+                run(f"git clone https://github.com/{repo}.git {quote_path(repo_dir)}")
+            else:
+                run("git fetch --all --prune", cwd=repo_dir)
+            run(
+                f"git worktree add --detach {quote_path(worktree_dir)} origin/{shlex.quote(base_branch)}",
+                cwd=repo_dir,
+            )
+        finally:
+            release_file_lock(cache_lock)
+
+        base_sha = run("git rev-parse HEAD", cwd=worktree_dir).strip()
+        run(f"git checkout -B {shlex.quote(branch)}", cwd=worktree_dir)
+
+        codex_cmd = (
+            f"{podman_command()} run --rm "
+            "--network=slirp4netns "
+            f"-v {quote_path(codex_home)}:/home/agent/.codex:ro,Z "
+            f"-v {quote_path(worktree_dir)}:/work:Z "
+            f"-v {quote_path(job_dir)}:/job:Z "
+            f"{shlex.quote(image)} "
+            "bash -lc "
+            + shlex.quote(
+                "cd /work && "
+                "codex exec --ephemeral --skip-git-repo-check "
+                "--dangerously-bypass-approvals-and-sandbox - < /job/prompt.md"
+            )
+        )
+
+        codex_log = run(codex_cmd, cwd=worktree_dir, check=False)
+        (job_dir / "codex.log").write_text(codex_log, encoding="utf-8")
+
+        status = run("git status --short", cwd=worktree_dir)
+        diff_stat = run("git diff --stat", cwd=worktree_dir)
+        diff_text = run("git diff", cwd=worktree_dir)
+        (job_dir / "status.txt").write_text(status, encoding="utf-8")
+        (job_dir / "diff.stat.txt").write_text(diff_stat, encoding="utf-8")
+        (job_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
+
+        paths, statuses = changed_paths(worktree_dir)
+        diff_lines = len(diff_text.splitlines())
+        max_files = env_int("AGENT_MAX_FILES_CHANGED", "20")
+        max_lines = env_int("AGENT_MAX_DIFF_LINES", "1200")
+        allow_large = os.environ["AGENT_ALLOW_LARGE_LABEL"] in labels
+
+        policy_errors = blocked_policy_violations(paths, labels)
+        new_execs = executable_paths(worktree_dir)
+        if new_execs:
+            policy_errors.extend(f"{path} is a new executable file" for path in new_execs)
+        if any("160000" in line for line in run("git diff --summary", cwd=worktree_dir).splitlines()):
+            policy_errors.append("submodule changes are blocked")
+
+        too_large = (len(paths) > max_files or diff_lines > max_lines) and not allow_large
+        if too_large:
+            policy_errors.append(
+                f"diff too large: {len(paths)} files and {diff_lines} lines "
+                f"requires {os.environ['AGENT_ALLOW_LARGE_LABEL']}"
+            )
+
+        if not paths:
+            comment_issue(
+                repo,
+                number,
+                job_dir,
+                f"""Agent dry-run completed for issue #{number}, but no file changes were produced.
+
+Job: `{job_id}`
+Base: `{base_sha}`
+
+Codex log:
+`{job_dir}/codex.log`
+""",
+            )
+            clear_running_labels(repo, number, done=True)
+            return
+
+        if policy_errors:
+            comment_issue(
+                repo,
+                number,
+                job_dir,
+                f"""Agent stopped for issue #{number}: policy gate failed.
+
+Job: `{job_id}`
+Base: `{base_sha}`
+
+Policy errors:
+```text
+{chr(10).join(policy_errors)[:5000]}
+```
+
+Changed files:
+```text
+{status[:3000]}
+```
+
+Local artifacts:
+`{job_dir}`
+""",
+            )
+            clear_running_labels(repo, number, failed=True)
+            return
+
+        if publish:
+            run("git add -A", cwd=worktree_dir)
+            run(f'git commit -m "agent: address issue #{number}"', cwd=worktree_dir)
+            run(f"git push -u origin {shlex.quote(branch)}", cwd=worktree_dir)
+
+            pr_body = f"""Automated local Codex agent run for #{number}.
+
+Job: `{job_id}`
+Base: `{base_sha}`
+
+Validation:
+- See commit diff and local run artifacts.
+- Worker prompt requires exact local test commands/results in final output.
+- This PR is draft until manually reviewed.
+
+Closes #{number}
+"""
+            (job_dir / "pr-body.md").write_text(pr_body, encoding="utf-8")
+            pr_url = run(
+                f"gh pr create --repo {shlex.quote(repo)} "
+                f"--base {shlex.quote(base_branch)} "
+                f"--head {shlex.quote(branch)} "
+                f'--title "agent: address issue #{number}" '
+                f"--body-file {quote_path(job_dir / 'pr-body.md')} "
+                "--draft"
+            ).strip()
+
+            comment = f"""Local Codex agent created a draft PR for issue #{number}.
+
+PR: {pr_url}
+Job: `{job_id}`
+Branch: `{branch}`
+"""
+        else:
+            comment = f"""Local Codex agent dry-run completed for issue #{number}.
+
+Job: `{job_id}`
+Base: `{base_sha}`
+Branch that would be created: `{branch}`
+
+Changed files:
+```text
+{status[:3000]}
+```
+
+Diff stat:
+```text
+{diff_stat[:3000]}
+```
+
+Local artifacts:
+`{job_dir}`
+
+Run the worker with `--publish` after reviewing the dry-run behavior.
+"""
+
+        comment_issue(repo, number, job_dir, comment)
+        clear_running_labels(repo, number, done=True)
+
+    except Exception as exc:
+        err = str(exc)
+        (job_dir / "error.txt").write_text(err, encoding="utf-8")
+        comment_issue(
+            repo,
+            number,
+            job_dir,
+            f"""Local Codex agent failed on issue #{number}.
+
+Job: `{job_id}`
+
+Error:
+```text
+{err[:5000]}
+```
+
+Local artifacts:
+`{job_dir}`
+""",
+        )
+        clear_running_labels(repo, number, failed=True)
+
+
+def main():
+    publish = "--publish" in sys.argv
+    once = "--once" in sys.argv
+
+    repo = require_env("AGENT_REPO")
+    pathlib.Path(require_env("AGENT_REPOS")).expanduser().mkdir(parents=True, exist_ok=True)
+    pathlib.Path(require_env("AGENT_JOBS")).expanduser().mkdir(parents=True, exist_ok=True)
+    pathlib.Path(require_env("AGENT_LOGS")).expanduser().mkdir(parents=True, exist_ok=True)
+
+    run("gh auth status", capture=True)
+
+    while True:
+        query = f'repo:{repo} is:issue is:open label:"{os.environ["AGENT_READY_LABEL"]}"'
+        issues = gh_json(
+            "gh issue list "
+            f"--repo {shlex.quote(repo)} "
+            f"--search {shlex.quote(query)} "
+            "--json number,title,body,author,labels,url"
+        )
+
+        ready_issues = [issue for issue in issues or [] if issue_is_ready(issue)]
+        if not ready_issues:
+            if once:
+                print("No trusted ready issues.")
+                return
+            time.sleep(60)
+            continue
+
+        for issue in ready_issues:
+            process_issue(issue, publish)
+
+        if once:
+            return
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    main()

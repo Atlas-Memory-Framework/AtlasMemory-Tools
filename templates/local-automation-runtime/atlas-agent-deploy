@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Convenience dispatcher for GitHub-hosted deploy and deploy-candidate workflows."""
+
+from __future__ import annotations
+
+import argparse
+
+import atlas_agent_common as common
+
+
+AZURE_REPO = "Atlas-Memory-Framework/Atlas-Memory-Azure"
+CHAINLIT_REPO = "Atlas-Memory-Framework/Atlas-Memory-Chainlit"
+
+
+def workflow_run(repo: str, workflow: str, ref: str, inputs: list[str], wait: bool) -> None:
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-workflow"),
+        "run",
+        repo,
+        workflow,
+        "--ref",
+        ref,
+        *[part for item in inputs for part in ("-f", item)],
+        "--download-artifacts",
+    ]
+    if wait:
+        cmd.append("--wait")
+    common.run(cmd)
+
+
+def candidate(args: argparse.Namespace) -> None:
+    inputs = [
+        f"candidate_sha={args.candidate_sha}",
+        f"base_sha={args.base_sha}",
+        f"dry_run={str(args.dry_run).lower()}",
+    ]
+    if args.classifier_json:
+        inputs.append(f"classifier_json={args.classifier_json}")
+    if args.classifier_path:
+        inputs.append(f"classifier_path={args.classifier_path}")
+    workflow_run(AZURE_REPO, "agentic-deploy-candidate.yml", args.ref, inputs, args.wait)
+
+
+def dev_sequence(args: argparse.Namespace) -> None:
+    inputs = [
+        f"candidate_sha={args.candidate_sha}",
+        f"approval_requirement={args.approval_requirement}",
+        f"target_environment={args.target_environment}",
+        f"prefix={args.prefix}",
+        f"location={args.location}",
+        f"control_infra_mode={args.control_infra_mode}",
+    ]
+    if args.parameter_file:
+        inputs.append(f"parameter_file={args.parameter_file}")
+    if args.overrides_json:
+        inputs.append(f"overrides_json={args.overrides_json}")
+    workflow_run(AZURE_REPO, "deploy-dev-sequence.yml", args.ref, inputs, args.wait)
+
+
+def functions_code(args: argparse.Namespace) -> None:
+    inputs = [
+        f"environment_name={args.environment_name}",
+        f"prefix={args.prefix}",
+        f"deploy_workers={str(args.deploy_workers).lower()}",
+        f"code_deployer={args.code_deployer}",
+    ]
+    if args.private_core_repo:
+        inputs.append(f"private_core_repo={args.private_core_repo}")
+    workflow_run(AZURE_REPO, "deploy-functions.yml", args.ref, inputs, args.wait)
+
+
+def chainlit(args: argparse.Namespace) -> None:
+    inputs = [
+        f"environment_name={args.environment_name}",
+        f"prefix={args.prefix}",
+        f"location={args.location}",
+    ]
+    workflow_run(CHAINLIT_REPO, "deploy-chainlit.yml", args.ref, inputs, args.wait)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_candidate = sub.add_parser("candidate")
+    p_candidate.add_argument("--candidate-sha", required=True)
+    p_candidate.add_argument("--base-sha", default="")
+    p_candidate.add_argument("--classifier-json")
+    p_candidate.add_argument("--classifier-path")
+    p_candidate.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True)
+    p_candidate.add_argument("--ref", default="master")
+    p_candidate.add_argument("--wait", action="store_true")
+    p_candidate.set_defaults(func=candidate)
+
+    p_seq = sub.add_parser("dev-sequence")
+    p_seq.add_argument("--candidate-sha", required=True)
+    p_seq.add_argument("--approval-requirement", default="manual")
+    p_seq.add_argument("--target-environment", default="dev")
+    p_seq.add_argument("--prefix", default="atlas-memory")
+    p_seq.add_argument("--location", default="eastus")
+    p_seq.add_argument("--control-infra-mode", default="what-if")
+    p_seq.add_argument("--parameter-file")
+    p_seq.add_argument("--overrides-json")
+    p_seq.add_argument("--ref", default="master")
+    p_seq.add_argument("--wait", action="store_true")
+    p_seq.set_defaults(func=dev_sequence)
+
+    p_func = sub.add_parser("functions-code")
+    p_func.add_argument("--environment-name", default="dev")
+    p_func.add_argument("--prefix", default="atlas-memory")
+    p_func.add_argument("--deploy-workers", action=argparse.BooleanOptionalAction, default=True)
+    p_func.add_argument("--private-core-repo", default="")
+    p_func.add_argument("--code-deployer", default="az-cli")
+    p_func.add_argument("--ref", default="master")
+    p_func.add_argument("--wait", action="store_true")
+    p_func.set_defaults(func=functions_code)
+
+    p_chainlit = sub.add_parser("chainlit")
+    p_chainlit.add_argument("--environment-name", default="dev")
+    p_chainlit.add_argument("--prefix", default="atlas-memory")
+    p_chainlit.add_argument("--location", default="eastus")
+    p_chainlit.add_argument("--ref", default="main")
+    p_chainlit.add_argument("--wait", action="store_true")
+    p_chainlit.set_defaults(func=chainlit)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

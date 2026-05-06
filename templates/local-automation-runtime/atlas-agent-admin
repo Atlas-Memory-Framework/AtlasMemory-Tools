@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Resolve deterministic local-agent pauses before involving a human."""
+
+from __future__ import annotations
+
+import argparse
+import pathlib
+
+import atlas_agent_common as common
+
+
+TERMINAL_LABELS = ("agent:done", "agent:failed")
+ALLOW_LABELS = {
+    "agent:allow-workflows",
+    "agent:allow-infra",
+    "agent:allow-large",
+}
+
+
+def fetch_issue(repo: str, number: int) -> dict:
+    return common.gh_json(
+        [
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,body,labels,author,url,comments,state",
+        ]
+    )
+
+
+def latest_job_error(number: int) -> str:
+    candidates = sorted(common.jobs_dir().glob(f"issue-{number}-*/error.txt"), reverse=True)
+    if not candidates:
+        return ""
+    return candidates[0].read_text(encoding="utf-8", errors="replace")
+
+
+def is_git_identity_error(error: str) -> bool:
+    return "Author identity unknown" in error and "unable to auto-detect email address" in error
+
+
+def issue_risk_tokens(issue: dict) -> set[str]:
+    body = (issue.get("body") or "").lower()
+    labels = common.label_names(issue)
+    tokens = set(labels)
+    for token in (
+        "infra",
+        "ci-cd",
+        "auth",
+        "needs-deployed-validation",
+        "cross-repo",
+        "tier:t4+",
+        "t5",
+    ):
+        if token in body:
+            tokens.add(token)
+    return tokens
+
+
+def recommended_allow_labels(issue: dict) -> set[str]:
+    tokens = issue_risk_tokens(issue)
+    labels: set[str] = set()
+    if {"infra", "auth", "needs-deployed-validation"} & tokens:
+        labels.add("agent:allow-infra")
+    if {"ci-cd", "needs-deployed-validation"} & tokens:
+        labels.add("agent:allow-workflows")
+    if {"tier:t4+", "t5"} & tokens:
+        labels.add("agent:allow-large")
+    return labels
+
+
+def requeue(repo: str, number: int) -> None:
+    for label in TERMINAL_LABELS:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", label], check=False)
+    common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:ready"])
+
+
+def fix_git_identity_for_repo(repo: str) -> None:
+    repo_path = common.ensure_repo(repo)
+    common.ensure_git_identity(repo_path)
+
+
+def inspect_issue(args: argparse.Namespace) -> int:
+    repo, number = common.issue_ref_parts(args.issue)
+    issue = fetch_issue(repo, number)
+    labels = common.label_names(issue)
+    base = common.issue_body_base_branch(issue) or common.default_base_branch(repo)
+    repo_path = common.ensure_repo(repo)
+    exists = common.remote_branch_exists(repo_path, base)
+    error = latest_job_error(number)
+
+    print(f"Issue: {issue['url']}")
+    print(f"State: {issue['state']}")
+    print(f"Labels: {', '.join(sorted(labels))}")
+    print(f"Requested base: {base}")
+    print(f"Remote base exists: {exists}")
+    if error:
+        print("Latest error:")
+        print(error.strip())
+
+    if not exists:
+        print()
+        print("Classification: missing_base_branch")
+        print("Available fixes:")
+        print(f"- Edit issue base metadata to default: atlas-agent-admin fix-base {args.issue} --base {common.default_base_branch(repo)} --requeue")
+        print(f"- Create remote base branch: atlas-agent-admin create-base {args.issue} --from {common.default_base_branch(repo)} --requeue")
+        return 2
+    wanted_allow = recommended_allow_labels(issue)
+    missing_allow = sorted(wanted_allow - labels)
+    if missing_allow:
+        print()
+        print("Classification: missing_explicit_policy_labels")
+        print(f"Recommended labels: {', '.join(missing_allow)}")
+        print(f"Fix: atlas-agent-admin allow-policy {args.issue} --requeue")
+        return 2
+    if "agent:done" in labels and "agent:failed" in labels:
+        print()
+        print("Classification: stale_terminal_labels")
+        print(f"Fix: atlas-agent-admin clean-labels {args.issue}")
+        return 2
+    if is_git_identity_error(error):
+        print()
+        print("Classification: missing_git_identity")
+        fix_git_identity_for_repo(repo)
+        requeue(repo, number)
+        print("Applied fix: configured local repo git identity and requeued issue.")
+        return 0
+    print("Classification: no_deterministic_admin_fix_needed")
+    return 0
+
+
+def clean_labels(args: argparse.Namespace) -> None:
+    repo, number = common.issue_ref_parts(args.issue)
+    issue = fetch_issue(repo, number)
+    labels = common.label_names(issue)
+    if "agent:failed" in labels:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:done"], check=False)
+    elif "agent:done" in labels:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:failed"], check=False)
+    if args.requeue:
+        requeue(repo, number)
+
+
+def fix_base(args: argparse.Namespace) -> None:
+    repo, number = common.issue_ref_parts(args.issue)
+    issue = fetch_issue(repo, number)
+    new_body = common.replace_issue_body_base(issue.get("body") or "", args.base)
+    if new_body == (issue.get("body") or ""):
+        print("Base branch metadata already matches.")
+    else:
+        body_file = common.jobs_dir() / f"admin-fix-base-{number}-{common.now_id()}.md"
+        body_file.write_text(new_body, encoding="utf-8")
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--body-file", str(body_file)])
+    if args.requeue:
+        requeue(repo, number)
+
+
+def create_base(args: argparse.Namespace) -> None:
+    repo, _number = common.issue_ref_parts(args.issue)
+    repo_path = common.ensure_repo(repo)
+    if common.remote_branch_exists(repo_path, args.base):
+        print(f"Remote branch already exists: origin/{args.base}")
+    else:
+        source = f"origin/{args.source}"
+        if not common.remote_branch_exists(repo_path, args.source):
+            raise SystemExit(f"Source branch does not exist: {source}")
+        common.run(["git", "checkout", "-B", args.base, source], cwd=repo_path)
+        common.run(["git", "push", "origin", f"{args.base}:{args.base}"], cwd=repo_path)
+    if args.requeue:
+        _repo, number = common.issue_ref_parts(args.issue)
+        requeue(_repo, number)
+
+
+def allow_policy(args: argparse.Namespace) -> None:
+    repo, number = common.issue_ref_parts(args.issue)
+    issue = fetch_issue(repo, number)
+    labels = sorted(recommended_allow_labels(issue))
+    if not labels:
+        print("No policy labels recommended from issue metadata.")
+    for label in labels:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", label])
+    if args.requeue:
+        requeue(repo, number)
+
+
+def fix_git_identity(args: argparse.Namespace) -> None:
+    repo, number = common.issue_ref_parts(args.issue)
+    fix_git_identity_for_repo(repo)
+    if args.requeue:
+        requeue(repo, number)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_inspect = sub.add_parser("inspect")
+    p_inspect.add_argument("issue")
+    p_inspect.set_defaults(func=inspect_issue)
+
+    p_clean = sub.add_parser("clean-labels")
+    p_clean.add_argument("issue")
+    p_clean.add_argument("--requeue", action="store_true")
+    p_clean.set_defaults(func=clean_labels)
+
+    p_fix = sub.add_parser("fix-base")
+    p_fix.add_argument("issue")
+    p_fix.add_argument("--base", required=True)
+    p_fix.add_argument("--requeue", action="store_true")
+    p_fix.set_defaults(func=fix_base)
+
+    p_create = sub.add_parser("create-base")
+    p_create.add_argument("issue")
+    p_create.add_argument("--base", help="Branch to create; defaults to issue Base branch metadata.")
+    p_create.add_argument("--from", dest="source", default=None)
+    p_create.add_argument("--requeue", action="store_true")
+    p_create.set_defaults(func=create_base)
+
+    p_policy = sub.add_parser("allow-policy")
+    p_policy.add_argument("issue")
+    p_policy.add_argument("--requeue", action="store_true")
+    p_policy.set_defaults(func=allow_policy)
+
+    p_git = sub.add_parser("fix-git-identity")
+    p_git.add_argument("issue")
+    p_git.add_argument("--requeue", action="store_true")
+    p_git.set_defaults(func=fix_git_identity)
+
+    args = parser.parse_args()
+    if args.cmd == "create-base":
+        repo, number = common.issue_ref_parts(args.issue)
+        issue = fetch_issue(repo, number)
+        args.base = args.base or common.issue_body_base_branch(issue)
+        args.source = args.source or common.default_base_branch(repo)
+        if not args.base:
+            raise SystemExit("No --base supplied and issue has no Base branch metadata.")
+    result = args.func(args)
+    if isinstance(result, int):
+        raise SystemExit(result)
+
+
+if __name__ == "__main__":
+    main()

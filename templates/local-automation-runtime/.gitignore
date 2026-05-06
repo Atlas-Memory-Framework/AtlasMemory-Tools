@@ -1,0 +1,15 @@
+config.env
+codex-home/
+jobs/
+logs/
+repos/
+state/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.pyc
+*.pid
+*.lock
+*.patch
+*.zip

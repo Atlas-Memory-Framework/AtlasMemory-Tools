@@ -1,7 +1,20 @@
-# Plan SSOT Template (Slim)
+# Plan Authoring Template (Slim)
 
 Use this file to create a new plan doc when missing. Cursor will autoname it.
 Keep sections but let owners fill only their sections.
+
+Optional external tracking metadata can be added without changing plan semantics.
+Keep it additive and optional so the markdown body remains the authoring write surface and does not get confused with execution or compiled-registry authority.
+
+Example optional frontmatter:
+
+```yaml
+tracking:
+  provider: github
+  project: "MateuszKordasiewicz's Workflow readiness"
+  epic: ""
+  mode: draft
+```
 
 ```md
 # Feature: <name>
@@ -25,6 +38,8 @@ BlockingDecision: <none | DR-xxx>
 UnresolvedBlockers: <0 | N>
 RubberStampSignals: <0 | N>
 LastGateRun: <YYYY-MM-DD>
+
+ArtifactAuthorityMode: legacy-plan | migration-bridge | registry-first
 
 ## Gate Results
 ProblemDefinitionComplete: Pass | Fail | N/A
@@ -126,6 +141,13 @@ Recommended default: <A/B/C> (why)
   - Bypass risk summary:
   - Evidence hook (named gate):
 
+### Artifact authority snapshot
+- Authoring write surface: `.cursor/plans/<plan>.plan.md`
+- Local planning authority after compile: `.cursor/planning-registry/**`
+- Execution truth: GitHub issues / PRs / checks
+- Execution UI / signal layer: GitHub Projects v2
+- Derived read models / views: runtime mirror, rendered overlays, forecasts
+
 ## Challenge Artifacts
 <!-- owner: critical-ideation -->
 ### Weaknesses
@@ -169,6 +191,9 @@ Recommended default: <A/B/C> (why)
 
 ### Workstreams + merge points
 - WS1: <name> (Owner: <agent>)
+  - Agent type: <generalPurpose | test-engineer | code-reviewer | explore>
+  - Delegate: required | optional
+  - Tracking: <optional org/repo#123 or URL>
   - Depends on:
   - Review gates (named):
     - G-...
@@ -176,10 +201,23 @@ Recommended default: <A/B/C> (why)
     - path/to/file.ext
   - Merge point / integration step:
 
+### Delegation Quality Gate (required for PlanTier: Full)
+- DQ-1 Workstream delegation metadata complete: Pass | Fail
+  - Rule: Every workstream has `Owner`, `Agent type`, and `Delegate`.
+- DQ-2 File ownership conflict-free before merge points: Pass | Fail
+  - Rule: No file is owned by more than one active workstream before an explicit merge point.
+- DQ-3 Delegation coverage: Pass | Fail
+  - Rule: All non-trivial workstreams are marked `Delegate: required`.
+- DQ-4 Validation delegation path present: Pass | Fail
+  - Rule: Test/review gates identify delegated execution path (agent type or owner).
+- Notes / waivers (must cite DR-xxx):
+  - ...
+
 ### Phases + tasks + exit criteria
 #### Phase 1: <name>
 - Owner(s):
 - Depends on:
+- Tracking: <optional org/repo#123 or URL>
 - Tasks (by owner):
   - Owner: <agent>
     - [ ] Task
@@ -239,7 +277,7 @@ Recommended default: <A/B/C> (why)
 - Findings (schema):
   - Technical risks and integration gaps:
   - Missing validations or operational steps:
-  - Contradictions with stated invariants or SSOTs:
+  - Contradictions with stated invariants or authority boundaries:
   - Patch suggestions (point to sections):
 - Disposition:
   - Accept: <finding-id> -> DR-xxx

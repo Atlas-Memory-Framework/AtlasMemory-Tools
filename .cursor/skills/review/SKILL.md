@@ -6,7 +6,13 @@ description: Perform planning-phase document reviews for the current plan artifa
 # /review
 
 ## Scope
-Only read the current plan artifact. Do not rely on external context.
+Default scope is the current plan artifact. Review against the artifact authority contract recorded in the plan; do not invent external authority or treat markdown as execution-authoritative in `registry-first`.
+
+## Authority contract lens
+- Markdown plan artifacts are the authoring write surface.
+- Compiled registry YAML is the local planning authority after compile in `registry-first`.
+- GitHub issues, PRs, and checks are the execution truth.
+- GitHub Projects v2, rendered overlays, and runtime-mirror outputs are derived or downstream surfaces unless the plan explicitly narrows a more specific evidence scope.
 
 ## Plan tier awareness (Lite vs Full)
 Read `PlanTier` in the plan's Plan State and calibrate strictness:
@@ -44,7 +50,7 @@ Return findings using this exact schema (with stable ids):
   - F-001: ...
 - Missing validations or operational steps:
   - F-002: ...
-- Contradictions with stated invariants or SSOTs:
+- Contradictions with stated invariants or authority boundaries:
   - F-003: ...
 - Patch suggestions (point to plan sections):
   - F-004: ...

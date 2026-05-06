@@ -1,0 +1,653 @@
+#!/usr/bin/env python3
+"""Local issue orchestrator for the Atlas Codex runtime."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib import request
+
+import atlas_agent_common as common
+
+
+AGENT_LABELS = {
+    "agent:ready": "0E8A16",
+    "agent:running": "FBCA04",
+    "agent:done": "5319E7",
+    "agent:failed": "B60205",
+    "agent:allow-workflows": "C5DEF5",
+    "agent:allow-infra": "C5DEF5",
+    "agent:allow-large": "C5DEF5",
+    "agent:approved-dispatch": "C5DEF5",
+}
+ENSURED_LABEL_REPOS: set[str] = set()
+
+HARD_NON_EXECUTION_LABELS = {
+    "type:epic",
+    "type:tracker",
+    "tracking-only",
+}
+NON_EXECUTION_TITLE_PREFIXES = ("[Epic]", "[Tracker]")
+
+
+def target_repos(path: str | None) -> list[str]:
+    repo_file = common.RUNTIME_DIR / (path or "repos.txt")
+    repos: list[str] = []
+    for raw in repo_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            repos.append(line)
+    return repos
+
+
+def ensure_agent_labels(repo: str) -> None:
+    if repo in ENSURED_LABEL_REPOS:
+        return
+    for label, color in AGENT_LABELS.items():
+        common.run(
+            ["gh", "label", "create", label, "--repo", repo, "--color", color],
+            check=False,
+        )
+    ENSURED_LABEL_REPOS.add(repo)
+
+
+def ready_issues(repo: str, limit: int) -> list[dict]:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--label",
+            "agent:ready",
+            "--json",
+            "number,title,body,author,labels,url,updatedAt",
+        ]
+    ) or []
+
+
+def failed_issues(repo: str, limit: int) -> list[dict]:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--label",
+            "agent:failed",
+            "--json",
+            "number,title,body,author,labels,url,updatedAt",
+        ]
+    ) or []
+
+
+def queue_candidate_issues(repo: str, label: str, limit: int) -> list[dict]:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--label",
+            label,
+            "--json",
+            "number,title,body,author,labels,url,updatedAt",
+        ]
+    ) or []
+
+
+def has_open_pr_for_issue(repo: str, number: int) -> bool:
+    prs = common.gh_json_or_none(
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--search",
+            f"#{number}",
+            "--json",
+            "number,title,url,state,isDraft",
+        ],
+        retries=2,
+    )
+    return bool(prs)
+
+
+def hard_non_execution_reasons(issue: dict) -> list[str]:
+    labels = common.label_names(issue)
+    body = issue.get("body") or ""
+    title = issue.get("title") or ""
+    reasons: list[str] = []
+    blocked_labels = sorted(labels & HARD_NON_EXECUTION_LABELS)
+    if blocked_labels:
+        reasons.append(f"labels {blocked_labels}")
+    if any(title.startswith(prefix) for prefix in NON_EXECUTION_TITLE_PREFIXES):
+        reasons.append("tracker/epic title")
+    lowered = body.lower()
+    if "dispatch recommendation: `tracking-only`" in lowered:
+        reasons.append("tracking-only dispatch recommendation")
+    if (
+        "dispatch recommendation: `review-before-dispatch`" in lowered
+        and "agent:approved-dispatch" not in labels
+    ):
+        reasons.append("review-before-dispatch requires explicit queueing")
+    if "open dependencies:" in lowered and "open dependencies: `none`" not in lowered:
+        reasons.append("open dependencies")
+    if "manual gates remaining:" in lowered and "manual gates remaining: `none`" not in lowered:
+        reasons.append("manual gates remaining")
+    return reasons
+
+
+def failed_inspection_hard_reasons(issue: dict) -> list[str]:
+    reasons = hard_non_execution_reasons(issue)
+    labels = common.label_names(issue)
+    if "needs-human" in labels and not reasons:
+        return []
+    return reasons
+
+
+def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
+    labels = common.label_names(issue)
+    blocked = {
+        "agent:ready",
+        "agent:running",
+        "agent:done",
+        "agent:failed",
+    }
+    reasons = hard_non_execution_reasons(issue)
+    if labels & blocked or reasons:
+        if reasons:
+            print(f"Not queueing {repo}#{issue['number']}: {', '.join(reasons)}.", flush=True)
+        return False
+    author = (issue.get("author") or {}).get("login")
+    if author not in common.trusted_authors():
+        print(f"Not queueing {repo}#{issue['number']}: untrusted author {author}.", flush=True)
+        return False
+    if args.auto_queue_skip_open_pr and has_open_pr_for_issue(repo, issue["number"]):
+        print(f"Not queueing {repo}#{issue['number']}: open PR appears linked.", flush=True)
+        return False
+    print(f"Queueing {repo}#{issue['number']} from {args.auto_queue_label}: {issue['title']}", flush=True)
+    common.run(["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--add-label", "agent:ready"])
+    return True
+
+
+def run_worker(repo: str, number: int, publish: bool) -> int:
+    env = common.env_for_repo(repo)
+    common.ensure_git_identity(common.ensure_repo(repo))
+    cmd = [str(common.local_worker()), "--once", "--issue", str(number)]
+    if publish:
+        cmd.append("--publish")
+    proc = subprocess.run(cmd, cwd=str(common.RUNTIME_DIR), env=env)
+    return proc.returncode
+
+
+def issue_lease_path(repo: str, number: int) -> Path:
+    safe_repo = repo.replace("/", "__")
+    return common.jobs_dir() / "leases" / f"{safe_repo}__issue-{number}.lock"
+
+
+def acquire_issue_lease(repo: str, issue: dict, stale_seconds: int) -> Path | None:
+    path = issue_lease_path(repo, int(issue["number"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    if path.exists() and stale_seconds > 0:
+        age = now - path.stat().st_mtime
+        if age > stale_seconds:
+            print(f"Removing stale lease for {repo}#{issue['number']} ({age:.0f}s old).", flush=True)
+            path.unlink(missing_ok=True)
+    payload = {
+        "repo": repo,
+        "issue": int(issue["number"]),
+        "pid": os.getpid(),
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        print(f"Skipping {repo}#{issue['number']}: issue lease already exists at {path}.", flush=True)
+        return None
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+    return path
+
+
+def release_issue_lease(path: Path | None) -> None:
+    if path is not None:
+        path.unlink(missing_ok=True)
+
+
+def latest_issue_job_dir(number: int) -> Path | None:
+    candidates = sorted(common.jobs_dir().glob(f"issue-{number}-*"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def notification_state_path() -> Path:
+    return common.jobs_dir() / "local-agent-notify-state.json"
+
+
+def notification_digest(payload: dict) -> str:
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def post_webhook(webhook: str, payload: dict) -> int:
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(webhook, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    with request.urlopen(req, timeout=30) as response:
+        return response.status
+
+
+def build_worker_notification(
+    *,
+    repo: str,
+    issue: dict,
+    job_dir: Path | None,
+    rc: int,
+) -> tuple[str, dict] | None:
+    cfg = common.read_config()
+    success = rc == 0
+    webhook = (
+        os.environ.get("TEAMS_ISSUES_WEBHOOK_URL")
+        or cfg.get("TEAMS_ISSUES_WEBHOOK_URL")
+        if success
+        else os.environ.get("TEAMS_URGENT_WEBHOOK_URL") or cfg.get("TEAMS_URGENT_WEBHOOK_URL")
+    )
+    if not webhook:
+        return None
+    number = issue["number"]
+    title = issue.get("title") or f"{repo}#{number}"
+    issue_url = issue.get("url") or f"https://github.com/{repo}/issues/{number}"
+    job_name = job_dir.name if job_dir else "unknown-job"
+    comment = ""
+    if job_dir and (job_dir / "comment.md").exists():
+        comment = (job_dir / "comment.md").read_text(encoding="utf-8", errors="replace")
+    error = ""
+    if job_dir and (job_dir / "error.txt").exists():
+        error = (job_dir / "error.txt").read_text(encoding="utf-8", errors="replace")
+    pr_url = ""
+    if "PR: " in comment:
+        pr_url = comment.split("PR: ", 1)[1].splitlines()[0].strip()
+
+    status = "completed" if success else "failed"
+    theme = "107C10" if success else "D13438"
+    text_lines = [
+        f"**Issue:** [{repo}#{number}]({issue_url})",
+        f"**Job:** `{job_name}`",
+    ]
+    if pr_url:
+        text_lines.append(f"**PR:** {pr_url}")
+    if error:
+        text_lines.append("**Error:**")
+        text_lines.append(f"```text\n{error[:1800]}\n```")
+    elif comment:
+        text_lines.append(comment[:1800])
+
+    payload = {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "themeColor": theme,
+        "summary": f"Atlas local agent {status}: {repo}#{number}",
+        "title": f"Atlas local agent {status}: {title}",
+        "text": "\n\n".join(text_lines),
+        "potentialAction": [
+            {
+                "@type": "OpenUri",
+                "name": "Open issue",
+                "targets": [{"os": "default", "uri": issue_url}],
+            }
+        ],
+    }
+    if pr_url:
+        payload["potentialAction"].append(
+            {
+                "@type": "OpenUri",
+                "name": "Open PR",
+                "targets": [{"os": "default", "uri": pr_url}],
+            }
+        )
+    key_payload = {
+        "repo": repo,
+        "issue": number,
+        "status": status,
+        "job": job_name,
+        "pr_url": pr_url,
+        "error": error[:500],
+    }
+    payload["dedupe_key"] = notification_digest(key_payload)
+    return webhook, payload
+
+
+def notify_worker_result(repo: str, issue: dict, rc: int) -> None:
+    result = build_worker_notification(
+        repo=repo,
+        issue=issue,
+        job_dir=latest_issue_job_dir(issue["number"]),
+        rc=rc,
+    )
+    if not result:
+        return
+    webhook, payload = result
+    state_path = notification_state_path()
+    state: dict[str, object] = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            state = {}
+    sent = set(state.get("sent_worker_notifications") or [])
+    dedupe_key = str(payload["dedupe_key"])
+    if dedupe_key in sent:
+        print(f"Teams worker notification already sent for {repo}#{issue['number']}.", flush=True)
+        return
+    try:
+        status = post_webhook(webhook, payload)
+    except Exception as exc:
+        print(f"Teams worker notification failed for {repo}#{issue['number']}: {exc}", flush=True)
+        return
+    sent.add(dedupe_key)
+    state["sent_worker_notifications"] = sorted(sent)[-500:]
+    state["last_worker_notification_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    state["last_worker_notification"] = {
+        "repo": repo,
+        "issue": issue["number"],
+        "dedupe_key": dedupe_key,
+        "http_status": status,
+    }
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    print(f"Teams worker notification accepted for {repo}#{issue['number']} with HTTP {status}.", flush=True)
+
+
+def admin_inspect(
+    repo: str,
+    number: int,
+    auto_create_missing_base: bool = False,
+    auto_allow_policy_labels: bool = False,
+) -> int:
+    issue_ref = f"{repo}#{number}"
+    proc = subprocess.run(
+        [str(common.RUNTIME_DIR / "atlas-agent-admin"), "inspect", issue_ref],
+        cwd=str(common.RUNTIME_DIR),
+    )
+    if proc.returncode == 2 and auto_create_missing_base:
+        subprocess.run(
+            [str(common.RUNTIME_DIR / "atlas-agent-admin"), "create-base", issue_ref, "--requeue"],
+            cwd=str(common.RUNTIME_DIR),
+            check=False,
+        )
+    if proc.returncode == 2 and auto_allow_policy_labels:
+        subprocess.run(
+            [str(common.RUNTIME_DIR / "atlas-agent-admin"), "allow-policy", issue_ref, "--requeue"],
+            cwd=str(common.RUNTIME_DIR),
+            check=False,
+        )
+    return proc.returncode
+
+
+def requeue_ready(repo: str, number: int) -> None:
+    common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:done"], check=False)
+    common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:failed"], check=False)
+    common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:ready"])
+
+
+def maybe_dispatch_deploy_candidate(repo: str, issue: dict, args: argparse.Namespace) -> None:
+    labels = common.label_names(issue)
+    body = issue.get("body") or ""
+    needs_deployed = "needs-deployed-validation" in body or "needs-deployed-validation" in labels
+    if not needs_deployed or not args.dispatch_deploy_candidates:
+        return
+    if repo != "Atlas-Memory-Framework/Atlas-Memory-Azure":
+        return
+    common.run(
+        [
+            str(common.RUNTIME_DIR / "atlas-agent-workflow"),
+            "run",
+            repo,
+            "agentic-deploy-candidate.yml",
+            "--ref",
+            common.default_base_branch(repo),
+            "-f",
+            "dry_run=true",
+            "--download-artifacts",
+        ]
+    )
+
+
+def process_once(args: argparse.Namespace) -> int:
+    processed = 0
+    queued = 0
+    max_per_repo = getattr(args, "max_per_repo", 1)
+    lease_stale_seconds = getattr(args, "lease_stale_seconds", 6 * 60 * 60)
+    if args.triage_needs_human:
+        triage_cmd = [str(common.RUNTIME_DIR / "atlas-agent-triage"), "--limit", str(args.limit)]
+        if args.repos_file:
+            triage_cmd.extend(["--repos-file", args.repos_file])
+        if args.triage_apply_stale:
+            triage_cmd.append("--apply-stale")
+        if args.triage_approve_review_before_dispatch:
+            triage_cmd.append("--approve-review-before-dispatch")
+        if args.triage_clean_pause_labels:
+            triage_cmd.append("--clean-pause-labels")
+        if args.triage_comment:
+            triage_cmd.append("--comment")
+        if args.triage_summary:
+            triage_cmd.extend(["--summary", args.triage_summary])
+        if args.triage_teams_preview:
+            triage_cmd.append("--teams-preview")
+        if args.triage_post_teams:
+            triage_cmd.append("--post-teams")
+        subprocess.run(triage_cmd, cwd=str(common.RUNTIME_DIR), check=False)
+
+    for repo in target_repos(args.repos_file):
+        repo_processed = 0
+        ensure_agent_labels(repo)
+
+        if args.auto_queue_label and queued < args.auto_queue_max:
+            candidates = queue_candidate_issues(repo, args.auto_queue_label, args.limit)
+            for issue in candidates:
+                if maybe_queue_issue(repo, issue, args):
+                    queued += 1
+                if queued >= args.auto_queue_max:
+                    break
+
+        repo_failed = failed_issues(repo, args.limit) if args.inspect_failed else []
+        if repo_failed is None:
+            print(f"Skipping {repo}: failed issue query did not complete.", flush=True)
+            continue
+        repo_ready = ready_issues(repo, args.limit)
+        if repo_ready is None:
+            print(f"Skipping {repo}: ready issue query did not complete.", flush=True)
+            continue
+
+        if args.inspect_failed:
+            for issue in repo_failed:
+                labels = common.label_names(issue)
+                reasons = failed_inspection_hard_reasons(issue)
+                if reasons:
+                    print(
+                        f"Skipping failed inspection for {repo}#{issue['number']}: {', '.join(reasons)}.",
+                        flush=True,
+                    )
+                    continue
+                admin_inspect(
+                    repo,
+                    issue["number"],
+                    args.auto_create_missing_base,
+                    args.auto_allow_policy_labels,
+                )
+
+        for issue in repo_ready:
+            if repo_processed >= max_per_repo:
+                break
+            labels = common.label_names(issue)
+            author = (issue.get("author") or {}).get("login")
+            reasons = hard_non_execution_reasons(issue)
+            if "agent:running" in labels or reasons:
+                if reasons:
+                    print(f"Skipping {repo}#{issue['number']}: {', '.join(reasons)}.", flush=True)
+                    common.run(
+                        ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
+                        check=False,
+                    )
+                continue
+            if author not in common.trusted_authors():
+                print(f"Skipping {repo}#{issue['number']}: untrusted author {author}.", flush=True)
+                common.run(
+                    ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
+                    check=False,
+                )
+                continue
+            if args.auto_queue_skip_open_pr and has_open_pr_for_issue(repo, issue["number"]):
+                print(f"Skipping {repo}#{issue['number']}: open PR appears linked.", flush=True)
+                common.run(
+                    ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
+                    check=False,
+                )
+                continue
+            print(f"Processing {repo}#{issue['number']}: {issue['title']}")
+            lease = acquire_issue_lease(repo, issue, lease_stale_seconds)
+            if not lease:
+                continue
+            if args.auto_queue_skip_open_pr and has_open_pr_for_issue(repo, issue["number"]):
+                print(f"Skipping {repo}#{issue['number']}: open PR appeared before worker start.", flush=True)
+                release_issue_lease(lease)
+                common.run(
+                    ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
+                    check=False,
+                )
+                continue
+            maybe_dispatch_deploy_candidate(repo, issue, args)
+            try:
+                rc = run_worker(repo, issue["number"], publish=args.publish)
+                processed += 1
+                repo_processed += 1
+                notify_worker_result(repo, issue, rc)
+                if rc != 0:
+                    admin_inspect(
+                        repo,
+                        issue["number"],
+                        args.auto_create_missing_base,
+                        args.auto_allow_policy_labels,
+                    )
+            finally:
+                release_issue_lease(lease)
+            if processed >= args.max_items:
+                return processed
+    return processed
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--daemon", action="store_true")
+    parser.add_argument("--publish", action="store_true", help="Create draft PRs instead of dry-run comments.")
+    parser.add_argument("--repos-file")
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--max-items", type=int, default=3)
+    parser.add_argument("--max-per-repo", type=int, default=1)
+    parser.add_argument("--lease-stale-seconds", type=int, default=6 * 60 * 60)
+    parser.add_argument("--sleep-seconds", type=int, default=60)
+    parser.add_argument("--inspect-failed", action="store_true")
+    parser.add_argument(
+        "--auto-queue-label",
+        help="Promote open issues with this label to agent:ready when they are not already in an agent terminal/active state.",
+    )
+    parser.add_argument("--auto-queue-max", type=int, default=1)
+    parser.add_argument(
+        "--auto-queue-skip-open-pr",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip auto-queueing issues that appear to already have an open linked PR.",
+    )
+    parser.add_argument(
+        "--auto-create-missing-base",
+        action="store_true",
+        help="When admin inspection finds a missing requested base branch, create it from the repo default and requeue.",
+    )
+    parser.add_argument(
+        "--auto-allow-policy-labels",
+        action="store_true",
+        help="When admin inspection finds trusted high-risk issue metadata, add explicit agent:allow-* labels and requeue.",
+    )
+    parser.add_argument(
+        "--dispatch-deploy-candidates",
+        action="store_true",
+        help="For Azure issues requiring deployed validation, dispatch deploy candidate dry-runs.",
+    )
+    parser.add_argument(
+        "--triage-needs-human",
+        action="store_true",
+        help="Run local needs-human triage once per loop before queueing issues.",
+    )
+    parser.add_argument(
+        "--triage-apply-stale",
+        action="store_true",
+        help="During needs-human triage, remove stale needs-human labels and requeue only issues with no hard blockers.",
+    )
+    parser.add_argument(
+        "--triage-approve-review-before-dispatch",
+        action="store_true",
+        help="Approve and queue trusted review-before-dispatch issues that have no other hard blockers.",
+    )
+    parser.add_argument(
+        "--triage-clean-pause-labels",
+        action="store_true",
+        default=True,
+        help="Remove stale agent active/failed labels from intentionally needs-human issues during triage.",
+    )
+    parser.add_argument(
+        "--triage-comment",
+        action="store_true",
+        help="Comment when stale needs-human triage requeues an issue.",
+    )
+    parser.add_argument(
+        "--triage-summary",
+        help="Write a Teams-compatible needs-human blocker summary JSON during triage.",
+    )
+    parser.add_argument(
+        "--triage-teams-preview",
+        action="store_true",
+        help="Build a local Teams payload preview from the triage summary.",
+    )
+    parser.add_argument(
+        "--triage-post-teams",
+        action="store_true",
+        help="Post the triage Teams payload with local TEAMS_WEBHOOK_URL when configured.",
+    )
+    args = parser.parse_args()
+
+    if not args.once and not args.daemon:
+        args.once = True
+
+    while True:
+        count = process_once(args)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"{stamp} Processed {count} issue(s).", flush=True)
+        if args.once:
+            return
+        time.sleep(args.sleep_seconds)
+
+
+if __name__ == "__main__":
+    main()

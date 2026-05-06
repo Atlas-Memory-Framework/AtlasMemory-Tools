@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""Triage local-agent human pauses and produce Teams-compatible blocker summaries."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib import request
+
+import atlas_agent_common as common
+
+
+HARD_BLOCK_LABELS = {"type:epic", "type:tracker", "tracking-only"}
+APPROVED_DISPATCH_LABEL = "agent:approved-dispatch"
+RECOVERABLE_PAUSE_REASONS = {"needs_human_label", "wait_human", "wait_human_live"}
+HARD_BLOCK_REASONS = {
+    "agent_failed",
+    "tracking_or_epic",
+    "tracker_or_epic_title",
+    "tracking_only",
+    "dependencies_open",
+    "open_dependencies",
+    "manual_gates_remaining",
+    "untrusted_author",
+}
+BLOCKING_BODY_MARKERS = {
+    "tracking_only": "dispatch recommendation: `tracking-only`",
+    "review_before_dispatch": "dispatch recommendation: `review-before-dispatch`",
+    "wait_human": "next action: `wait_human`",
+    "wait_human_live": "live next action: `wait_human`",
+    "dependencies_open": "action reason: `dependencies_open`",
+}
+
+
+def hard_blocking_reasons(reasons: list[str] | set[str]) -> set[str]:
+    return set(reasons) & HARD_BLOCK_REASONS
+
+
+def target_repos(path: str | None) -> list[str]:
+    repo_file = common.RUNTIME_DIR / (path or "repos.txt")
+    repos: list[str] = []
+    for raw in repo_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            repos.append(line)
+    return repos
+
+
+def issue_query(repo: str, label: str, limit: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--label",
+            label,
+            "--json",
+            "number,title,body,author,labels,url,updatedAt",
+        ]
+    ) or []
+
+
+def issue_key(repo: str, issue: dict[str, Any]) -> str:
+    return f"{repo}#{issue['number']}"
+
+
+def body_has_nonempty_field(body: str, field: str) -> bool:
+    pattern = rf"(?im)^\s*[-*]?\s*{re.escape(field)}:\s*(.+?)\s*$"
+    for match in re.finditer(pattern, body):
+        value = match.group(1).strip().strip("`").strip()
+        if value and value.lower() not in {"none", "n/a", "na", "-"}:
+            return True
+    return False
+
+
+def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
+    labels = common.label_names(issue)
+    body = issue.get("body") or ""
+    lowered = body.lower()
+    title = issue.get("title") or ""
+    author = (issue.get("author") or {}).get("login") or ""
+    reasons: list[str] = []
+    severity = "warning"
+    stale_unblockable = False
+
+    if labels & HARD_BLOCK_LABELS:
+        reasons.append("tracking_or_epic")
+    if title.startswith(("[Epic]", "[Tracker]")):
+        reasons.append("tracker_or_epic_title")
+    for reason, marker in BLOCKING_BODY_MARKERS.items():
+        if reason == "review_before_dispatch" and APPROVED_DISPATCH_LABEL in labels:
+            continue
+        if marker in lowered:
+            reasons.append(reason)
+    if body_has_nonempty_field(body, "Open dependencies"):
+        reasons.append("open_dependencies")
+    if body_has_nonempty_field(body, "Manual gates remaining"):
+        reasons.append("manual_gates_remaining")
+    if author not in common.trusted_authors():
+        reasons.append("untrusted_author")
+    if "agent:failed" in labels and "needs-human" in labels:
+        reasons.append("agent_failed")
+    if "needs-human" in labels:
+        reasons.append("needs_human_label")
+
+    blocking = [reason for reason in reasons if reason != "needs_human_label"]
+    hard_blocking = hard_blocking_reasons(reasons)
+    reason_set = set(reasons)
+    if "needs-human" in labels and not blocking:
+        stale_unblockable = True
+        reasons = ["stale_needs_human_label"]
+        severity = "info"
+    elif (
+        not hard_blocking
+        and "review_before_dispatch" not in reason_set
+        and RECOVERABLE_PAUSE_REASONS & reason_set
+    ):
+        stale_unblockable = True
+        severity = "info"
+    elif "manual_gates_remaining" in reason_set:
+        severity = "error"
+    elif {"open_dependencies", "dependencies_open"} & reason_set:
+        severity = "warning"
+
+    return {
+        "repo": repo,
+        "number": issue["number"],
+        "title": title,
+        "url": issue.get("url") or "",
+        "updated_at": issue.get("updatedAt") or utc_now(),
+        "labels": sorted(labels),
+        "author": author,
+        "reasons": reasons,
+        "stale_unblockable": stale_unblockable,
+        "severity": severity,
+    }
+
+
+def issue_comment_context(repo: str, number: int) -> str:
+    payload = common.gh_json_or_none(
+        [
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "comments",
+        ],
+        retries=2,
+    ) or {}
+    comments = payload.get("comments") or []
+    bodies = [str(comment.get("body") or "") for comment in comments[-5:]]
+    return "\n".join(bodies)
+
+
+def classify_issue_with_comments(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
+    record = classify_issue(repo, issue)
+    labels = common.label_names(issue)
+    if "needs-human" not in labels or (record["reasons"] and not record["stale_unblockable"]):
+        return record
+    comments = issue_comment_context(repo, issue["number"])
+    if not comments.strip():
+        return record
+
+    comment_issue = dict(issue)
+    comment_issue["body"] = ((issue.get("body") or "") + "\n" + comments).strip()
+    enriched = classify_issue(repo, comment_issue)
+    if enriched["reasons"] and not enriched["stale_unblockable"]:
+        return enriched
+    return record
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def canonical_digest(payload: Any) -> str:
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def notification_state_path() -> Path:
+    return common.jobs_dir() / "local-teams-notify-state.json"
+
+
+def build_dedupe_key(item: dict[str, Any]) -> str:
+    return canonical_digest(
+        {
+            "repo": item["repo"],
+            "entity_type": item["entity_type"],
+            "entity_id": item["entity_id"],
+            "action_reason": item["action_reason"],
+            "candidate_sha": item.get("candidate_sha") or "-",
+            "status": item["status"],
+            "requires_human_action": bool(item["requires_human_action"]),
+        }
+    )
+
+
+def summary_item(record: dict[str, Any]) -> dict[str, Any]:
+    reason = record["reasons"][0] if record["reasons"] else "needs_human_label"
+    status = "needs-human" if reason != "stale_needs_human_label" else "action_required"
+    action_reason = "needs_human_label"
+    if reason in {"open_dependencies", "dependencies_open"}:
+        action_reason = "planning_blocker_issue"
+    elif reason == "manual_gates_remaining":
+        action_reason = "planning_gate_pending"
+    elif reason == "review_before_dispatch":
+        action_reason = "needs_human_label"
+    elif reason in {"tracking_or_epic", "tracker_or_epic_title", "tracking_only"}:
+        action_reason = "planning_status_todo"
+    item = {
+        "entity_type": "issue",
+        "entity_id": str(record["number"]),
+        "repo": record["repo"],
+        "severity": record["severity"],
+        "action_reason": action_reason,
+        "candidate_sha": None,
+        "run_url": None,
+        "pr_url": None,
+        "issue_url": record["url"],
+        "status": status,
+        "requires_human_action": True,
+        "updated_at": record["updated_at"],
+        "title": record["title"],
+        "summary": f"Local agent pause: {', '.join(record['reasons'])}",
+        "dashboard_url": None,
+    }
+    item["dedupe_key"] = build_dedupe_key(item)
+    return item
+
+
+def scan(args: argparse.Namespace) -> list[dict[str, Any]]:
+    records: dict[str, dict[str, Any]] = {}
+    for repo in target_repos(args.repos_file):
+        for label in ("needs-human", args.queue_label):
+            for issue in issue_query(repo, label, args.limit):
+                labels = common.label_names(issue)
+                if "agent:done" in labels and "needs-human" not in labels:
+                    continue
+                record = classify_issue_with_comments(repo, issue)
+                if record["reasons"] or record["stale_unblockable"]:
+                    records[issue_key(repo, issue)] = record
+    return sorted(
+        records.values(),
+        key=lambda item: (item["repo"], int(item["number"])),
+    )
+
+
+def apply_stale(records: list[dict[str, Any]], *, comment: bool) -> int:
+    applied = 0
+    for record in records:
+        if not record["stale_unblockable"]:
+            continue
+        repo = record["repo"]
+        number = str(record["number"])
+        for label in ("agent:running", "agent:done", "agent:failed"):
+            common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", label], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "needs-human"], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:ready"])
+        if comment:
+            body = (
+                "Local agent triage requeued this issue for local Codex automation. "
+                "No open dependencies, manual gates, unapproved review-before-dispatch marker, "
+                "tracking-only marker, tracker/epic marker, or untrusted author block was detected."
+            )
+            common.run(["gh", "issue", "comment", number, "--repo", repo, "--body", body], check=False)
+        applied += 1
+    return applied
+
+
+def can_approve_review_before_dispatch(record: dict[str, Any]) -> bool:
+    reasons = set(record["reasons"])
+    labels = set(record["labels"])
+    return (
+        "review_before_dispatch" in reasons
+        and APPROVED_DISPATCH_LABEL not in labels
+        and not hard_blocking_reasons(reasons)
+    )
+
+
+def approve_review_before_dispatch(records: list[dict[str, Any]], *, comment: bool) -> int:
+    approved = 0
+    ensured_repos: set[str] = set()
+    for record in records:
+        if not can_approve_review_before_dispatch(record):
+            continue
+        repo = record["repo"]
+        number = str(record["number"])
+        if repo not in ensured_repos:
+            common.run(
+                ["gh", "label", "create", APPROVED_DISPATCH_LABEL, "--repo", repo, "--color", "C5DEF5"],
+                check=False,
+            )
+            ensured_repos.add(repo)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", APPROVED_DISPATCH_LABEL])
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "needs-human"], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "agent:running"], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "agent:done"], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "agent:failed"], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:ready"])
+        if comment:
+            body = (
+                "Local agent triage approved this `review-before-dispatch` issue for automated dispatch. "
+                "No open dependency, manual gate, tracker/epic, tracking-only, or untrusted-author block was detected. "
+                "Any stale `needs-human` or `wait_human` marker is being treated as recoverable by the local Codex lane."
+            )
+            common.run(["gh", "issue", "comment", number, "--repo", repo, "--body", body], check=False)
+        approved += 1
+    return approved
+
+
+def clean_human_pause_agent_labels(records: list[dict[str, Any]]) -> int:
+    cleaned = 0
+    for record in records:
+        labels = set(record["labels"])
+        if "needs-human" not in labels:
+            continue
+        if record["stale_unblockable"] or can_approve_review_before_dispatch(record):
+            continue
+        stale_agent_labels = sorted(labels & {"agent:ready", "agent:running", "agent:failed"})
+        if not stale_agent_labels:
+            continue
+        repo = record["repo"]
+        number = str(record["number"])
+        for label in stale_agent_labels:
+            common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", label], check=False)
+        cleaned += 1
+    return cleaned
+
+
+def write_summary(records: list[dict[str, Any]], path: Path) -> None:
+    blockers = [record for record in records if not record["stale_unblockable"]]
+    payload = {
+        "schema_version": "atlas.automation.summary.v1",
+        "generated_at": utc_now(),
+        "source": "local-atlas-agent-triage",
+        "items": [summary_item(record) for record in blockers],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"Wrote blocker summary: {path}")
+
+
+def azure_repo_path() -> Path:
+    return common.repo_dir("Atlas-Memory-Framework/Atlas-Memory-Azure")
+
+
+def operator_action(item: dict[str, Any]) -> str:
+    summary = item.get("summary") or ""
+    if "manual_gates_remaining" in summary:
+        return "Complete or explicitly defer the manual gate, then update the issue gate state before rerunning automation."
+    if "open_dependencies" in summary or "dependencies_open" in summary:
+        return "Resolve the listed dependency or update the issue dependency state to none."
+    if "wait_human" in summary:
+        return "Open the issue, read the latest execution comment, and make the waiting human decision."
+    if "review_before_dispatch" in summary:
+        return "Approve dispatch with agent:approved-dispatch only if the issue is safe for local automation."
+    if "tracking_or_epic" in summary or "tracker_or_epic_title" in summary or "tracking_only" in summary:
+        return "Do not dispatch this tracker/epic directly; split or queue a concrete story issue."
+    if "untrusted_author" in summary:
+        return "Confirm the issue under a trusted author or update the local trusted-author configuration."
+    if "needs_human_label" in summary:
+        return "Remove needs-human only after the issue records the concrete unblock decision."
+    return "Open the issue and follow the latest execution comment."
+
+
+def notification_fingerprint(items: list[dict[str, Any]]) -> str:
+    rows = [
+        {
+            "repo": item.get("repo"),
+            "entity_id": item.get("entity_id"),
+            "status": item.get("status"),
+            "action_reason": item.get("action_reason"),
+            "summary": item.get("summary"),
+            "updated_at": item.get("updated_at"),
+        }
+        for item in items
+    ]
+    return canonical_digest(sorted(rows, key=lambda row: (str(row["repo"]), str(row["entity_id"]))))
+
+
+def build_local_teams_payload(items: list[dict[str, Any]], *, max_items: int) -> dict[str, Any]:
+    selected = items[:max_items]
+    if not selected:
+        return {
+            "delivery": {"should_send": False, "reason": "no_actionable_items"},
+            "teams_payload": {},
+        }
+    fingerprint = notification_fingerprint(items)
+    sections = []
+    actions = []
+    for item in selected:
+        title = item.get("title") or f"{item['repo']}#{item['entity_id']}"
+        issue_url = item.get("issue_url") or ""
+        ref = f"{item['repo']}#{item['entity_id']}"
+        linked_ref = f"[{ref}]({issue_url})" if issue_url else ref
+        action = operator_action(item)
+        sections.append(
+            {
+                "activityTitle": linked_ref,
+                "activitySubtitle": title,
+                "text": f"**Why:** {item.get('summary')}\n\n**Next:** {action}",
+                "markdown": True,
+            }
+        )
+        if issue_url:
+            actions.append(
+                {
+                    "@type": "OpenUri",
+                    "name": f"Open {ref}",
+                    "targets": [{"os": "default", "uri": issue_url}],
+                }
+            )
+    headline = selected[0]
+    return {
+        "delivery": {
+            "should_send": True,
+            "reason": "changed_blocker_set",
+            "fingerprint": fingerprint,
+            "item_count": len(items),
+        },
+        "teams_payload": {
+            "@type": "MessageCard",
+            "@context": "https://schema.org/extensions",
+            "themeColor": "D13438",
+            "summary": f"{len(items)} Atlas local agent blocker(s)",
+            "title": f"Atlas agent attention needed: {headline['repo']}#{headline['entity_id']}",
+            "text": f"{len(items)} blocker(s) are stopping local issue automation. The first {len(selected)} are listed below.",
+            "sections": sections,
+            "potentialAction": actions,
+        },
+    }
+
+
+def build_teams_preview(summary_path: Path, *, max_items: int) -> Path:
+    out_dir = common.jobs_dir() / f"teams-preview-{common.now_id()}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = out_dir / "teams-notification.json"
+    markdown = out_dir / "teams-notification-summary.md"
+    document = json.loads(summary_path.read_text(encoding="utf-8"))
+    payload = build_local_teams_payload(document.get("items") or [], max_items=max_items)
+    result.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    lines = [f"# Local Atlas agent blockers ({len(document.get('items') or [])})", ""]
+    for item in (document.get("items") or [])[:max_items]:
+        lines.append(f"- {item['repo']}#{item['entity_id']}: {item.get('summary') or item.get('title')}")
+    markdown.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Wrote Teams preview: {result}")
+    print(f"Wrote Teams markdown: {markdown}")
+    return result
+
+
+def parse_utc_timestamp(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def post_teams(payload_path: Path, *, force: bool = False, reminder_hours: float = 6.0) -> None:
+    cfg = common.read_config()
+    webhook = (
+        os.environ.get("TEAMS_URGENT_WEBHOOK_URL")
+        or cfg.get("TEAMS_URGENT_WEBHOOK_URL")
+        or os.environ.get("TEAMS_WEBHOOK_URL")
+        or cfg.get("TEAMS_WEBHOOK_URL")
+    )
+    if not webhook:
+        raise SystemExit(
+            "No local Teams webhook is configured. Set TEAMS_URGENT_WEBHOOK_URL in config.env "
+            "for blocker notifications, or TEAMS_WEBHOOK_URL as a fallback."
+        )
+    result = json.loads(payload_path.read_text(encoding="utf-8"))
+    payload = result.get("teams_payload") or {}
+    if not result.get("delivery", {}).get("should_send"):
+        print("Teams payload is deduped or empty; not posting.")
+        return
+    state_path = notification_state_path()
+    fingerprint = (result.get("delivery") or {}).get("fingerprint")
+    state: dict[str, Any] = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            state = {}
+    if fingerprint and not force and state.get("last_urgent_fingerprint") == fingerprint:
+        last_posted = parse_utc_timestamp(str(state.get("last_urgent_posted_at") or ""))
+        reminder_due = False
+        if reminder_hours > 0 and last_posted is not None:
+            elapsed = datetime.now(timezone.utc) - last_posted
+            reminder_due = elapsed.total_seconds() >= reminder_hours * 3600
+        if not reminder_due:
+            print("Teams blocker notification unchanged; reminder not due.")
+            return
+        print("Teams blocker notification unchanged, but reminder interval elapsed; posting again.")
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(webhook, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    with request.urlopen(req, timeout=30) as response:
+        print(f"Teams webhook accepted notification with HTTP {response.status}.")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state["last_urgent_fingerprint"] = fingerprint
+    state["last_urgent_posted_at"] = utc_now()
+    state["last_urgent_payload"] = str(payload_path)
+    state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def run_scan(args: argparse.Namespace) -> None:
+    records = scan(args)
+    if args.clean_pause_labels:
+        cleaned = clean_human_pause_agent_labels(records)
+        print(f"Cleaned {cleaned} human-paused issue(s) with stale agent active/failed labels.")
+        if cleaned:
+            records = scan(args)
+    if args.approve_review_before_dispatch:
+        approved = approve_review_before_dispatch(records, comment=args.comment)
+        print(f"Approved {approved} review-before-dispatch issue(s).")
+        if approved:
+            records = scan(args)
+    if args.apply_stale:
+        applied = apply_stale(records, comment=args.comment)
+        print(f"Cleared {applied} stale needs-human issue(s).")
+        if applied:
+            records = scan(args)
+    for record in records:
+        status = "AUTO-UNBLOCKABLE" if record["stale_unblockable"] else "BLOCKED"
+        print(
+            f"{status} {record['repo']}#{record['number']}: "
+            f"{', '.join(record['reasons'])} :: {record['title']}"
+        )
+    if args.summary:
+        write_summary(records, Path(args.summary))
+    if args.teams_preview or args.post_teams:
+        summary_path = Path(args.summary) if args.summary else common.jobs_dir() / f"local-blockers-{common.now_id()}.json"
+        if not summary_path.exists():
+            write_summary(records, summary_path)
+        preview = build_teams_preview(summary_path, max_items=args.max_items)
+        if args.post_teams:
+            post_teams(preview, force=args.force_teams, reminder_hours=args.reminder_hours)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repos-file")
+    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--queue-label", default="status:ready")
+    parser.add_argument("--apply-stale", action="store_true")
+    parser.add_argument(
+        "--approve-review-before-dispatch",
+        action="store_true",
+        help="Add agent:approved-dispatch and agent:ready to trusted review-before-dispatch issues with no other hard blockers.",
+    )
+    parser.add_argument(
+        "--clean-pause-labels",
+        action="store_true",
+        help="Remove stale agent:ready/running/failed labels from issues that are intentionally needs-human.",
+    )
+    parser.add_argument("--comment", action="store_true")
+    parser.add_argument("--summary", help="Write a Teams-compatible summary JSON to this path.")
+    parser.add_argument("--teams-preview", action="store_true", help="Build a local Teams payload preview from the summary.")
+    parser.add_argument("--post-teams", action="store_true", help="Post to TEAMS_WEBHOOK_URL if it is configured locally.")
+    parser.add_argument("--force-teams", action="store_true", help="Send a Teams notification even if the blocker set has not changed.")
+    parser.add_argument(
+        "--reminder-hours",
+        type=float,
+        default=6.0,
+        help="Repost unchanged Teams blocker notifications after this many hours; use 0 to disable reminders.",
+    )
+    parser.add_argument("--max-items", type=int, default=8)
+    args = parser.parse_args()
+    run_scan(args)
+
+
+if __name__ == "__main__":
+    main()

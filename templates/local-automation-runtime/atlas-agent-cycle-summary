@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Build one run-scoped summary for an e2e local-agent cycle."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib import request
+
+import atlas_agent_common as common
+
+
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def load_build_results(chain_dir: Path, cycle: int) -> list[dict[str, str]]:
+    path = chain_dir / f"build-cycle-{cycle}.results.tsv"
+    rows: list[dict[str, str]] = []
+    if not path.exists():
+        return rows
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        status, repo, log_file = (raw.split("\t") + ["", "", ""])[:3]
+        rows.append({"status": status, "repo": repo, "log_file": log_file})
+    return rows
+
+
+def load_triage_blockers(chain_dir: Path, cycle: int) -> list[dict]:
+    blockers: list[dict] = []
+    seen: set[str] = set()
+    for path in sorted(chain_dir.glob(f"local-needs-human-summary-*-cycle-{cycle}.json")):
+        data = read_json(path)
+        records = data.get("records") or data.get("issues") or []
+        if isinstance(records, dict):
+            records = list(records.values())
+        for item in records if isinstance(records, list) else []:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("dedupe_key") or item.get("url") or f"{item.get('repo')}#{item.get('number')}")
+            if key in seen:
+                continue
+            seen.add(key)
+            blockers.append(item)
+    return blockers
+
+
+def load_finalizer(chain_dir: Path, cycle: int) -> list[dict]:
+    data = read_json(chain_dir / f"finalize-cycle-{cycle}.json")
+    decisions = data.get("decisions") or []
+    return decisions if isinstance(decisions, list) else []
+
+
+def summarize(chain_dir: Path, cycle: int) -> dict:
+    build_results = load_build_results(chain_dir, cycle)
+    triage_blockers = load_triage_blockers(chain_dir, cycle)
+    finalizer = load_finalizer(chain_dir, cycle)
+    finalizer_counts: dict[str, int] = {}
+    for item in finalizer:
+        action = str(item.get("action") or "unknown")
+        finalizer_counts[action] = finalizer_counts.get(action, 0) + 1
+    return {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "chain_id": chain_dir.name.replace("e2e-chain-", ""),
+        "chain_dir": str(chain_dir),
+        "cycle": cycle,
+        "build": {
+            "ok": sum(1 for row in build_results if row.get("status") == "ok"),
+            "failed": sum(1 for row in build_results if row.get("status") == "failed"),
+            "results": build_results,
+        },
+        "triage": {
+            "blocker_count": len(triage_blockers),
+            "blockers": triage_blockers[:25],
+        },
+        "finalizer": {
+            "counts": finalizer_counts,
+            "blocked": [item for item in finalizer if item.get("action") == "blocked"][:25],
+            "actionable": [item for item in finalizer if item.get("action") != "blocked"][:25],
+        },
+    }
+
+
+def message_card(summary: dict) -> dict:
+    lines = [
+        f"**Chain:** `{summary['chain_id']}` cycle `{summary['cycle']}`",
+        f"**Build:** {summary['build']['ok']} ok, {summary['build']['failed']} failed",
+        f"**Triage blockers:** {summary['triage']['blocker_count']}",
+        f"**Finalizer:** {summary['finalizer']['counts']}",
+        f"**State:** `{summary['chain_dir']}`",
+    ]
+    blocked = summary["finalizer"]["blocked"][:8]
+    if blocked:
+        lines.append("")
+        lines.append("**Top blocked PRs:**")
+        for item in blocked:
+            reason = ", ".join((item.get("reasons") or [])[:2])
+            lines.append(f"- {item.get('repo')}#{item.get('number')}: {reason}")
+    failures = [row for row in summary["build"]["results"] if row.get("status") == "failed"][:8]
+    if failures:
+        lines.append("")
+        lines.append("**Build failures:**")
+        for row in failures:
+            lines.append(f"- {row.get('repo')}: `{row.get('log_file')}`")
+    theme = "D13438" if summary["build"]["failed"] or blocked else "107C10"
+    return {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "themeColor": theme,
+        "summary": f"Atlas local-agent cycle {summary['chain_id']}:{summary['cycle']}",
+        "title": "Atlas local-agent cycle summary",
+        "text": "\n\n".join(lines),
+    }
+
+
+def post_teams(payload: dict, webhook: str) -> int:
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(webhook, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    with request.urlopen(req, timeout=30) as response:
+        return response.status
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--chain-dir", required=True)
+    parser.add_argument("--cycle", required=True, type=int)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--post-teams", action="store_true")
+    args = parser.parse_args()
+
+    summary = summarize(Path(args.chain_dir), args.cycle)
+    common.write_json(Path(args.output), summary)
+    if args.post_teams:
+        cfg = common.read_config()
+        webhook = os.environ.get("TEAMS_DAILY_DIGEST_WEBHOOK_URL") or cfg.get("TEAMS_DAILY_DIGEST_WEBHOOK_URL")
+        if not webhook:
+            print("No Teams cycle-summary webhook configured.", flush=True)
+            return 0
+        status = post_teams(message_card(summary), webhook)
+        print(f"Teams cycle summary accepted with HTTP {status}.", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

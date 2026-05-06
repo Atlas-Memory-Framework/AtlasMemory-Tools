@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""Finalize local-agent PRs after CI: ready, merge, and resolve issues."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+PR_VIEW_FIELDS = (
+    "number,title,state,isDraft,url,body,headRefName,baseRefName,"
+    "headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup"
+)
+
+
+@dataclass
+class FinalizeDecision:
+    repo: str
+    number: int
+    title: str
+    url: str
+    issue_number: int | None
+    action: str
+    reasons: list[str]
+
+
+def target_repos(path: str | None) -> list[str]:
+    repo_file = common.RUNTIME_DIR / (path or "repos.txt")
+    repos: list[str] = []
+    for raw in repo_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            repos.append(line)
+    return repos
+
+
+def open_prs(repo: str, limit: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,url,headRefName,isDraft,state",
+        ]
+    ) or []
+
+
+def pr_view(repo: str, number: int) -> dict[str, Any] | None:
+    return common.gh_json_or_none(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            PR_VIEW_FIELDS,
+        ],
+        retries=2,
+    )
+
+
+def is_local_agent_pr(pr: dict[str, Any]) -> bool:
+    head = str(pr.get("headRefName") or "")
+    title = str(pr.get("title") or "")
+    return head.startswith("agent/issue-") or title.startswith("agent:")
+
+
+def linked_issue_number(pr: dict[str, Any]) -> int | None:
+    body = str(pr.get("body") or "")
+    for pattern in (
+        r"(?im)^\s*Closes\s+#(\d+)\s*$",
+        r"(?im)^\s*Automated local Codex agent run for #(\d+)\.",
+        r"agent/issue-(\d+)/",
+    ):
+        match = re.search(pattern, body + "\n" + str(pr.get("headRefName") or ""))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = None) -> tuple[str, list[str]]:
+    checks = pr.get("statusCheckRollup") or []
+    if not checks:
+        return "none", []
+    pending: list[str] = []
+    failed: list[str] = []
+    passed: list[str] = []
+    observed: dict[str, tuple[str, str]] = {}
+    for check in checks:
+        name = str(check.get("name") or check.get("context") or "unnamed")
+        status = str(check.get("status") or "").upper()
+        conclusion = str(check.get("conclusion") or "").upper()
+        observed[name] = (status, conclusion)
+        if status and status != "COMPLETED":
+            pending.append(name)
+        elif conclusion in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+            passed.append(name)
+        else:
+            failed.append(name if not conclusion else f"{name}={conclusion}")
+    required = required_checks or []
+    missing_required = [name for name in required if name not in observed]
+    if missing_required:
+        return "failed", [f"required check missing: {name}" for name in missing_required]
+    required_pending: list[str] = []
+    required_failed: list[str] = []
+    for name in required:
+        status, conclusion = observed[name]
+        if status and status != "COMPLETED":
+            required_pending.append(name)
+        elif conclusion not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+            required_failed.append(name if not conclusion else f"{name}={conclusion}")
+    if required_failed:
+        return "failed", required_failed
+    if required_pending:
+        return "pending", required_pending
+    if failed:
+        return "failed", failed
+    if pending:
+        return "pending", pending
+    return "passed", passed
+
+
+def issue_view(repo: str, number: int) -> dict[str, Any] | None:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,body,state,labels,url",
+        ],
+        retries=2,
+    )
+
+
+def issue_dependency_reasons(repo: str, issue_number: int | None, *, check_dependencies: bool) -> list[str]:
+    if not check_dependencies or issue_number is None:
+        return []
+    issue = issue_view(repo, issue_number)
+    if not issue:
+        return [f"linked issue #{issue_number} could not be verified"]
+    blockers = common.issue_dependency_blockers(repo, issue)
+    return [f"dependency blocked: {blocker}" for blocker in blockers]
+
+
+def required_checks(repo: str, config_path: str | None) -> list[str]:
+    return common.required_checks_for_repo(repo, Path(config_path) if config_path else None)
+
+
+def decide(
+    repo: str,
+    pr: dict[str, Any],
+    *,
+    allow_no_checks: bool,
+    merge: bool,
+    required_check_names: list[str] | None = None,
+    check_dependencies: bool = False,
+) -> FinalizeDecision:
+    reasons: list[str] = []
+    issue_number = linked_issue_number(pr)
+    if not issue_number:
+        reasons.append("missing linked issue")
+    if pr.get("state") != "OPEN":
+        reasons.append(f"state is {pr.get('state')}")
+    merge_state = str(pr.get("mergeStateStatus") or "")
+    if merge_state and merge_state not in {"CLEAN", "HAS_HOOKS", "UNKNOWN"}:
+        reasons.append(f"merge state is {merge_state}")
+    mergeable = str(pr.get("mergeable") or "")
+    if mergeable and mergeable not in {"MERGEABLE", "UNKNOWN"}:
+        reasons.append(f"mergeable is {mergeable}")
+    check_state, check_details = check_rollup_state(pr, required_check_names)
+    if check_state == "none" and not allow_no_checks:
+        reasons.append("no checks reported")
+    elif check_state in {"failed", "pending"}:
+        reasons.append(f"checks {check_state}: {', '.join(check_details[:5])}")
+    reasons.extend(issue_dependency_reasons(repo, issue_number, check_dependencies=check_dependencies))
+    if reasons:
+        action = "blocked"
+    elif pr.get("isDraft"):
+        action = "ready" if not merge else "ready_then_merge"
+    elif merge:
+        action = "merge"
+    else:
+        action = "ready"
+    return FinalizeDecision(
+        repo=repo,
+        number=int(pr["number"]),
+        title=str(pr.get("title") or ""),
+        url=str(pr.get("url") or ""),
+        issue_number=issue_number,
+        action=action,
+        reasons=reasons,
+    )
+
+
+def mark_ready(repo: str, number: int) -> None:
+    common.run(["gh", "pr", "ready", str(number), "--repo", repo])
+
+
+def merge_pr(repo: str, number: int, *, method: str) -> None:
+    common.run(["gh", "pr", "merge", str(number), "--repo", repo, f"--{method}", "--delete-branch"])
+
+
+def close_issue(repo: str, number: int, pr_number: int) -> None:
+    body = f"Local agent finalizer merged PR #{pr_number} and resolved this issue."
+    common.run(["gh", "issue", "close", str(number), "--repo", repo, "--comment", body], check=False)
+
+
+def revalidated_merge_decision(
+    decision: FinalizeDecision,
+    *,
+    allow_no_checks: bool,
+    required_check_names: list[str],
+    check_dependencies: bool,
+) -> FinalizeDecision | None:
+    detail = pr_view(decision.repo, decision.number)
+    if not detail:
+        print(f"BLOCKED PR {decision.repo}#{decision.number}: PR could not be re-fetched before merge", flush=True)
+        return None
+    refreshed = decide(
+        decision.repo,
+        detail,
+        allow_no_checks=allow_no_checks,
+        merge=True,
+        required_check_names=required_check_names,
+        check_dependencies=check_dependencies,
+    )
+    if refreshed.action not in {"merge", "ready_then_merge"}:
+        print(
+            f"BLOCKED PR {decision.repo}#{decision.number}: pre-merge recheck failed: "
+            f"{', '.join(refreshed.reasons)}",
+            flush=True,
+        )
+        return None
+    return refreshed
+
+
+def finalize_decision(
+    decision: FinalizeDecision,
+    *,
+    apply: bool,
+    merge: bool,
+    merge_method: str,
+    close_issues: bool,
+    allow_no_checks: bool,
+    required_check_names: list[str],
+    check_dependencies: bool,
+) -> None:
+    ref = f"{decision.repo}#{decision.number}"
+    if decision.action == "blocked":
+        print(f"BLOCKED PR {ref}: {', '.join(decision.reasons)} :: {decision.title}", flush=True)
+        return
+    print(f"{'APPLY' if apply else 'DRY-RUN'} PR {ref}: {decision.action} :: {decision.title}", flush=True)
+    if not apply:
+        return
+    if decision.action in {"ready", "ready_then_merge"}:
+        mark_ready(decision.repo, decision.number)
+    if merge and decision.action in {"merge", "ready_then_merge"}:
+        refreshed = revalidated_merge_decision(
+            decision,
+            allow_no_checks=allow_no_checks,
+            required_check_names=required_check_names,
+            check_dependencies=check_dependencies,
+        )
+        if not refreshed:
+            return
+        merge_pr(refreshed.repo, refreshed.number, method=merge_method)
+        if close_issues and refreshed.issue_number is not None:
+            close_issue(refreshed.repo, refreshed.issue_number, refreshed.number)
+
+
+def scan(args: argparse.Namespace) -> list[FinalizeDecision]:
+    decisions: list[FinalizeDecision] = []
+    for repo in target_repos(args.repos_file):
+        for summary in open_prs(repo, args.limit):
+            if not is_local_agent_pr(summary):
+                continue
+            detail = pr_view(repo, int(summary["number"]))
+            if not detail:
+                continue
+            if args.issue and linked_issue_number(detail) != args.issue:
+                continue
+            decisions.append(
+                decide(
+                    repo,
+                    detail,
+                    allow_no_checks=args.allow_no_checks,
+                    merge=args.merge,
+                    required_check_names=required_checks(repo, getattr(args, "required_checks_file", None)),
+                    check_dependencies=getattr(args, "check_dependencies", False),
+                )
+            )
+    by_issue: dict[tuple[str, int], list[FinalizeDecision]] = {}
+    for decision in decisions:
+        if decision.issue_number is None:
+            continue
+        by_issue.setdefault((decision.repo, decision.issue_number), []).append(decision)
+    for (_repo, issue_number), grouped in by_issue.items():
+        if len(grouped) < 2:
+            continue
+        pr_numbers = ", ".join(f"#{decision.number}" for decision in grouped)
+        for decision in grouped:
+            if "duplicate linked issue" not in decision.reasons:
+                decision.reasons.append(f"duplicate linked issue #{issue_number}: {pr_numbers}")
+            decision.action = "blocked"
+    return decisions
+
+
+def write_summary(path: str, decisions: list[FinalizeDecision]) -> None:
+    common.write_json(
+        Path(path),
+        {
+            "generated_at": common.now_id(),
+            "decisions": [
+                {
+                    "repo": decision.repo,
+                    "number": decision.number,
+                    "title": decision.title,
+                    "url": decision.url,
+                    "issue_number": decision.issue_number,
+                    "action": decision.action,
+                    "reasons": decision.reasons,
+                }
+                for decision in decisions
+            ],
+        },
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repos-file")
+    parser.add_argument("--limit", type=int, default=50)
+    parser.add_argument("--issue", type=int, help="Only finalize PRs linked to this issue number.")
+    parser.add_argument("--allow-no-checks", action="store_true", help="Allow finalizing PRs with no reported checks.")
+    parser.add_argument("--required-checks-file", help="JSON map of repo full name to required PR check names.")
+    parser.add_argument(
+        "--check-dependencies",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Re-check linked issue dependency state before ready/merge decisions.",
+    )
+    parser.add_argument("--apply", action="store_true", help="Apply ready/merge actions. Default is dry-run.")
+    parser.add_argument("--merge", action="store_true", help="Merge eligible non-draft PRs, or ready+merge eligible draft PRs.")
+    parser.add_argument("--merge-method", choices=["squash", "merge", "rebase"], default="squash")
+    parser.add_argument("--close-issues", action="store_true", help="Close linked issues after a successful merge.")
+    parser.add_argument("--summary", help="Write structured finalizer decisions to this JSON path.")
+    args = parser.parse_args()
+    decisions = scan(args)
+    if args.summary:
+        write_summary(args.summary, decisions)
+    for decision in decisions:
+        finalize_decision(
+            decision,
+            apply=args.apply,
+            merge=args.merge,
+            merge_method=args.merge_method,
+            close_issues=args.close_issues,
+            allow_no_checks=args.allow_no_checks,
+            required_check_names=required_checks(decision.repo, args.required_checks_file),
+            check_dependencies=args.check_dependencies,
+        )
+
+
+if __name__ == "__main__":
+    main()
