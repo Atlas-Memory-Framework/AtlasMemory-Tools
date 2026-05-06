@@ -1,8 +1,9 @@
 # AtlasMemory Cursor Tools
 
-Reusable Cursor skills and agents for planning and implementation.
+Reusable Cursor skills, agents, and local automation templates for planning and implementation.
 
 Most of this repo lives in `.cursor/skills/` and `.cursor/agents/`.
+The host-side local Codex automation template lives in `templates/local-automation-runtime/`.
 
 ## Install
 
@@ -41,6 +42,7 @@ For full details, see `.cursor/skills/plan/README.md`.
 
 - `.cursor/skills/`: planning and implementation skills (`plan`, `plan-to-issues`, `implement`, `review`, etc.)
 - `.cursor/agents/`: specialist and reviewer agents
+- `templates/local-automation-runtime/`: reusable local issue-to-PR automation runtime
 - `specs/`: framework and skill specs
 
 ## Visual

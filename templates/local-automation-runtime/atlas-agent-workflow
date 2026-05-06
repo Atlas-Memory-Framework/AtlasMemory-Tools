@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Local wrapper for GitHub Actions workflow dispatch, watch, logs, and artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import pathlib
+import time
+
+import atlas_agent_common as common
+
+
+def parse_inputs(values: list[str]) -> list[str]:
+    flags: list[str] = []
+    for value in values:
+        if "=" not in value:
+            raise SystemExit(f"Workflow input must be key=value: {value}")
+        flags.extend(["-f", value])
+    return flags
+
+
+def run_workflow(args: argparse.Namespace) -> None:
+    before = common.now_id()
+    cmd = [
+        "workflow",
+        "run",
+        args.workflow,
+        "--repo",
+        args.repo,
+        "--ref",
+        args.ref,
+        *parse_inputs(args.input),
+    ]
+    common.run(["gh", "repo", "view", args.repo, "--json", "name"])
+    common.run(["gh", *cmd])
+    time.sleep(args.settle_seconds)
+
+    runs = common.gh_json(
+        [
+            "run",
+            "list",
+            "--repo",
+            args.repo,
+            "--workflow",
+            args.workflow,
+            "--branch",
+            args.ref,
+            "--limit",
+            "10",
+            "--json",
+            "databaseId,status,conclusion,headBranch,headSha,createdAt,updatedAt,url,name,displayTitle",
+        ]
+    )
+    selected = runs[0] if runs else None
+    job_dir = common.jobs_dir() / f"workflow-{args.workflow.replace('/', '_')}-{before}"
+    common.write_json(job_dir / "run.json", selected or {"error": "no run found"})
+    if selected:
+        print(f"Run: {selected['url']}")
+        print(f"Run id: {selected['databaseId']}")
+        if args.wait:
+            watch_run(argparse.Namespace(repo=args.repo, run_id=str(selected["databaseId"])))
+        if args.download_artifacts:
+            download_artifacts(
+                argparse.Namespace(repo=args.repo, run_id=str(selected["databaseId"]), output=str(job_dir / "artifacts"))
+            )
+    print(f"Artifacts: {job_dir}")
+
+
+def list_runs(args: argparse.Namespace) -> None:
+    cmd = [
+        "gh",
+        "run",
+        "list",
+        "--repo",
+        args.repo,
+        "--limit",
+        str(args.limit),
+        "--json",
+        "databaseId,status,conclusion,headBranch,headSha,createdAt,updatedAt,url,name,displayTitle",
+    ]
+    if args.workflow:
+        cmd.extend(["--workflow", args.workflow])
+    print(common.run(cmd).stdout, end="")
+
+
+def watch_run(args: argparse.Namespace) -> None:
+    common.run(["gh", "run", "watch", args.run_id, "--repo", args.repo, "--exit-status"])
+
+
+def view_run(args: argparse.Namespace) -> None:
+    cmd = ["gh", "run", "view", args.run_id, "--repo", args.repo]
+    if args.log:
+        cmd.append("--log")
+    if args.log_failed:
+        cmd.append("--log-failed")
+    print(common.run(cmd).stdout, end="")
+
+
+def download_artifacts(args: argparse.Namespace) -> None:
+    output = pathlib.Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    common.run(["gh", "run", "download", args.run_id, "--repo", args.repo, "--dir", str(output)])
+    print(f"Downloaded artifacts to {output}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_run = sub.add_parser("run")
+    p_run.add_argument("repo")
+    p_run.add_argument("workflow")
+    p_run.add_argument("--ref", default="master")
+    p_run.add_argument("-f", "--input", action="append", default=[])
+    p_run.add_argument("--wait", action="store_true")
+    p_run.add_argument("--download-artifacts", action="store_true")
+    p_run.add_argument("--settle-seconds", type=float, default=3.0)
+    p_run.set_defaults(func=run_workflow)
+
+    p_list = sub.add_parser("list")
+    p_list.add_argument("repo")
+    p_list.add_argument("--workflow")
+    p_list.add_argument("--limit", type=int, default=20)
+    p_list.set_defaults(func=list_runs)
+
+    p_watch = sub.add_parser("watch")
+    p_watch.add_argument("repo")
+    p_watch.add_argument("run_id")
+    p_watch.set_defaults(func=watch_run)
+
+    p_view = sub.add_parser("view")
+    p_view.add_argument("repo")
+    p_view.add_argument("run_id")
+    p_view.add_argument("--log", action="store_true")
+    p_view.add_argument("--log-failed", action="store_true")
+    p_view.set_defaults(func=view_run)
+
+    p_download = sub.add_parser("download")
+    p_download.add_argument("repo")
+    p_download.add_argument("run_id")
+    p_download.add_argument("--output", default=str(common.jobs_dir() / "workflow-artifacts"))
+    p_download.set_defaults(func=download_artifacts)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

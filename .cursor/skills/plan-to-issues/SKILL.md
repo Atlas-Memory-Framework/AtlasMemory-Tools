@@ -83,8 +83,11 @@ Use the plan's existing identifiers wherever possible:
    - blockers, merge points, named gates, repo-boundary hints, and Azure validation requirements
 8. If the user explicitly approves apply mode, run:
    - `python .cursor/skills/plan-to-issues/scripts/plan_to_issues.py --plan "<path>" --repo "<owner/repo>" --apply`
-9. If a project is provided, add the created issues to the project using `gh` after issue creation.
-10. Report the created or updated issues back to the user.
+9. For the local Codex automation lane, prefer the template bridge:
+   - `templates/local-automation-runtime/atlas-agent-plan-queue --plan "<path>" --repo "<owner/repo>" --apply --queue`
+   - Add `--publish` only when eligible queued issues should immediately run local workers and publish draft PRs.
+10. If a project is provided, add the created issues to the project using `gh` after issue creation.
+11. Report the created or updated issues back to the user.
 
 ## Parser Notes
 

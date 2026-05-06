@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Convenience dispatcher for notification-summary and Teams ops notify workflows."""
+
+from __future__ import annotations
+
+import argparse
+
+import atlas_agent_common as common
+
+
+AZURE_REPO = "Atlas-Memory-Framework/Atlas-Memory-Azure"
+
+
+def workflow_run(workflow: str, ref: str, inputs: list[str], wait: bool) -> None:
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-workflow"),
+        "run",
+        AZURE_REPO,
+        workflow,
+        "--ref",
+        ref,
+        *[part for item in inputs for part in ("-f", item)],
+        "--download-artifacts",
+    ]
+    if wait:
+        cmd.append("--wait")
+    common.run(cmd)
+
+
+def summary(args: argparse.Namespace) -> None:
+    inputs = [
+        f"source_repo={args.source_repo}",
+        f"source_run_id={args.source_run_id}",
+        f"lookback_hours={args.lookback_hours}",
+        f"branch={args.branch}",
+    ]
+    if args.tracked_workflows_json:
+        inputs.append(f"tracked_workflows_json={args.tracked_workflows_json}")
+    workflow_run("agentic-notification-summary.yml", args.ref, inputs, args.wait)
+
+
+def teams(args: argparse.Namespace) -> None:
+    inputs = [
+        f"source_repo={args.source_repo}",
+        f"source_run_id={args.source_run_id}",
+        f"artifact_name={args.artifact_name}",
+        f"force_send={str(args.force_send).lower()}",
+        f"max_items={args.max_items}",
+    ]
+    if args.summary_path:
+        inputs.append(f"summary_path={args.summary_path}")
+    if args.state_path:
+        inputs.append(f"state_path={args.state_path}")
+    workflow_run("agentic-ops-notify.yml", args.ref, inputs, args.wait)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_summary = sub.add_parser("summary")
+    p_summary.add_argument("--source-repo", default=AZURE_REPO)
+    p_summary.add_argument("--source-run-id", default="")
+    p_summary.add_argument("--lookback-hours", default="24")
+    p_summary.add_argument("--branch", default="master")
+    p_summary.add_argument("--tracked-workflows-json", default="")
+    p_summary.add_argument("--ref", default="master")
+    p_summary.add_argument("--wait", action="store_true")
+    p_summary.set_defaults(func=summary)
+
+    p_teams = sub.add_parser("teams")
+    p_teams.add_argument("--source-repo", default=AZURE_REPO)
+    p_teams.add_argument("--source-run-id", default="")
+    p_teams.add_argument("--artifact-name", default="notification-summary")
+    p_teams.add_argument("--summary-path", default="")
+    p_teams.add_argument("--state-path", default="")
+    p_teams.add_argument("--force-send", action=argparse.BooleanOptionalAction, default=False)
+    p_teams.add_argument("--max-items", default="10")
+    p_teams.add_argument("--ref", default="master")
+    p_teams.add_argument("--wait", action="store_true")
+    p_teams.set_defaults(func=teams)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

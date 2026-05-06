@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Repair an existing PR branch with local Codex using failed-check evidence."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import shutil
+
+import atlas_agent_common as common
+
+
+def pr_json(repo: str, number: int) -> dict:
+    return common.gh_json(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,body,author,url,headRefName,baseRefName,headRepository,headRepositoryOwner,comments,reviews",
+        ]
+    )
+
+
+def collect_checks(repo: str, number: int, job_dir: pathlib.Path) -> str:
+    proc = common.run(
+        ["gh", "pr", "checks", str(number), "--repo", repo, "--json", "name,state,bucket,link,description"],
+        check=False,
+    )
+    (job_dir / "pr-checks.json").write_text(proc.stdout or "[]", encoding="utf-8")
+    return proc.stdout or ""
+
+
+def collect_failed_run_log(repo: str, branch: str, job_dir: pathlib.Path) -> str:
+    runs = common.gh_json(
+        [
+            "run",
+            "list",
+            "--repo",
+            repo,
+            "--branch",
+            branch,
+            "--limit",
+            "5",
+            "--json",
+            "databaseId,status,conclusion,name,displayTitle,url,createdAt,updatedAt",
+        ]
+    )
+    common.write_json(job_dir / "runs.json", runs)
+    failed = [
+        item
+        for item in runs or []
+        if item.get("conclusion") in {"failure", "timed_out", "cancelled", "action_required"}
+    ]
+    if not failed:
+        return ""
+    run_id = str(failed[0]["databaseId"])
+    proc = common.run(["gh", "run", "view", run_id, "--repo", repo, "--log-failed"], check=False)
+    log = proc.stdout or ""
+    (job_dir / f"run-{run_id}-failed.log").write_text(log, encoding="utf-8", errors="replace")
+    return log[-20000:]
+
+
+def build_prompt(pr: dict, checks: str, failed_log: str) -> str:
+    return f"""You are repairing GitHub PR #{pr["number"]}.
+
+PR: {pr["url"]}
+Title: {pr.get("title", "")}
+Base branch: {pr.get("baseRefName", "")}
+Head branch: {pr.get("headRefName", "")}
+
+PR body:
+{pr.get("body") or ""}
+
+Recent comments:
+{json.dumps(pr.get("comments", []), indent=2)}
+
+Reviews:
+{json.dumps(pr.get("reviews", []), indent=2)}
+
+Check summary:
+{checks}
+
+Failed workflow log excerpt:
+{failed_log}
+
+Instructions:
+- Repair this PR branch only.
+- Keep the change focused on the failing checks or review comments.
+- Do not change secrets, credentials, deployment settings, or unrelated workflows.
+- Run the most relevant local tests you can.
+- Leave a concise final summary with tests run.
+"""
+
+
+def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> str:
+    prompt_path = job_dir / "prompt.md"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    run_home = common.codex_home_copy(job_dir)
+    cmd = [
+        *common.podman_cmd(),
+        "run",
+        "--rm",
+        "--userns=keep-id",
+        "--network=slirp4netns",
+        "-v",
+        f"{run_home}:/home/agent/.codex:Z",
+        "-v",
+        f"{repo_path}:/work:Z",
+        "-v",
+        f"{job_dir}:/job:Z",
+        common.codex_image(),
+        "bash",
+        "-lc",
+        "cd /work && codex exec --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < /job/prompt.md",
+    ]
+    proc = common.run(cmd, cwd=repo_path, check=False)
+    shutil.rmtree(run_home, ignore_errors=True)
+    (job_dir / "codex.log").write_text(proc.stdout or "", encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError(f"Codex repair failed with status {proc.returncode}; see {job_dir}/codex.log")
+    return proc.stdout or ""
+
+
+def repair(args: argparse.Namespace) -> None:
+    repo, number = common.pr_ref_parts(args.pr)
+    pr = pr_json(repo, number)
+    if (pr.get("headRepositoryOwner") or {}).get("login") not in repo.split("/", 1)[0:1]:
+        raise SystemExit("Fork PR repair is not supported by this local branch pusher yet.")
+
+    job_dir = common.jobs_dir() / f"pr-{number}-repair-{common.now_id()}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    common.write_json(job_dir / "pr.json", pr)
+
+    repo_path = common.ensure_repo(repo)
+    head = pr["headRefName"]
+    common.run(["git", "checkout", "-B", head, f"origin/{head}"], cwd=repo_path)
+    status = common.run(["git", "status", "--short"], cwd=repo_path).stdout.strip()
+    if status:
+        raise SystemExit(f"Refusing to repair with dirty worktree:\n{status}")
+
+    checks = collect_checks(repo, number, job_dir)
+    failed_log = collect_failed_run_log(repo, head, job_dir)
+    run_codex(repo_path, job_dir, build_prompt(pr, checks, failed_log))
+
+    status = common.run(["git", "status", "--short"], cwd=repo_path).stdout
+    diff_stat = common.run(["git", "diff", "--stat"], cwd=repo_path).stdout
+    (job_dir / "status.txt").write_text(status, encoding="utf-8")
+    (job_dir / "diff.stat.txt").write_text(diff_stat, encoding="utf-8")
+    (job_dir / "diff.patch").write_text(common.run(["git", "diff"], cwd=repo_path).stdout, encoding="utf-8")
+
+    if not status.strip():
+        common.run(
+            [
+                "gh",
+                "pr",
+                "comment",
+                str(number),
+                "--repo",
+                repo,
+                "--body",
+                f"Local Codex PR repair ran, but produced no file changes. Artifacts: `{job_dir}`",
+            ],
+            check=False,
+        )
+        return
+
+    if args.dry_run:
+        print(f"Dry run complete. Artifacts: {job_dir}")
+        print(diff_stat)
+        return
+
+    common.run(["git", "add", "-A"], cwd=repo_path)
+    common.run(["git", "commit", "-m", f"agent: repair PR #{number}"], cwd=repo_path)
+    common.run(["git", "push", "origin", f"HEAD:{head}"], cwd=repo_path)
+    common.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(number),
+            "--repo",
+            repo,
+            "--body",
+            f"Local Codex pushed a repair commit for PR #{number}.\n\nArtifacts: `{job_dir}`",
+        ],
+        check=False,
+    )
+    print(f"Repair pushed. Artifacts: {job_dir}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pr", help="OWNER/REPO#PR_NUMBER")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    repair(args)
+
+
+if __name__ == "__main__":
+    main()

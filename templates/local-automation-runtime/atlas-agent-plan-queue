@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Bridge an approved plan into GitHub issues and the local-agent queue."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+RUNTIME_DIR = Path(__file__).resolve().parent
+TOOLS_ROOT = RUNTIME_DIR.parents[1]
+PLAN_TO_ISSUES = TOOLS_ROOT / ".cursor" / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
+
+
+def run_json(args: list[str]) -> dict:
+    proc = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        raise SystemExit(proc.stderr or proc.stdout)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Expected JSON from {' '.join(args)}\n{proc.stdout}") from exc
+
+
+def run_cmd(args: list[str]) -> int:
+    print("+ " + " ".join(args), flush=True)
+    return subprocess.run(args, cwd=RUNTIME_DIR).returncode
+
+
+def issue_repo_from_url(url: str) -> str | None:
+    match = re.search(r"github\.com/([^/\s]+/[^/\s]+)/issues/\d+", url)
+    return match.group(1) if match else None
+
+
+def child_blockers(child: dict) -> list[str]:
+    blockers: list[str] = []
+    for field in ("dependencies", "blockers", "dependency_issue_refs", "blocker_issue_refs", "automation_blockers"):
+        values = child.get(field) or []
+        if values:
+            blockers.append(f"{field}: {', '.join(str(value) for value in values[:5])}")
+    if child.get("dispatch_recommendation") != "auto-dispatch":
+        blockers.append(f"dispatch_recommendation: {child.get('dispatch_recommendation')}")
+    labels = set(child.get("labels") or [])
+    if "status:ready" not in labels:
+        blockers.append("missing status:ready")
+    return blockers
+
+
+def projection_args(args: argparse.Namespace, mode: str) -> list[str]:
+    cmd = [sys.executable, str(PLAN_TO_ISSUES)]
+    if args.plan:
+        cmd.extend(["--plan", args.plan])
+    else:
+        cmd.extend(["--registry-root", args.registry_root])
+        if args.registry_project_id:
+            cmd.extend(["--registry-project-id", args.registry_project_id])
+        if args.registry_epic_id:
+            cmd.extend(["--registry-epic-id", args.registry_epic_id])
+        for story_id in args.registry_story_id or []:
+            cmd.extend(["--registry-story-id", story_id])
+    if args.repo:
+        cmd.extend(["--repo", args.repo])
+    cmd.extend(["--strategy", args.strategy])
+    if args.project_url:
+        cmd.extend(["--project-url", args.project_url])
+    if args.project_owner:
+        cmd.extend(["--project-owner", args.project_owner])
+    if args.project_number:
+        cmd.extend(["--project-number", str(args.project_number)])
+    cmd.append(mode)
+    return cmd
+
+
+def compact_preview(payload: dict) -> dict:
+    children = payload.get("children") or []
+    queueable = []
+    blocked = []
+    for child in children:
+        reasons = child_blockers(child)
+        item = {
+            "source_id": child.get("source_id"),
+            "title": child.get("title"),
+            "execution_repo": child.get("execution_repo"),
+            "status_label": child.get("status_label"),
+            "dispatch_recommendation": child.get("dispatch_recommendation"),
+            "reasons": reasons,
+        }
+        if reasons:
+            blocked.append(item)
+        else:
+            queueable.append(item)
+    return {
+        "plan": payload.get("plan"),
+        "repo": payload.get("repo"),
+        "stability": payload.get("stability"),
+        "queueable_count": len(queueable),
+        "blocked_count": len(blocked),
+        "queueable": queueable,
+        "blocked": blocked,
+    }
+
+
+def assert_apply_safe(preview: dict) -> None:
+    compact = compact_preview(preview)
+    stability = preview.get("stability") or {}
+    plan_execution = preview.get("plan_execution") or {}
+    errors: list[str] = []
+    if stability.get("plan_status") != "ready-for-apply":
+        errors.append(f"plan_status is {stability.get('plan_status')}")
+    if plan_execution.get("dispatch_blockers"):
+        errors.append(f"dispatch blockers: {plan_execution.get('dispatch_blockers')}")
+    if compact["blocked_count"]:
+        errors.append(f"{compact['blocked_count']} child issue(s) are not queueable")
+    if errors:
+        raise SystemExit("Plan is not safe to apply+queue:\n- " + "\n- ".join(errors))
+
+
+def repos_from_sync_result(payload: dict, fallback_repo: str | None) -> list[str]:
+    repos: set[str] = set()
+    sync = payload.get("sync_apply") or {}
+    for key in ("created", "updated", "unchanged"):
+        for item in sync.get(key) or []:
+            repo = item.get("repo") or item.get("issue_repo")
+            url = item.get("url") or ""
+            repos.add(repo or issue_repo_from_url(url) or "")
+    if fallback_repo:
+        repos.add(fallback_repo)
+    return sorted(repo for repo in repos if repo)
+
+
+def run_orchestrator(repos: list[str], *, max_queue: int, publish: bool) -> int:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".repos.txt", delete=False) as tmp:
+        tmp.write("\n".join(repos) + "\n")
+        repos_file = tmp.name
+    cmd = [
+        str(RUNTIME_DIR / "atlas-agent-orchestrator"),
+        "--once",
+        "--inspect-failed",
+        "--auto-create-missing-base",
+        "--auto-queue-label",
+        "status:ready",
+        "--auto-queue-max",
+        str(max_queue),
+        "--limit",
+        "100",
+        "--repos-file",
+        repos_file,
+    ]
+    if publish:
+        cmd.append("--publish")
+    return run_cmd(cmd)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--plan")
+    source.add_argument("--registry-root")
+    parser.add_argument("--registry-project-id")
+    parser.add_argument("--registry-epic-id")
+    parser.add_argument("--registry-story-id", action="append")
+    parser.add_argument("--repo")
+    parser.add_argument("--strategy", choices=("workstreams", "phases"), default="workstreams")
+    parser.add_argument("--project-url")
+    parser.add_argument("--project-owner")
+    parser.add_argument("--project-number", type=int)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--apply", action="store_true")
+    parser.add_argument("--queue", action="store_true", help="After sync-apply, promote status:ready issues through orchestrator.")
+    parser.add_argument("--publish", action="store_true", help="When queueing, allow orchestrator workers to publish draft PRs.")
+    parser.add_argument("--run-chain", action="store_true", help="After sync-apply, run the e2e chain for the touched repos.")
+    parser.add_argument("--cycles", type=int, default=1)
+    parser.add_argument("--max-queue", type=int, default=3)
+    args = parser.parse_args()
+
+    preview_mode = "--dry-run" if args.dry_run else "--sync-preview"
+    preview = run_json(projection_args(args, preview_mode))
+    compact = compact_preview(preview)
+    if args.dry_run:
+        json.dump(compact, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    assert_apply_safe(preview)
+    applied = run_json(projection_args(args, "--sync-apply"))
+    repos = repos_from_sync_result(applied, args.repo)
+    result = {"preview": compact, "sync_apply": applied.get("sync_apply"), "repos": repos}
+    if args.queue or args.run_chain:
+        result["orchestrator_rc"] = run_orchestrator(repos, max_queue=args.max_queue, publish=args.publish)
+    if args.run_chain:
+        chain_cmd = [
+            str(RUNTIME_DIR / "run_e2e_chain.sh"),
+            "--apply",
+            "--merge",
+            "--close-issues",
+            "--cycles",
+            str(args.cycles),
+            "--max-per-repo",
+            "1",
+        ]
+        result["chain_rc"] = run_cmd(chain_cmd)
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

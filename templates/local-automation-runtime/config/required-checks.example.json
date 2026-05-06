@@ -1,0 +1,18 @@
+{
+  "Atlas-Memory-Framework/Atlas-Memory-Admin-UI": [],
+  "Atlas-Memory-Framework/Atlas-Memory-Azure": [
+    "G-CI-RegistrySchema",
+    "G-CI-AutomationPolicySchema",
+    "G-CI-Workflow-Lint",
+    "G-CI-Workflow-Contracts",
+    "G-CI-Infra-Output-Contract",
+    "WS3 governance tests (G-CI-WS3Governance)",
+    "WS2 planning registry (G-CI-ProjectionParity + friends)",
+    "G-COORD-SharedPlanningCIContract"
+  ],
+  "Atlas-Memory-Framework/Atlas-Memory-Chainlit": [],
+  "Atlas-Memory-Framework/atlas-memory": [
+    "reliability-tests",
+    "processing-heavy-tests"
+  ]
+}
