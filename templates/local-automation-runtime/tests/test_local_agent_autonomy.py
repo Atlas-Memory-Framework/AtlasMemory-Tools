@@ -412,6 +412,25 @@ fatal: unable to auto-detect email address
         self.assertEqual(blockers, ["owner/repo issue #2 is not closed"])
         self.assertEqual(calls[0][:4], ["issue", "view", "2", "--repo"])
 
+    def test_dependency_blockers_ignore_execution_state_none_with_parent_epic(self) -> None:
+        blockers = self.finalize.common.issue_dependency_blockers(
+            "owner/repo",
+            issue(
+                body=(
+                    "## Parent Epic\n"
+                    "https://github.com/owner/repo/issues/56\n\n"
+                    "<!-- AGENTIC_EXECUTION_STATE:START -->\n"
+                    "## Execution State\n"
+                    "- Open dependencies: `none`\n"
+                    "- Manual gates remaining: `none`\n"
+                    "<!-- AGENTIC_EXECUTION_STATE:END -->\n"
+                ),
+                number=1,
+            ),
+        )
+
+        self.assertEqual(blockers, [])
+
     def test_finalizer_blocks_duplicate_issue_prs(self) -> None:
         originals = {
             "target_repos": self.finalize.target_repos,
