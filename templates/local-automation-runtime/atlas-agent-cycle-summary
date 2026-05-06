@@ -56,10 +56,21 @@ def load_finalizer(chain_dir: Path, cycle: int) -> list[dict]:
     return decisions if isinstance(decisions, list) else []
 
 
+def load_review(chain_dir: Path, cycle: int) -> list[dict]:
+    data = read_json(chain_dir / f"review-cycle-{cycle}.json")
+    decisions = data.get("decisions") or []
+    return decisions if isinstance(decisions, list) else []
+
+
 def summarize(chain_dir: Path, cycle: int) -> dict:
     build_results = load_build_results(chain_dir, cycle)
     triage_blockers = load_triage_blockers(chain_dir, cycle)
+    review = load_review(chain_dir, cycle)
     finalizer = load_finalizer(chain_dir, cycle)
+    review_counts: dict[str, int] = {}
+    for item in review:
+        label = str(item.get("label") or "unknown")
+        review_counts[label] = review_counts.get(label, 0) + 1
     finalizer_counts: dict[str, int] = {}
     for item in finalizer:
         action = str(item.get("action") or "unknown")
@@ -78,6 +89,11 @@ def summarize(chain_dir: Path, cycle: int) -> dict:
             "blocker_count": len(triage_blockers),
             "blockers": triage_blockers[:25],
         },
+        "review": {
+            "counts": review_counts,
+            "blocked": [item for item in review if item.get("label") != "agent:review-approved"][:25],
+            "approved": [item for item in review if item.get("label") == "agent:review-approved"][:25],
+        },
         "finalizer": {
             "counts": finalizer_counts,
             "blocked": [item for item in finalizer if item.get("action") == "blocked"][:25],
@@ -91,6 +107,7 @@ def message_card(summary: dict) -> dict:
         f"**Chain:** `{summary['chain_id']}` cycle `{summary['cycle']}`",
         f"**Build:** {summary['build']['ok']} ok, {summary['build']['failed']} failed",
         f"**Triage blockers:** {summary['triage']['blocker_count']}",
+        f"**Review:** {summary.get('review', {}).get('counts', {})}",
         f"**Finalizer:** {summary['finalizer']['counts']}",
         f"**State:** `{summary['chain_dir']}`",
     ]

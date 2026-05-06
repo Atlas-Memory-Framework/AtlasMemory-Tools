@@ -15,7 +15,7 @@ import atlas_agent_common as common
 
 PR_VIEW_FIELDS = (
     "number,title,state,isDraft,url,body,headRefName,baseRefName,"
-    "headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup"
+    "headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,labels"
 )
 
 
@@ -89,6 +89,18 @@ def linked_issue_number(pr: dict[str, Any]) -> int | None:
         if match:
             return int(match.group(1))
     return None
+
+
+def label_names(pr: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for label in pr.get("labels") or []:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            names.add(str(name))
+    return names
 
 
 def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = None) -> tuple[str, list[str]]:
@@ -170,11 +182,14 @@ def decide(
     merge: bool,
     required_check_names: list[str] | None = None,
     check_dependencies: bool = False,
+    require_review_label: str | None = None,
 ) -> FinalizeDecision:
     reasons: list[str] = []
     issue_number = linked_issue_number(pr)
     if not issue_number:
         reasons.append("missing linked issue")
+    if require_review_label and require_review_label not in label_names(pr):
+        reasons.append(f"review-label missing: {require_review_label}")
     if pr.get("state") != "OPEN":
         reasons.append(f"state is {pr.get('state')}")
     merge_state = str(pr.get("mergeStateStatus") or "")
@@ -227,6 +242,7 @@ def revalidated_merge_decision(
     allow_no_checks: bool,
     required_check_names: list[str],
     check_dependencies: bool,
+    require_review_label: str | None = None,
 ) -> FinalizeDecision | None:
     detail = pr_view(decision.repo, decision.number)
     if not detail:
@@ -239,6 +255,7 @@ def revalidated_merge_decision(
         merge=True,
         required_check_names=required_check_names,
         check_dependencies=check_dependencies,
+        require_review_label=require_review_label,
     )
     if refreshed.action not in {"merge", "ready_then_merge"}:
         print(
@@ -260,6 +277,7 @@ def finalize_decision(
     allow_no_checks: bool,
     required_check_names: list[str],
     check_dependencies: bool,
+    require_review_label: str | None = None,
 ) -> None:
     ref = f"{decision.repo}#{decision.number}"
     if decision.action == "blocked":
@@ -276,6 +294,7 @@ def finalize_decision(
             allow_no_checks=allow_no_checks,
             required_check_names=required_check_names,
             check_dependencies=check_dependencies,
+            require_review_label=require_review_label,
         )
         if not refreshed:
             return
@@ -303,6 +322,7 @@ def scan(args: argparse.Namespace) -> list[FinalizeDecision]:
                     merge=args.merge,
                     required_check_names=required_checks(repo, getattr(args, "required_checks_file", None)),
                     check_dependencies=getattr(args, "check_dependencies", False),
+                    require_review_label=getattr(args, "require_review_label", None),
                 )
             )
     by_issue: dict[tuple[str, int], list[FinalizeDecision]] = {}
@@ -355,6 +375,7 @@ def main() -> None:
         default=True,
         help="Re-check linked issue dependency state before ready/merge decisions.",
     )
+    parser.add_argument("--require-review-label", help="Only finalize PRs with this PR label.")
     parser.add_argument("--apply", action="store_true", help="Apply ready/merge actions. Default is dry-run.")
     parser.add_argument("--merge", action="store_true", help="Merge eligible non-draft PRs, or ready+merge eligible draft PRs.")
     parser.add_argument("--merge-method", choices=["squash", "merge", "rebase"], default="squash")
@@ -374,6 +395,7 @@ def main() -> None:
             allow_no_checks=args.allow_no_checks,
             required_check_names=required_checks(decision.repo, args.required_checks_file),
             check_dependencies=args.check_dependencies,
+            require_review_label=args.require_review_label,
         )
 
 
