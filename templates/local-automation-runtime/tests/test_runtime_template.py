@@ -70,6 +70,17 @@ class RuntimeTemplateTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (chain_dir / "review-cycle-1.json").write_text(
+                json.dumps(
+                    {
+                        "decisions": [
+                            {"repo": "owner/repo", "number": 3, "label": "agent:needs-repair"},
+                            {"repo": "owner/repo", "number": 4, "label": "agent:review-approved"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             summary = self.cycle.summarize(chain_dir, 1)
 
@@ -77,6 +88,8 @@ class RuntimeTemplateTests(unittest.TestCase):
         self.assertEqual(summary["build"]["failed"], 1)
         self.assertEqual(summary["finalizer"]["counts"]["blocked"], 1)
         self.assertEqual(summary["finalizer"]["counts"]["merge"], 1)
+        self.assertEqual(summary["review"]["counts"]["agent:needs-repair"], 1)
+        self.assertEqual(summary["review"]["counts"]["agent:review-approved"], 1)
 
     def test_plan_queue_blocks_children_with_dependencies(self) -> None:
         child = {

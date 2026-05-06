@@ -16,6 +16,10 @@ max_per_repo=1
 required_checks_file="$runtime_dir/required-checks.json"
 post_cycle_summary=false
 post_triage_teams_per_repo=false
+review=false
+review_apply=false
+require_review_approval=false
+review_label="agent:review-approved"
 
 usage() {
   cat <<'EOF'
@@ -23,8 +27,9 @@ Usage: ./run_e2e_chain.sh [options]
 
 Runs one bounded end-to-end pass:
   1. build issues in parallel, one orchestrator per repo
-  2. finalize local-agent PRs
-  3. optionally merge and close linked issues
+  2. optionally review/classify local-agent PRs
+  3. finalize local-agent PRs
+  4. optionally merge and close linked issues
 
 Options:
   --apply             Apply finalizer actions. Without this, finalizer is dry-run.
@@ -40,6 +45,12 @@ Options:
                       Post one Teams summary after each cycle.
   --post-triage-teams-per-repo
                       Restore old noisy per-repo triage Teams posts for debugging.
+  --review            Run atlas-agent-review before finalization.
+  --review-apply      Apply review labels/comments. Implies --review.
+  --require-review-approval
+                      Finalizer requires agent:review-approved before ready/merge.
+  --review-label NAME Review approval label required by finalizer.
+                      Default: agent:review-approved.
   -h, --help          Show this help.
 EOF
 }
@@ -85,6 +96,23 @@ while [[ $# -gt 0 ]]; do
     --post-triage-teams-per-repo)
       post_triage_teams_per_repo=true
       shift
+      ;;
+    --review)
+      review=true
+      shift
+      ;;
+    --review-apply)
+      review=true
+      review_apply=true
+      shift
+      ;;
+    --require-review-approval)
+      require_review_approval=true
+      shift
+      ;;
+    --review-label)
+      review_label="${2:?--review-label requires a value}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -166,6 +194,21 @@ run_build_cycle() {
   return "$failed"
 }
 
+run_review_cycle() {
+  local cycle="$1"
+  local log_file="$runtime_dir/logs/e2e-chain-$chain_id-review-cycle-$cycle.log"
+  local summary_file="$chain_dir/review-cycle-$cycle.json"
+  local args=(--repos-file "$repo_file" --required-checks-file "$required_checks_file" --summary "$summary_file")
+  if $review_apply; then
+    args+=(--apply)
+  fi
+
+  (
+    cd "$runtime_dir"
+    ./atlas-agent-review "${args[@]}"
+  ) | tee "$log_file"
+}
+
 run_finalize_cycle() {
   local cycle="$1"
   local log_file="$runtime_dir/logs/e2e-chain-$chain_id-finalize-cycle-$cycle.log"
@@ -182,6 +225,9 @@ run_finalize_cycle() {
   fi
   if $allow_no_checks; then
     args+=(--allow-no-checks)
+  fi
+  if $require_review_approval; then
+    args+=(--require-review-label "$review_label")
   fi
 
   (
@@ -206,6 +252,10 @@ run_cycle_summary() {
 for cycle in $(seq 1 "$cycles"); do
   echo "=== E2E cycle $cycle/$cycles: parallel build ==="
   run_build_cycle "$cycle"
+  if $review; then
+    echo "=== E2E cycle $cycle/$cycles: review ==="
+    run_review_cycle "$cycle"
+  fi
   echo "=== E2E cycle $cycle/$cycles: finalize ==="
   run_finalize_cycle "$cycle"
   echo "=== E2E cycle $cycle/$cycles: summary ==="
