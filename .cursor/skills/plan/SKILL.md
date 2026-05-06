@@ -1,26 +1,32 @@
 ---
 name: plan
-description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by Cursor) as the design SSOT and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
+description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by Cursor) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
 ---
 
 # /plan Orchestrator
 
 ## Purpose
-Create or update the current plan artifact and move it through Problem, Feature, Technical, Implementation, and Reviews with deterministic validators and decision logging. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
+Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, and Reviews with deterministic validators and decision logging. The markdown artifact is the authoring write surface; in `registry-first`, a successful compile later hands planning authority to compiled registry YAML. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
 
 ## Core rules
-- The SSOT is the current plan artifact; do not assume a fixed filename.
-- **SSOT selection is a hard lock**:
-  - **SSOT Lock precedence**:
+- The current markdown plan artifact is the planning write surface; do not assume a fixed filename.
+- **Artifact authority contract (required)**:
+  - `.cursor/plans/*.plan.md` is authoritative for authoring intent, rationale, and amendments.
+  - compiled registry YAML is authoritative for local planning structure, joins, validator inputs, and projection metadata after successful compile in `registry-first`.
+  - GitHub issues and PRs are authoritative for execution state and mutation authority.
+  - GitHub Projects v2 is downstream execution UI/signal only.
+  - rendered overlays and runtime-mirror outputs are derived surfaces, never authoring input.
+- **Authoring artifact selection is a hard lock**:
+  - **Selection precedence**:
     - If the user referenced any plan via `@path` in the last user message, **that wins** over thread context.
     - If multiple plans are referenced, you MUST ask the user to pick exactly one before proceeding (single-select).
-  - Treat a plan as the SSOT only if:
+  - Treat a plan as the selected authoring artifact only if:
     - the user explicitly provided it in this conversation (pasted content or referenced via `@path`), OR
     - `/plan` created it earlier in this same run.
   - Do NOT implicitly adopt a plan just because it exists in the workspace or happens to be open in the editor.
-- **SSOT Echo (required)**: after SSOT is selected, print `SSOT = <path>` in chat before doing any plan work.
-- **No-new-plan invariant**: if SSOT is set, do NOT create a new plan artifact unless the user explicitly requests “new plan”.
-- If no explicit in-conversation plan artifact is provided, create a new plan doc from `reference.md` and immediately echo it as SSOT.
+- **Authoring artifact echo (required)**: after the selection is made, print `AuthoringArtifact = <path>` in chat before doing any `/plan` work.
+- **No-new-plan invariant**: if an authoring artifact is already selected, do NOT create a new plan artifact unless the user explicitly requests “new plan”.
+- If no explicit in-conversation plan artifact is provided, create a new plan doc from `reference.md` and immediately echo it as the selected authoring artifact.
 - Workflow order is fixed: Problem -> Feature -> Technical -> Implementation -> Reviews.
 - Hard rule: `/problem-definition` and `/critical-ideation` are Q/A gated before advancing; run the Q/A loop inline with the user and only when the checklist fails or `Questions` is non-empty.
 - **No gate flips without evidence**: before changing any of `Status`, `CurrentStage`, or any Gate Results, include a short checklist in chat stating:
@@ -31,12 +37,12 @@ Create or update the current plan artifact and move it through Problem, Feature,
 - Preserve user agency via decision boundaries + dispositions. Do not "auto-approve" ambiguous decisions.
 
 ## On each /plan invocation
-1) Determine SSOT using the SSOT Lock precedence rules above.
+1) Determine the selected authoring artifact using the selection precedence rules above.
 2) If multiple plan artifacts were referenced, stop and ask the user to select exactly one (single-select) before doing any work.
-3) If missing (no SSOT could be selected):
+3) If missing (no authoring artifact could be selected):
    - Ask for the feature idea / goal statement (1-2 sentences) and any hard constraints (optional).
    - Create a new plan doc using the template in `reference.md`.
-4) Echo SSOT in chat: `SSOT = <path>`.
+4) Echo the selection in chat: `AuthoringArtifact = <path>`.
 5) Determine `CurrentStage`.
 6) Run validators in stage order up to the current stage.
 7) Route to the first failing gate and call the owner skill as a sub-agent to produce a draft section. Provide any known agent roster or `## Context Snapshot` so ownership can be assigned correctly.
@@ -56,7 +62,7 @@ Create or update the current plan artifact and move it through Problem, Feature,
     - **No paper reviews**: after any remediation or other material plan edits, regenerate reviews (or re-run the same review agents) so `PlanningReviewsComplete` reflects the updated document.
     - If reviews are stale (plan changed since last review run), `PlanningReviewsComplete` MUST be `Fail` until re-run.
 15) Repeat the review -> remediation loop until findings are resolved, deduped as ignorable/non-relevant, or no new findings appear.
-16) Only surface findings to the user when they require human agency (policy/compliance/cost/trust boundaries, decision boundaries, external source approval, contradictions with explicit assumptions/SSOT, or remediation target is `Unknown`). Ask for A/R/D only for this reduced set.
+16) Only surface findings to the user when they require human agency (policy/compliance/cost/trust boundaries, decision boundaries, external source approval, contradictions with explicit assumptions or authority contracts, or remediation target is `Unknown`). Ask for A/R/D only for this reduced set.
 17) Hard rule: do not set `Status: Approved` or `PlanningReviewsComplete: Pass` if any human-agency items remain unresolved. Stop and request dispositions first.
 
 ## Validators (deterministic)
@@ -72,7 +78,10 @@ Create or update the current plan artifact and move it through Problem, Feature,
     - rollout includes rollback trigger + rollback steps
   - **PlanTier: Full (execution-grade, deterministic)**:
     - **agent roster exists** (owner -> responsibilities mapping) in `## Implementation Plan`
-    - every workstream has explicit fields: `Owner`, `Depends on`, `Review gates`, `Merge point`
+    - every workstream has explicit fields: `Owner`, `Agent type`, `Depends on`, `Review gates`, `Merge point`
+    - each workstream declares file ownership boundaries for build parallelism (single owner per file until merge point)
+    - each workstream includes delegation guidance (`delegate: required|optional`) so `/build` can enforce sub-agent-first execution
+    - `### Delegation Quality Gate` exists and DQ-1..DQ-4 are all `Pass` (or explicit DR-backed waiver for any `Fail`)
     - every phase has explicit fields: `Owner(s)`, `Depends on`, `Exit criteria (evidence)`, `Gates (named)`
     - **gate definitions exist** (named gates like `G-CI-Unit`, `G-DEPLOY-Smoke`) and each includes:
       - where it runs (CI | Local | Deployed)
@@ -86,7 +95,7 @@ Create or update the current plan artifact and move it through Problem, Feature,
       - migration tooling (Alembic vs raw SQL)
       - cutover criteria (when fallback is removed)
       - cache staleness policy (TTL default/max; invalidation yes/no)
-      - Tier B2 onboarding readiness (provisioning/active status & 503 behavior)
+      - Tier C onboarding readiness (provisioning/active status & 503 behavior)
 - PlanStateSanity (blocks false “Approved/Execution”):
   - Do NOT allow `Status: Approved` or `CurrentStage: Build/Execution` if:
     - any gate is not `Pass`, OR
@@ -156,7 +165,7 @@ Human-agency items MUST be explicitly decided by the user (use structured questi
 
 ## Context handling
 - Each sub-agent is responsible for collecting minimal necessary context for its section.
-- The Implementation Planning sub-agent owns the `## Context Snapshot` section and should fill any missing context required for execution, including the agent roster if not already captured.
+- The Implementation Planning sub-agent owns the `## Context Snapshot` section and should fill any missing context required for execution, including the agent roster and a delegation-ready workstream matrix if not already captured.
 - Only hard-block when missing context makes a gate unsafe to pass.
 
 ## Sub-skills used (run as sub-agents unless noted)

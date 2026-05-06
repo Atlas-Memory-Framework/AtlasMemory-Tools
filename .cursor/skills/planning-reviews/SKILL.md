@@ -8,6 +8,13 @@ description: Run required planning-phase reviews and log dispositions in the cur
 ## Purpose
 Run planning-phase review passes and update the Planning Reviews section with findings and dispositions. Do not write the plan artifact directly.
 
+## Authority contract lens
+- Markdown plan artifacts are the authoring write surface.
+- Compiled registry YAML is the local planning authority after compile in `registry-first`.
+- GitHub issues, PRs, and checks are the execution truth.
+- GitHub Projects v2, rendered overlays, and runtime-mirror outputs are downstream or derived evidence surfaces only.
+- Review packaging must preserve these boundaries; no review may treat markdown as execution-authoritative once `registry-first` is active.
+
 ## Finding severity labeling
 - If a review point is optional and does not block correct implementation, prefix the finding text with `Non-blocker:` (keep schema and ids unchanged).
 
@@ -76,6 +83,11 @@ If you cannot provide an evidence hook, emit a finding with `Remediation target:
 2) **Human decisions required (if any)**: list only the remaining finding ids with a 1-line explanation each.
 3) **Dispositions needed**: prompt only for the remaining ids (A/R/D), not for auto-remediated items.
 
+## Review freshness + packaging outputs
+- Tie review freshness to the current validator/package outputs for the plan state being reviewed.
+- If review packaging, validator evidence, or refreshed stamps no longer match the current plan state, treat the review as stale and rerun it.
+- In `registry-first`, package contradictions against authority boundaries and validator outputs rather than against a markdown-only planning model.
+
 ## Finding Closure Protocol (required)
 - After remediation, rewrite the original finding line while keeping the same `F-xxx` id:
   - Use `(Resolved)` prefix when remediated: `F-012: (Resolved) <original finding summary> ...`
@@ -118,7 +130,7 @@ This skill is typically invoked by `/plan` during the Reviews stage. Users can r
   - F-001: ...
 - Missing validations or operational steps:
   - F-002: ...
-- Contradictions with stated invariants or SSOTs:
+- Contradictions with stated invariants or authority boundaries:
   - F-003: ...
 - Patch suggestions (point to plan sections):
   - F-004: ...

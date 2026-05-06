@@ -12,16 +12,23 @@ This README explains the *human workflow* for using `/plan` day-to-day.
 
 It uses deterministic “gate” checks to decide what to do next, and it logs decisions in the plan’s **Decision Log**.
 
-## The most important rule: SSOT plan selection
+Authority model:
 
-`/plan` always operates on exactly one plan document: the **SSOT** (single source of truth).
+- the markdown plan is the authoring write surface
+- in `registry-first`, successful compile hands local planning authority to compiled registry YAML
+- GitHub issues and PRs remain the execution truth
+- rendered overlays and project boards are derived views, not authoring inputs
 
-- If your last message references a plan via `@path`, that plan **must** be used as SSOT.
+## The most important rule: authoring artifact selection
+
+`/plan` always operates on exactly one markdown plan document: the selected **authoring artifact**.
+
+- If your last message references a plan via `@path`, that plan **must** be used as the authoring artifact.
 - If multiple plans are referenced, you must pick one (single-select) before `/plan` continues.
 - The assistant must echo the selection:
-  - `SSOT = <path>`
+  - `AuthoringArtifact = <path>`
 
-### How to pick the SSOT explicitly
+### How to pick the authoring artifact explicitly
 
 In chat, reference the plan file:
 
@@ -41,7 +48,7 @@ Goal: <1–2 sentences>
 Constraints: <optional bullets>
 ```
 
-If no plan is referenced, `/plan` will create a new plan doc from `reference.md` and echo it as SSOT.
+If no plan is referenced, `/plan` will create a new plan doc from `reference.md` and echo it as the selected authoring artifact.
 
 ### 2) Continue an existing plan
 
@@ -67,13 +74,13 @@ Notes:
 - The assistant should still respect the gating model and update the plan artifact, but keep the scope to the requested review area.
 - If edits are made, reviews must be refreshed (see “No paper reviews”).
 
-### 4) Update the plan with new constraints/SSOTs (deployment, cost, policy)
+### 4) Update the plan with new constraints or authoritative inputs (deployment, cost, policy)
 
 This is the most common “mid-plan” workflow: you learn something real (e.g., how CI deploys) and want the plan to match reality.
 
 ```text
 @.../my-plan.plan.md /plan
-New info: our deployment SSOT is .github/workflows/deploy-dev.yml and it works today.
+New info: our authoritative deployment workflow is .github/workflows/deploy-dev.yml and it works today.
 Update the implementation plan to align to that and include tenant onboarding/provisioning steps.
 ```
 
@@ -104,9 +111,9 @@ Expectation when using `/plan`:
 
 ## What you should provide to get the best results
 
-- **SSOT plan reference** via `@path`
+- **Authoring artifact reference** via `@path`
 - **Goal + hard constraints**
-- **Anything that is “real SSOT” in the repo** (examples):
+- **Anything that is authoritative in the repo for the concern being planned** (examples):
   - deployment workflow(s) that actually run
   - the real auth boundary implementation
   - existing infrastructure modules/scripts
@@ -124,4 +131,15 @@ Expectation when using `/plan`:
 
 - **Orchestrator rules**: `SKILL.md`
 - **Plan template**: `reference.md`
+- **Issue/project projection**: `../plan-to-issues/SKILL.md`
+
+## Optional external tracking
+
+Plans can carry optional tracking metadata for GitHub issues or projects, but that metadata does not replace the markdown plan as the authoring surface or the compiled registry as local planning authority after compile.
+
+Recommended pattern:
+
+- keep tracking metadata additive and optional
+- use the new `plan-to-issues` skill to preview or apply issue projections
+- avoid patching unstable plan drafts with issue links until the tracking objects actually exist
 

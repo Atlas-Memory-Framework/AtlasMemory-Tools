@@ -12,9 +12,10 @@ Copy `.cursor/` into the repo where you want to use these tools.
 
 1. Run `/plan` with your feature idea (1-5 bullets).
 2. Keep going with the agent until the plan is complete.
-*Note: If context gets compressed, agent will forget the /plan skill & might loose SSOT on the plan - just remind it.*
-3. Optional: Rerun with /plan for a more thurough analysis, tell it to focus on certain areas (technical, security) or some problem you know about releated to the plan.
+*Note: If context gets compressed, agent may forget the /plan skill and lose SSOT on the plan - just remind it.*
+3. Optional: Rerun with /plan for a more thorough analysis, tell it to focus on certain areas (technical, security), or some problem you know about related to the plan.
 4. Run `/implement` with plan file to execute the approved implementation plan.
+5. Run `/plan-to-issues` when an approved plan should be turned into GitHub-ready issue drafts.
 
 That is the core loop.
 
@@ -38,7 +39,7 @@ For full details, see `.cursor/skills/plan/README.md`.
 
 ## Repo Layout
 
-- `.cursor/skills/`: planning and implementation skills (`plan`, `implement`, `review`, etc.)
+- `.cursor/skills/`: planning and implementation skills (`plan`, `plan-to-issues`, `implement`, `review`, etc.)
 - `.cursor/agents/`: specialist and reviewer agents
 - `specs/`: framework and skill specs
 
