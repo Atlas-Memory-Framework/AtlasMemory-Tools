@@ -30,10 +30,12 @@ def pr(**overrides):
         "isDraft": False,
         "body": "Closes #7",
         "headRefName": "agent/issue-7/job",
+        "headRefOid": "abc123",
         "mergeStateStatus": "CLEAN",
         "mergeable": "MERGEABLE",
         "statusCheckRollup": [{"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"}],
         "labels": [],
+        "comments": [],
     }
     data.update(overrides)
     return data
@@ -73,10 +75,61 @@ class ReviewAgentTests(unittest.TestCase):
             pr(statusCheckRollup=[]),
             issue=issue(),
             files=["src/app.py"],
+            required_checks=["ci"],
         )
 
         self.assertEqual(decision.label, "agent:needs-repair")
         self.assertIn("no checks reported", decision.reasons)
+
+    def test_review_requires_local_validation_for_no_check_pr_without_required_checks(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(statusCheckRollup=[]),
+            issue=issue(),
+            files=["src/app.py"],
+        )
+
+        self.assertEqual(decision.label, "agent:local-validation-required")
+        self.assertIn("no checks reported; local validation required", decision.reasons)
+
+    def test_review_accepts_local_validation_passed_for_no_check_pr(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                statusCheckRollup=[],
+                labels=[{"name": "agent:local-validation-passed"}],
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-local-validation -->\nHead: `abc123`\nResult: passed",
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+        self.assertIn("local validation passed with no GitHub checks", decision.reasons)
+
+    def test_review_rejects_stale_local_validation_passed_label(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                statusCheckRollup=[],
+                labels=[{"name": "agent:local-validation-passed"}],
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-local-validation -->\nHead: `oldsha`\nResult: passed",
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            allow_no_checks=True,
+        )
+
+        self.assertEqual(decision.label, "agent:local-validation-required")
+        self.assertIn("local validation pass missing for current head", decision.reasons)
 
     def test_review_requires_manual_validation_for_deployed_scope(self) -> None:
         decision = self.review.classify(
@@ -88,7 +141,18 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decision.label, "agent:manual-validation-required")
 
-    def test_review_requires_repair_for_overlap(self) -> None:
+    def test_review_approves_deployed_scope_after_manual_validation_label(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(labels=[{"name": "agent:manual-validation-approved"}]),
+            issue=issue(body="Validation scope: `deployed`"),
+            files=["src/app.py"],
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+        self.assertIn("manual or deployed validation approved", decision.reasons)
+
+    def test_review_queues_direct_overlap(self) -> None:
         decision = self.review.classify(
             "owner/repo",
             pr(),
@@ -97,8 +161,21 @@ class ReviewAgentTests(unittest.TestCase):
             overlap_numbers=[8],
         )
 
-        self.assertEqual(decision.label, "agent:needs-repair")
+        self.assertEqual(decision.label, "agent:overlap-queued")
         self.assertIn("overlaps open local-agent PRs: #8", decision.reasons)
+
+    def test_manual_validation_waits_for_repair_blockers(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(statusCheckRollup=[]),
+            issue=issue(body="Validation scope: `deployed`"),
+            files=["src/app.py"],
+            required_checks=["ci"],
+        )
+
+        self.assertEqual(decision.label, "agent:needs-repair")
+        self.assertIn("no checks reported", decision.reasons)
+        self.assertIn("manual/deployed validation pending after repair", decision.reasons)
 
     def test_review_marks_duplicate_as_superseded(self) -> None:
         decision = self.review.classify(
@@ -175,6 +252,36 @@ class ReviewAgentTests(unittest.TestCase):
             calls,
         )
 
+    def test_overlap_frontier_approves_only_one_green_pr(self) -> None:
+        decisions = [
+            self.review.ReviewDecision("owner/repo", 7, "agent: address issue #7", "url", 7, "agent:review-approved", ["green"], ["src/app.py"]),
+            self.review.ReviewDecision("owner/repo", 8, "agent: address issue #8", "url", 8, "agent:review-approved", ["green"], ["src/app.py"]),
+        ]
+        details = [
+            ({"number": 7, "title": "agent: address issue #7", "headRefName": "agent/issue-7/a"}, ["src/app.py"]),
+            ({"number": 8, "title": "agent: address issue #8", "headRefName": "agent/issue-8/a"}, ["src/app.py"]),
+        ]
+
+        self.review.apply_overlap_frontier(decisions, details)
+
+        self.assertEqual(decisions[0].label, "agent:review-approved")
+        self.assertEqual(decisions[1].label, "agent:overlap-queued")
+        self.assertIn("queued behind overlapping PR #7", decisions[1].reasons)
+
+    def test_overlap_frontier_does_not_promote_unsafe_pr(self) -> None:
+        decisions = [
+            self.review.ReviewDecision("owner/repo", 7, "agent: address issue #7", "url", 7, "agent:needs-repair", ["no checks reported"], ["src/app.py"]),
+            self.review.ReviewDecision("owner/repo", 8, "agent: address issue #8", "url", 8, "agent:review-approved", ["green"], ["src/app.py"]),
+        ]
+        details = [
+            ({"number": 7, "title": "agent: address issue #7", "headRefName": "agent/issue-7/a"}, ["src/app.py"]),
+            ({"number": 8, "title": "agent: address issue #8", "headRefName": "agent/issue-8/a"}, ["src/app.py"]),
+        ]
+
+        self.review.apply_overlap_frontier(decisions, details)
+
+        self.assertEqual(decisions[0].label, "agent:needs-repair")
+        self.assertEqual(decisions[1].label, "agent:review-approved")
 
 if __name__ == "__main__":
     unittest.main()

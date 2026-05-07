@@ -192,7 +192,11 @@ def comment_issue(repo, number, job_dir, body):
     )
 
 
-def clear_running_labels(repo, number, done=False, failed=False):
+def agent_pr_open_label():
+    return os.environ.get("AGENT_PR_OPEN_LABEL", "agent:pr-open")
+
+
+def clear_running_labels(repo, number, done=False, failed=False, pr_open=False):
     run(
         f'gh issue edit {number} --repo {shlex.quote(repo)} '
         f'--remove-label "{os.environ["AGENT_READY_LABEL"]}"',
@@ -207,6 +211,12 @@ def clear_running_labels(repo, number, done=False, failed=False):
         run(
             f'gh issue edit {number} --repo {shlex.quote(repo)} '
             f'--add-label "{os.environ["AGENT_DONE_LABEL"]}"',
+            check=False,
+        )
+    if pr_open:
+        run(
+            f'gh issue edit {number} --repo {shlex.quote(repo)} '
+            f'--add-label "{agent_pr_open_label()}"',
             check=False,
         )
     if failed:
@@ -268,6 +278,7 @@ def process_issue(issue, publish):
 
         codex_cmd = (
             f"{podman_command()} run --rm "
+            "--userns=keep-id "
             "--network=slirp4netns "
             f"-v {quote_path(codex_home)}:/home/agent/.codex:ro,Z "
             f"-v {quote_path(worktree_dir)}:/work:Z "
@@ -325,7 +336,7 @@ Codex log:
 `{job_dir}/codex.log`
 """,
             )
-            clear_running_labels(repo, number, done=True)
+            clear_running_labels(repo, number, failed=True)
             return
 
         if policy_errors:
@@ -412,7 +423,7 @@ Run the worker with `--publish` after reviewing the dry-run behavior.
 """
 
         comment_issue(repo, number, job_dir, comment)
-        clear_running_labels(repo, number, done=True)
+        clear_running_labels(repo, number, pr_open=publish, failed=not publish)
 
     except Exception as exc:
         err = str(exc)
@@ -437,9 +448,20 @@ Local artifacts:
         clear_running_labels(repo, number, failed=True)
 
 
+def requested_issue_number(argv):
+    if "--issue" not in argv:
+        return None
+    index = argv.index("--issue")
+    try:
+        return int(argv[index + 1])
+    except (IndexError, ValueError):
+        raise SystemExit("--issue requires an integer issue number")
+
+
 def main():
     publish = "--publish" in sys.argv
     once = "--once" in sys.argv
+    only_issue = requested_issue_number(sys.argv)
 
     repo = require_env("AGENT_REPO")
     pathlib.Path(require_env("AGENT_REPOS")).expanduser().mkdir(parents=True, exist_ok=True)
@@ -458,9 +480,14 @@ def main():
         )
 
         ready_issues = [issue for issue in issues or [] if issue_is_ready(issue)]
+        if only_issue is not None:
+            ready_issues = [issue for issue in ready_issues if int(issue["number"]) == only_issue]
         if not ready_issues:
             if once:
-                print("No trusted ready issues.")
+                if only_issue is None:
+                    print("No trusted ready issues.")
+                else:
+                    print(f"No trusted ready issue #{only_issue}.")
                 return
             time.sleep(60)
             continue

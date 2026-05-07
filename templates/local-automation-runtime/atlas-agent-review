@@ -14,7 +14,7 @@ import atlas_agent_common as common
 
 PR_VIEW_FIELDS = (
     "number,title,state,isDraft,url,body,headRefName,baseRefName,"
-    "mergeable,mergeStateStatus,statusCheckRollup,labels"
+    "headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels,comments"
 )
 
 REVIEW_LABELS = {
@@ -22,11 +22,21 @@ REVIEW_LABELS = {
     "agent:needs-repair": "D93F0B",
     "agent:superseded": "5319E7",
     "agent:manual-validation-required": "B60205",
+    "agent:overlap-queued": "1D76DB",
+    "agent:local-validation-required": "FBCA04",
+}
+REVIEW_AUX_LABELS = {
+    "agent:manual-validation-approved": "0E8A16",
 }
 APPROVED_LABEL = "agent:review-approved"
 NEEDS_REPAIR_LABEL = "agent:needs-repair"
 SUPERSEDED_LABEL = "agent:superseded"
 MANUAL_LABEL = "agent:manual-validation-required"
+MANUAL_APPROVED_LABEL = "agent:manual-validation-approved"
+OVERLAP_LABEL = "agent:overlap-queued"
+LOCAL_VALIDATION_REQUIRED_LABEL = "agent:local-validation-required"
+LOCAL_VALIDATION_PASSED_LABEL = "agent:local-validation-passed"
+LOCAL_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-local-validation -->"
 
 
 @dataclass
@@ -157,6 +167,23 @@ def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = N
     return "passed", passed
 
 
+def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
+    if LOCAL_VALIDATION_PASSED_LABEL not in common.label_names(pr):
+        return False
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return False
+    for comment in pr.get("comments") or []:
+        body = str(comment.get("body") or "")
+        if LOCAL_VALIDATION_COMMENT_MARKER not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        if re.search(r"(?im)^\s*Result:\s*passed\s*$", body):
+            return True
+    return False
+
+
 def issue_has_manual_validation(issue: dict[str, Any] | None) -> bool:
     if not issue:
         return False
@@ -172,6 +199,13 @@ def issue_has_manual_validation(issue: dict[str, Any] | None) -> bool:
         or "validation scope: deployed" in lowered
         or "manual-validation-required" in labels
     )
+
+
+def manual_validation_approved(pr: dict[str, Any], issue: dict[str, Any] | None) -> bool:
+    labels = common.label_names(pr)
+    if issue:
+        labels |= common.label_names(issue)
+    return MANUAL_APPROVED_LABEL in labels
 
 
 def has_superseded_signal(pr: dict[str, Any], issue: dict[str, Any] | None) -> bool:
@@ -211,6 +245,65 @@ def overlapping_prs(
     return sorted(overlaps)
 
 
+def overlap_map(open_details: list[tuple[dict[str, Any], list[str]]]) -> dict[int, set[int]]:
+    result: dict[int, set[int]] = {}
+    for detail, files in open_details:
+        number = int(detail.get("number") or 0)
+        if not number or not is_local_agent_pr(detail):
+            continue
+        result.setdefault(number, set())
+        own = set(files)
+        if not own:
+            continue
+        for other, other_files in open_details:
+            other_number = int(other.get("number") or 0)
+            if other_number == number or not is_local_agent_pr(other):
+                continue
+            if own & set(other_files):
+                result[number].add(other_number)
+    return result
+
+
+def overlap_components(overlaps: dict[int, set[int]]) -> list[set[int]]:
+    seen: set[int] = set()
+    components: list[set[int]] = []
+    for number in sorted(overlaps):
+        if number in seen:
+            continue
+        stack = [number]
+        component: set[int] = set()
+        while stack:
+            current = stack.pop()
+            if current in component:
+                continue
+            component.add(current)
+            stack.extend(sorted(overlaps.get(current, set()) - component))
+        seen.update(component)
+        if len(component) > 1:
+            components.append(component)
+    return components
+
+
+def apply_overlap_frontier(
+    decisions: list[ReviewDecision],
+    open_details: list[tuple[dict[str, Any], list[str]]],
+) -> None:
+    by_number = {decision.number: decision for decision in decisions}
+    overlaps = overlap_map(open_details)
+    for component in overlap_components(overlaps):
+        candidates = [
+            by_number[number]
+            for number in sorted(component)
+            if number in by_number and by_number[number].label in {APPROVED_LABEL, MANUAL_LABEL}
+        ]
+        if len(candidates) < 2:
+            continue
+        front = candidates[0]
+        for decision in candidates[1:]:
+            decision.label = OVERLAP_LABEL
+            decision.reasons.append(f"queued behind overlapping PR #{front.number}")
+
+
 def classify(
     repo: str,
     pr: dict[str, Any],
@@ -226,6 +319,7 @@ def classify(
     reasons: list[str] = []
     issue_number = linked_issue_number(pr)
     label = APPROVED_LABEL
+    labels = common.label_names(pr)
     if not issue_number:
         label = NEEDS_REPAIR_LABEL
         reasons.append("missing linked issue")
@@ -244,9 +338,18 @@ def classify(
         label = NEEDS_REPAIR_LABEL
         reasons.append(f"mergeable is {mergeable}")
     check_state, check_details = check_rollup_state(pr, required_checks)
-    if check_state == "none" and not allow_no_checks:
-        label = NEEDS_REPAIR_LABEL
-        reasons.append("no checks reported")
+    if check_state == "none":
+        if required_checks:
+            label = NEEDS_REPAIR_LABEL
+            reasons.append("no checks reported")
+        elif local_validation_passed_for_head(pr):
+            reasons.append("local validation passed with no GitHub checks")
+        else:
+            label = LOCAL_VALIDATION_REQUIRED_LABEL
+            if LOCAL_VALIDATION_PASSED_LABEL in labels:
+                reasons.append("local validation pass missing for current head")
+            else:
+                reasons.append("no checks reported; local validation required")
     elif check_state in {"failed", "pending"}:
         label = NEEDS_REPAIR_LABEL
         reasons.append(f"checks {check_state}: {', '.join(check_details[:5])}")
@@ -257,6 +360,7 @@ def classify(
             reasons.extend(f"dependency blocked: {blocker}" for blocker in blockers)
     superseded = has_superseded_signal(pr, issue) or duplicate_issue
     manual_validation = issue_has_manual_validation(issue)
+    manual_approved = manual_validation_approved(pr, issue)
     if superseded:
         label = SUPERSEDED_LABEL
         if duplicate_issue:
@@ -265,11 +369,16 @@ def classify(
             reasons.append("superseded/stale signal")
     overlaps = overlap_numbers or []
     if overlaps and label != SUPERSEDED_LABEL:
-        label = NEEDS_REPAIR_LABEL
+        label = OVERLAP_LABEL if label in {APPROVED_LABEL, MANUAL_LABEL} else label
         reasons.append("overlaps open local-agent PRs: " + ", ".join(f"#{n}" for n in overlaps))
     if manual_validation and label != SUPERSEDED_LABEL:
-        label = MANUAL_LABEL
-        reasons.append("manual or deployed validation required")
+        if label == APPROVED_LABEL and manual_approved:
+            reasons.append("manual or deployed validation approved")
+        elif label == APPROVED_LABEL:
+            label = MANUAL_LABEL
+            reasons.append("manual or deployed validation required")
+        else:
+            reasons.append("manual/deployed validation pending after repair")
     if not reasons:
         reasons.append("green checks and no review blockers")
     return ReviewDecision(
@@ -337,7 +446,7 @@ def post_review_comment(decision: ReviewDecision) -> None:
 
 
 def ensure_review_labels(repo: str) -> None:
-    for label, color in REVIEW_LABELS.items():
+    for label, color in {**REVIEW_LABELS, **REVIEW_AUX_LABELS}.items():
         common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
 
 
@@ -346,7 +455,10 @@ def apply_decision(decision: ReviewDecision, *, comment: bool) -> None:
     for label in REVIEW_LABELS:
         if label != decision.label:
             common.run(["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--remove-label", label], check=False)
-    common.run(["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", decision.label])
+    common.run(
+        ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", decision.label],
+        retries=3,
+    )
     if comment:
         post_review_comment(decision)
 
@@ -354,6 +466,7 @@ def apply_decision(decision: ReviewDecision, *, comment: bool) -> None:
 def scan(args: argparse.Namespace) -> list[ReviewDecision]:
     decisions: list[ReviewDecision] = []
     for repo in target_repos(args.repos_file):
+        repo_decisions: list[ReviewDecision] = []
         summaries = [pr for pr in open_prs(repo, args.limit) if is_local_agent_pr(pr)]
         details: list[tuple[dict[str, Any], list[str]]] = []
         for summary in summaries:
@@ -370,20 +483,21 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
         for detail, files in details:
             issue_number = linked_issue_number(detail)
             issue = issue_view(repo, issue_number) if issue_number is not None else None
-            overlaps = overlapping_prs(repo, int(detail["number"]), files, details) if args.detect_overlap else []
-            decisions.append(
+            repo_decisions.append(
                 classify(
                     repo,
                     detail,
                     issue=issue,
                     files=files,
                     duplicate_issue=bool(issue_number is not None and issue_counts.get(issue_number, 0) > 1),
-                    overlap_numbers=overlaps,
                     required_checks=common.required_checks_for_repo(repo, Path(args.required_checks_file) if args.required_checks_file else None),
                     check_dependencies=args.check_dependencies,
                     allow_no_checks=args.allow_no_checks,
                 )
             )
+        if args.detect_overlap:
+            apply_overlap_frontier(repo_decisions, details)
+        decisions.extend(repo_decisions)
     return decisions
 
 

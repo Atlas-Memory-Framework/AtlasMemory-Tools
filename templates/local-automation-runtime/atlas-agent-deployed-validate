@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Run configured deployed/manual validation for a local-agent PR."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+LABELS = {
+    "agent:manual-validation-approved": "0E8A16",
+    "agent:deployed-validation-passed": "0E8A16",
+    "agent:deployed-validation-failed": "D93F0B",
+    "agent:manual-validation-required": "B60205",
+    "agent:needs-repair": "D93F0B",
+}
+COMMENT_MARKER = "<!-- atlas-agent-deployed-validation -->"
+
+
+def ensure_labels(repo: str) -> None:
+    for label, color in LABELS.items():
+        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+
+
+def pr_json(repo: str, number: int) -> dict[str, Any]:
+    return common.gh_json(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,url,headRefName,baseRefName,headRefOid,statusCheckRollup,labels",
+        ],
+        retries=2,
+    )
+
+
+def config_entry(repo: str, path: str | None) -> dict[str, Any]:
+    config_path = Path(path) if path else common.RUNTIME_DIR / "deployed-validation.json"
+    if not config_path.exists():
+        return {}
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    raw = data.get(repo) or data.get("*") or {}
+    if isinstance(raw, list):
+        return {"commands": raw}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def configured_commands(entry: dict[str, Any]) -> list[str]:
+    commands = entry.get("commands") or []
+    return [str(command) for command in commands if str(command).strip()]
+
+
+def configured_env(entry: dict[str, Any]) -> dict[str, str]:
+    raw = entry.get("env") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items()}
+
+
+def clean_worktree(repo: str, pr: dict[str, Any], job_dir: Path) -> Path:
+    repo_path = common.ensure_repo(repo)
+    safe_repo = repo.replace("/", "__")
+    worktree = common.jobs_dir() / "checkouts" / safe_repo / f"pr-{pr['number']}-deployed-validate-{common.now_id()}"
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    number = int(pr["number"])
+    pr_ref = f"refs/remotes/origin/pr/{number}"
+    fetch = common.run(["git", "fetch", "origin", f"+refs/pull/{number}/head:{pr_ref}"], cwd=repo_path, check=False)
+    ref = pr_ref if fetch.returncode == 0 else f"origin/{pr['headRefName']}"
+    common.run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_path)
+    (job_dir / "worktree.txt").write_text(str(worktree) + "\n", encoding="utf-8")
+    return worktree
+
+
+def command_env(repo: str, pr: dict[str, Any], extra_env: dict[str, str]) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(common.read_config())
+    env.update(extra_env)
+    env["REPO"] = repo
+    env["PR_NUMBER"] = str(pr["number"])
+    env["PR_URL"] = str(pr.get("url") or "")
+    env["PR_HEAD_SHA"] = str(pr.get("headRefOid") or "")
+    env["PR_HEAD_BRANCH"] = str(pr.get("headRefName") or "")
+    env["PR_BASE_BRANCH"] = str(pr.get("baseRefName") or "")
+    return env
+
+
+def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path, env: dict[str, str]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    with (job_dir / "commands.log").open("w", encoding="utf-8") as log:
+        for command in commands:
+            log.write("+ " + command + "\n")
+            log.flush()
+            proc = subprocess.run(
+                command,
+                cwd=str(worktree),
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+            output = proc.stdout or ""
+            log.write(output)
+            if output and not output.endswith("\n"):
+                log.write("\n")
+            log.flush()
+            results.append({"command": command, "returncode": proc.returncode})
+            if proc.returncode != 0:
+                break
+    return results
+
+
+def apply_result(repo: str, number: int, passed: bool, job_dir: Path, head_oid: str) -> None:
+    ensure_labels(repo)
+    if passed:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:deployed-validation-failed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:deployed-validation-passed"], retries=3)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:manual-validation-approved"], retries=3)
+        result = "passed"
+    else:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:manual-validation-approved"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:deployed-validation-passed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:deployed-validation-failed"], retries=3)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:needs-repair"], retries=3)
+        result = "failed"
+    body = (
+        f"{COMMENT_MARKER}\n"
+        f"Deployed/manual validation {result} for PR #{number}.\n\n"
+        f"Head: `{head_oid}`\n"
+        f"Result: {result}\n"
+        f"Artifacts: `{job_dir}`"
+    )
+    common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
+
+
+def validate(args: argparse.Namespace) -> int:
+    repo, number = common.pr_ref_parts(args.pr)
+    pr = pr_json(repo, number)
+    entry = config_entry(repo, args.commands_file)
+    commands = configured_commands(entry)
+    job_dir = common.jobs_dir() / f"pr-{number}-deployed-validate-{common.now_id()}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    common.write_json(job_dir / "pr.json", pr)
+    common.write_json(job_dir / "validation-config.json", entry)
+    if not commands:
+        common.write_json(job_dir / "validation.json", {"passed": False, "error": "no deployed validation commands configured"})
+        print(f"No deployed validation commands configured. Artifacts: {job_dir}")
+        return 1
+    worktree = clean_worktree(repo, pr, job_dir)
+    results = run_validation_commands(worktree, commands, job_dir, command_env(repo, pr, configured_env(entry)))
+    passed = bool(results) and all(result["returncode"] == 0 for result in results)
+    common.write_json(job_dir / "validation.json", {"passed": passed, "results": results})
+    if args.apply:
+        apply_result(repo, number, passed, job_dir, str(pr.get("headRefOid") or "unknown"))
+    print(f"Deployed/manual validation {'passed' if passed else 'failed'}. Artifacts: {job_dir}")
+    return 0 if passed else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pr", help="OWNER/REPO#PR_NUMBER")
+    parser.add_argument("--commands-file", help="JSON map of repo full name to deployed validation commands.")
+    parser.add_argument("--apply", action="store_true", help="Apply manual-validation approval labels/comments.")
+    args = parser.parse_args()
+    return validate(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

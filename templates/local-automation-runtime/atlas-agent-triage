@@ -271,7 +271,7 @@ def apply_stale(records: list[dict[str, Any]], *, comment: bool) -> int:
         for label in ("agent:running", "agent:done", "agent:failed"):
             common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", label], check=False)
         common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "needs-human"], check=False)
-        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:ready"])
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:ready"], retries=3)
         if comment:
             body = (
                 "Local agent triage requeued this issue for local Codex automation. "
@@ -307,12 +307,12 @@ def approve_review_before_dispatch(records: list[dict[str, Any]], *, comment: bo
                 check=False,
             )
             ensured_repos.add(repo)
-        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", APPROVED_DISPATCH_LABEL])
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", APPROVED_DISPATCH_LABEL], retries=3)
         common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "needs-human"], check=False)
         common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "agent:running"], check=False)
         common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "agent:done"], check=False)
         common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "agent:failed"], check=False)
-        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:ready"])
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:ready"], retries=3)
         if comment:
             body = (
                 "Local agent triage approved this `review-before-dispatch` issue for automated dispatch. "

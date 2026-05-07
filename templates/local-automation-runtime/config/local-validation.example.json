@@ -1,0 +1,13 @@
+{
+  "Atlas-Memory-Framework/Atlas-Memory-Admin-UI": [
+    "npm ci",
+    "npm run typecheck",
+    "npm test"
+  ],
+  "Atlas-Memory-Framework/Atlas-Memory-Chainlit": [
+    "python3 -m venv .validation-venv",
+    ".validation-venv/bin/python -m pip install -q -r requirements.txt pytest",
+    "python3 -m compileall -q src tests",
+    ".validation-venv/bin/python -m pytest tests"
+  ]
+}

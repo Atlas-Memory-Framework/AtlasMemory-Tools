@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import os
 import sys
 import tempfile
 import types
@@ -45,8 +46,11 @@ class LocalAgentAutonomyTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.triage = load_script("atlas_agent_triage_test", "atlas-agent-triage")
         cls.orchestrator = load_script("atlas_agent_orchestrator_test", "atlas-agent-orchestrator")
+        cls.worker = load_script("atlas_agent_worker_test", "atlas-agent-worker")
         cls.admin = load_script("atlas_agent_admin_test", "atlas-agent-admin")
         cls.finalize = load_script("atlas_agent_finalize_test", "atlas-agent-finalize")
+        cls.reconcile = load_script("atlas_agent_reconcile_test", "atlas-agent-reconcile")
+        cls.project_reconcile = load_script("atlas_agent_project_reconcile_test", "atlas-agent-project-reconcile")
 
     def test_triage_approves_review_before_dispatch_with_stale_needs_human(self) -> None:
         record = self.triage.classify_issue(
@@ -126,6 +130,10 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertEqual(reasons, [])
 
+    def test_worker_honors_requested_issue_argument(self) -> None:
+        self.assertEqual(self.worker.requested_issue_number(["atlas-agent-worker", "--once", "--issue", "17"]), 17)
+        self.assertIsNone(self.worker.requested_issue_number(["atlas-agent-worker", "--once"]))
+
     def test_orchestrator_treats_approved_review_wait_as_recoverable(self) -> None:
         reasons = self.orchestrator.hard_non_execution_reasons(
             issue(
@@ -135,6 +143,126 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         )
 
         self.assertEqual(reasons, [])
+
+    def test_worker_marks_published_issue_as_pr_open_not_done(self) -> None:
+        calls: list[str] = []
+        original_run = self.worker.run
+        original_env = os.environ.copy()
+        self.worker.run = lambda cmd, **_kwargs: calls.append(cmd) or ""
+        os.environ.update(
+            {
+                "AGENT_READY_LABEL": "agent:ready",
+                "AGENT_RUNNING_LABEL": "agent:running",
+                "AGENT_DONE_LABEL": "agent:done",
+                "AGENT_FAILED_LABEL": "agent:failed",
+                "AGENT_PR_OPEN_LABEL": "agent:pr-open",
+            }
+        )
+        try:
+            self.worker.clear_running_labels("owner/repo", 7, pr_open=True)
+        finally:
+            self.worker.run = original_run
+            os.environ.clear()
+            os.environ.update(original_env)
+
+        self.assertTrue(any('--add-label "agent:pr-open"' in call for call in calls))
+        self.assertFalse(any('--add-label "agent:done"' in call for call in calls))
+
+    def test_reconcile_requeues_open_stale_done_issue_without_open_pr(self) -> None:
+        original_open_prs = self.reconcile.open_prs_for_issue
+        self.reconcile.open_prs_for_issue = lambda _repo, _number: []
+        try:
+            decision = self.reconcile.decide_issue(
+                "owner/repo",
+                issue(labels=["agent:done", "status:ready"], number=9),
+            )
+        finally:
+            self.reconcile.open_prs_for_issue = original_open_prs
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.action, "requeue")
+        self.assertIn("agent:done", decision.labels_remove)
+        self.assertIn("agent:ready", decision.labels_add)
+
+    def test_reconcile_marks_stale_done_issue_with_open_pr(self) -> None:
+        original_open_prs = self.reconcile.open_prs_for_issue
+        self.reconcile.open_prs_for_issue = lambda _repo, _number: [{"number": 3}]
+        try:
+            decision = self.reconcile.decide_issue(
+                "owner/repo",
+                issue(labels=["agent:done", "status:ready"], number=9),
+            )
+        finally:
+            self.reconcile.open_prs_for_issue = original_open_prs
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.action, "mark-pr-open")
+        self.assertIn("agent:done", decision.labels_remove)
+        self.assertIn("agent:pr-open", decision.labels_add)
+
+    def test_project_reconcile_demotes_done_epic_with_open_children(self) -> None:
+        config = self.project_reconcile.ProjectConfig(
+            project_id="project",
+            status_field_id="status",
+            status_options={"Todo": "todo", "In Progress": "progress", "Done": "done"},
+            execution_state_field_id="execution",
+            execution_state_options={"Epic": "epic"},
+        )
+        parent = {
+            "id": "parent-item",
+            "status": "Done",
+            "executionState": "Epic",
+            "labels": ["type:story"],
+            "content": {
+                "repository": "owner/repo",
+                "number": 1,
+                "title": "[WS1][Epic] Parent",
+                "url": "https://github.com/owner/repo/issues/1",
+                "body": "",
+            },
+        }
+        child = {
+            "id": "child-item",
+            "status": "Todo",
+            "executionState": "Ready Now",
+            "labels": ["type:story"],
+            "content": {
+                "repository": "owner/repo",
+                "number": 2,
+                "title": "[WS1-A] Child",
+                "url": "https://github.com/owner/repo/issues/2",
+                "body": "## Parent Epic\nhttps://github.com/owner/repo/issues/1",
+            },
+        }
+        original_issue_state = self.project_reconcile.issue_state
+        self.project_reconcile.issue_state = lambda repo, number: "OPEN"
+        try:
+            decisions = self.project_reconcile.decide("owner", 2, config, [parent, child])
+        finally:
+            self.project_reconcile.issue_state = original_issue_state
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].repo, "owner/repo")
+        self.assertEqual(decisions[0].number, 1)
+        self.assertEqual(decisions[0].status_from, "Done")
+        self.assertEqual(decisions[0].status_to, "In Progress")
+        self.assertEqual(decisions[0].child_refs, ["owner/repo#2"])
+
+    def test_project_reconcile_project_targets_file_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "projects.txt"
+            path.write_text(
+                "# comments are ignored\n"
+                "Atlas-Memory-Framework/2\n"
+                "OtherOrg 7\n",
+                encoding="utf-8",
+            )
+
+            targets = self.project_reconcile.project_targets(str(path), "fallback", 1)
+
+        self.assertEqual(targets, [("Atlas-Memory-Framework", 2), ("OtherOrg", 7)])
 
     def test_orchestrator_preserves_real_hard_blockers(self) -> None:
         review_reasons = self.orchestrator.hard_non_execution_reasons(
@@ -146,6 +274,20 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertEqual(review_reasons, ["review-before-dispatch requires explicit queueing"])
         self.assertEqual(gate_reasons, ["manual gates remaining"])
+
+    def test_finalizer_blocks_pr_linked_to_epic_issue(self) -> None:
+        original_issue_view = self.finalize.issue_view
+        self.finalize.issue_view = lambda _repo, _number: issue(labels=["type:epic"], title="[Epic] Parent", number=7)
+        try:
+            reasons = self.finalize.issue_guard_reasons(
+                "owner/repo",
+                7,
+                check_dependencies=True,
+            )
+        finally:
+            self.finalize.issue_view = original_issue_view
+
+        self.assertEqual(reasons, ["linked issue is an epic/tracker/non-execution issue"])
 
     def test_maybe_queue_issue_queues_recoverable_human_pause(self) -> None:
         calls: list[list[str]] = []

@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Reconcile local-agent issue lifecycle labels before unattended dispatch."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+DONE_LABEL = "agent:done"
+FAILED_LABEL = "agent:failed"
+PR_OPEN_LABEL = "agent:pr-open"
+READY_LABEL = "agent:ready"
+RUNNING_LABEL = "agent:running"
+NON_EXECUTION_LABELS = {"type:epic", "type:tracker", "tracking-only"}
+NON_EXECUTION_TITLE_PREFIXES = ("[Epic]", "[Tracker]")
+
+
+@dataclass
+class ReconcileDecision:
+    repo: str
+    number: int
+    title: str
+    url: str
+    action: str
+    labels_add: list[str]
+    labels_remove: list[str]
+    reasons: list[str]
+
+
+def target_repos(path: str | None) -> list[str]:
+    repo_file = Path(path) if path else common.RUNTIME_DIR / "repos.txt"
+    repos: list[str] = []
+    for raw in repo_file.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            repos.append(line)
+    return repos
+
+
+def open_issues(repo: str, limit: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,body,author,labels,url",
+        ],
+        retries=2,
+    ) or []
+
+
+def open_prs_for_issue(repo: str, number: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--search",
+            f"#{number}",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,url,state,isDraft",
+        ],
+        retries=2,
+    ) or []
+
+
+def is_non_execution_issue(issue: dict[str, Any]) -> bool:
+    labels = common.label_names(issue)
+    title = str(issue.get("title") or "")
+    body = str(issue.get("body") or "").lower()
+    return (
+        bool(labels & NON_EXECUTION_LABELS)
+        or any(title.startswith(prefix) for prefix in NON_EXECUTION_TITLE_PREFIXES)
+        or "dispatch recommendation: `tracking-only`" in body
+    )
+
+
+def queue_blockers(issue: dict[str, Any], labels_after_cleanup: set[str]) -> list[str]:
+    body = str(issue.get("body") or "")
+    lowered = body.lower()
+    blockers: list[str] = []
+    if is_non_execution_issue(issue):
+        blockers.append("non-execution issue")
+    if RUNNING_LABEL in labels_after_cleanup:
+        blockers.append(f"{RUNNING_LABEL} present")
+    if FAILED_LABEL in labels_after_cleanup:
+        blockers.append(f"{FAILED_LABEL} present")
+    if "open dependencies:" in lowered and "open dependencies: `none`" not in lowered:
+        blockers.append("open dependencies")
+    if "manual gates remaining:" in lowered and "manual gates remaining: `none`" not in lowered:
+        blockers.append("manual gates remaining")
+    if (
+        "dispatch recommendation: `review-before-dispatch`" in lowered
+        and "agent:approved-dispatch" not in labels_after_cleanup
+    ):
+        blockers.append("review-before-dispatch requires approval")
+    author = (issue.get("author") or {}).get("login")
+    if author not in common.trusted_authors():
+        blockers.append(f"untrusted author {author}")
+    return blockers
+
+
+def ensure_labels(repo: str) -> None:
+    common.run(["gh", "label", "create", PR_OPEN_LABEL, "--repo", repo, "--color", "1D76DB"], check=False)
+
+
+def decide_issue(repo: str, issue: dict[str, Any]) -> ReconcileDecision | None:
+    labels = common.label_names(issue)
+    has_done = DONE_LABEL in labels
+    has_pr_open = PR_OPEN_LABEL in labels
+    if not has_done and not has_pr_open:
+        return None
+
+    number = int(issue["number"])
+    open_prs = open_prs_for_issue(repo, number)
+    labels_remove: list[str] = []
+    labels_add: list[str] = []
+    reasons: list[str] = []
+    labels_after = set(labels)
+
+    if has_done:
+        labels_remove.append(DONE_LABEL)
+        labels_after.discard(DONE_LABEL)
+        reasons.append("open issue cannot be terminal-done")
+
+    if open_prs:
+        if not has_pr_open:
+            labels_add.append(PR_OPEN_LABEL)
+            labels_after.add(PR_OPEN_LABEL)
+        reasons.append("open linked PR exists")
+        action = "mark-pr-open" if labels_add else "clear-stale-done"
+    else:
+        if has_pr_open:
+            labels_remove.append(PR_OPEN_LABEL)
+            labels_after.discard(PR_OPEN_LABEL)
+            reasons.append("no open linked PR")
+        blockers = queue_blockers(issue, labels_after)
+        if blockers:
+            reasons.extend(blockers)
+            action = "clear-stale-done"
+        else:
+            if READY_LABEL not in labels_after:
+                labels_add.append(READY_LABEL)
+            reasons.append("open issue is queueable")
+            action = "requeue"
+
+    if not labels_add and not labels_remove:
+        return None
+    return ReconcileDecision(
+        repo=repo,
+        number=number,
+        title=str(issue.get("title") or ""),
+        url=str(issue.get("url") or ""),
+        action=action,
+        labels_add=labels_add,
+        labels_remove=labels_remove,
+        reasons=reasons,
+    )
+
+
+def scan(args: argparse.Namespace) -> list[ReconcileDecision]:
+    decisions: list[ReconcileDecision] = []
+    for repo in target_repos(args.repos_file):
+        for issue in open_issues(repo, args.limit):
+            decision = decide_issue(repo, issue)
+            if decision:
+                decisions.append(decision)
+    return decisions
+
+
+def apply_decision(decision: ReconcileDecision) -> None:
+    ensure_labels(decision.repo)
+    for label in decision.labels_remove:
+        common.run(
+            ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--remove-label", label],
+            check=False,
+        )
+    for label in decision.labels_add:
+        common.run(
+            ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", label],
+            retries=3,
+        )
+
+
+def write_summary(path: str, decisions: list[ReconcileDecision]) -> None:
+    common.write_json(
+        Path(path),
+        {
+            "generated_at": common.now_id(),
+            "decisions": [
+                {
+                    "repo": decision.repo,
+                    "number": decision.number,
+                    "title": decision.title,
+                    "url": decision.url,
+                    "action": decision.action,
+                    "labels_add": decision.labels_add,
+                    "labels_remove": decision.labels_remove,
+                    "reasons": decision.reasons,
+                }
+                for decision in decisions
+            ],
+        },
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repos-file")
+    parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--summary")
+    args = parser.parse_args()
+
+    decisions = scan(args)
+    if args.summary:
+        write_summary(args.summary, decisions)
+    for decision in decisions:
+        ref = f"{decision.repo}#{decision.number}"
+        print(f"{'APPLY' if args.apply else 'DRY-RUN'} RECONCILE {ref}: {decision.action}: {', '.join(decision.reasons)}", flush=True)
+        if args.apply:
+            apply_decision(decision)
+
+
+if __name__ == "__main__":
+    main()

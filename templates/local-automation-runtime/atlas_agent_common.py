@@ -29,24 +29,38 @@ def run(
     cwd: pathlib.Path | str | None = None,
     check: bool = True,
     env: dict[str, str] | None = None,
+    retries: int = 1,
+    backoff_seconds: float = 3.0,
 ) -> subprocess.CompletedProcess[str]:
-    print("+ " + " ".join(shlex.quote(arg) for arg in args), flush=True)
-    proc = subprocess.run(
-        args,
-        cwd=str(cwd) if cwd is not None else None,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=env,
-    )
-    if check and proc.returncode != 0:
+    last: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, max(retries, 1) + 1):
+        print("+ " + " ".join(shlex.quote(arg) for arg in args), flush=True)
+        proc = subprocess.run(
+            args,
+            cwd=str(cwd) if cwd is not None else None,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+        if proc.returncode == 0:
+            return proc
+        last = proc
+        if check and attempt < retries and args[:1] == ["gh"] and is_transient_github_error(proc.stdout or ""):
+            wait = backoff_seconds * attempt
+            print(f"GitHub CLI transient failure; retrying in {wait:.0f}s", flush=True)
+            time.sleep(wait)
+            continue
+        break
+    assert last is not None
+    if check and last.returncode != 0:
         raise RuntimeError(
             "Command failed: "
             + " ".join(shlex.quote(arg) for arg in args)
             + "\n"
-            + (proc.stdout or "")
+            + (last.stdout or "")
         )
-    return proc
+    return last
 
 
 def is_transient_github_error(output: str) -> bool:

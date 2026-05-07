@@ -7,6 +7,7 @@ It provides:
 - issue queueing from `status:ready` to `agent:ready`
 - local Codex worker execution in isolated per-job worktrees
 - draft PR publishing
+- unattended reconcile, dispatch, review, local/deployed validation, repair, finalize, and merge supervision
 - finalizer gates for required checks, duplicate PRs, mergeability, and issue dependencies
 - one-command plan projection and queueing via `atlas-agent-plan-queue`
 - one end-of-cycle summary from `run_e2e_chain.sh`
@@ -17,6 +18,9 @@ It provides:
 cp config.env.example config.env
 cp repos.example.txt repos.txt
 cp config/required-checks.example.json required-checks.json
+cp config/local-validation.example.json local-validation.json
+cp config/deployed-validation.example.json deployed-validation.json
+cp projects.example.txt projects.txt
 ./build_codex_image.sh
 python3 -m unittest tests.test_local_agent_autonomy
 ```
@@ -38,6 +42,24 @@ Run the bounded local lane:
 ```bash
 ./run_e2e_chain.sh --apply --merge --close-issues --cycles 3
 ```
+
+Run the full unattended loop:
+
+```bash
+./atlas-agent-unattended --publish --apply --merge --close-issues --review-apply --cycles 3 --max-per-repo 2 --post-cycle-summary
+```
+
+The unattended loop first reconciles stale lifecycle labels and Project epic status, then dispatches issue workers, reviews local-agent PRs, runs local/deployed validation where configured, repairs PRs labeled `agent:needs-repair`, and finalizes only PRs with `agent:review-approved`.
+
+`agent:done` is reserved for resolved/closed work. A published draft PR leaves the linked issue marked `agent:pr-open` until the finalizer merges and closes it.
+
+The default stage order is `reconcile -> project-reconcile -> dispatch -> review -> local-validate -> review -> deployed-validate -> review -> repair -> review -> finalize -> summary`. PRs with no GitHub checks and no configured required checks are labeled `agent:local-validation-required`; `atlas-agent-local-validate --apply` runs the configured local commands and swaps that label to `agent:local-validation-passed` or `agent:local-validation-failed`.
+
+To reconcile more than one GitHub Project, put targets in `projects.txt` as `OWNER/NUMBER`, one per line, then run `atlas-agent-unattended --projects-file projects.txt ...`. The Project board must use a `Status` field with `Todo`, `In Progress`, and `Done`.
+
+Local validation is a fallback for repositories that do not publish PR checks. It can allow review approval and can move a draft PR to ready, but unattended merge still requires GitHub checks.
+
+For issues with deployed/manual validation gates, configure `deployed-validation.json`. `atlas-agent-deployed-validate --apply` runs those commands and applies `agent:manual-validation-approved` when they pass. Review will then allow `agent:review-approved` when all other blockers are clear.
 
 Use `--post-cycle-summary` to send one Teams notification per cycle. Per-repo triage Teams posts are off by default; use `--post-triage-teams-per-repo` only for debugging.
 
