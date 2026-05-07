@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import shutil
 
 import atlas_agent_common as common
@@ -20,7 +21,9 @@ def pr_json(repo: str, number: int) -> dict:
             "--repo",
             repo,
             "--json",
-            "number,title,body,author,url,headRefName,baseRefName,headRepository,headRepositoryOwner,comments,reviews",
+            "number,title,body,author,url,state,isDraft,headRefName,baseRefName,headRefOid,"
+            "mergeStateStatus,mergeable,reviewDecision,latestReviews,statusCheckRollup,labels,"
+            "headRepository,headRepositoryOwner,comments,reviews",
         ]
     )
 
@@ -64,7 +67,57 @@ def collect_failed_run_log(repo: str, branch: str, job_dir: pathlib.Path) -> str
     return log[-20000:]
 
 
-def build_prompt(pr: dict, checks: str, failed_log: str) -> str:
+def collect_review_comments(repo: str, number: int, job_dir: pathlib.Path) -> str:
+    proc = common.run(["gh", "api", f"repos/{repo}/pulls/{number}/comments", "--paginate"], check=False)
+    output = proc.stdout or "[]"
+    (job_dir / "review-comments.json").write_text(output, encoding="utf-8")
+    return output
+
+
+def current_head_semantic_review(pr: dict) -> str:
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return ""
+    for comment in reversed(pr.get("comments") or []):
+        body = str(comment.get("body") or "")
+        if "<!-- atlas-agent-semantic-review -->" not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        return body
+    return ""
+
+
+def requested_change_reviews(pr: dict) -> list[dict]:
+    requested: list[dict] = []
+    for review in pr.get("latestReviews") or []:
+        state = str(review.get("state") or "").upper()
+        if state in {"CHANGES_REQUESTED", "REQUEST_CHANGES"}:
+            requested.append(review)
+    return requested
+
+
+def head_repository_full_name(pr: dict) -> str:
+    repo = pr.get("headRepository") or {}
+    if isinstance(repo, dict):
+        for key in ("nameWithOwner", "nameWithowner"):
+            value = repo.get(key)
+            if value:
+                return str(value)
+        owner = (pr.get("headRepositoryOwner") or {}).get("login")
+        name = repo.get("name")
+        if owner and name:
+            return f"{owner}/{name}"
+    return ""
+
+
+def build_prompt(
+    pr: dict,
+    checks: str,
+    failed_log: str,
+    review_comments: str = "[]",
+    semantic_review: str = "",
+) -> str:
     return f"""You are repairing GitHub PR #{pr["number"]}.
 
 PR: {pr["url"]}
@@ -81,6 +134,15 @@ Recent comments:
 Reviews:
 {json.dumps(pr.get("reviews", []), indent=2)}
 
+Requested-change reviews:
+{json.dumps(requested_change_reviews(pr), indent=2)}
+
+Inline review comments:
+{review_comments}
+
+Current-head semantic review:
+{semantic_review or "No current-head semantic review was found."}
+
 Check summary:
 {checks}
 
@@ -89,11 +151,28 @@ Failed workflow log excerpt:
 
 Instructions:
 - Repair this PR branch only.
-- Keep the change focused on the failing checks or review comments.
+- Keep the change focused on the failing checks, semantic review findings, requested changes, or inline review comments.
 - Do not change secrets, credentials, deployment settings, or unrelated workflows.
 - Run the most relevant local tests you can.
 - Leave a concise final summary with tests run.
 """
+
+
+def verify_repairable_pr(repo: str, pr: dict) -> None:
+    if str(pr.get("state") or "") != "OPEN":
+        raise SystemExit(f"Refusing to repair non-open PR state: {pr.get('state')}")
+    head_repo = head_repository_full_name(pr)
+    if head_repo and head_repo != repo:
+        raise SystemExit(f"Refusing cross-repo PR repair: head repository is {head_repo}, base repository is {repo}.")
+    if pr.get("isDraft") and not current_head_semantic_review(pr) and not requested_change_reviews(pr):
+        checks = pr.get("statusCheckRollup") or []
+        failed_checks = [
+            check
+            for check in checks
+            if str(check.get("conclusion") or "").upper() not in {"", "SUCCESS", "NEUTRAL", "SKIPPED"}
+        ]
+        if not failed_checks:
+            raise SystemExit("Refusing to repair draft/no-evidence PR; route through validation/finalizer first.")
 
 
 def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> str:
@@ -128,8 +207,7 @@ def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> st
 def repair(args: argparse.Namespace) -> None:
     repo, number = common.pr_ref_parts(args.pr)
     pr = pr_json(repo, number)
-    if (pr.get("headRepositoryOwner") or {}).get("login") not in repo.split("/", 1)[0:1]:
-        raise SystemExit("Fork PR repair is not supported by this local branch pusher yet.")
+    verify_repairable_pr(repo, pr)
 
     job_dir = common.jobs_dir() / f"pr-{number}-repair-{common.now_id()}"
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -138,13 +216,18 @@ def repair(args: argparse.Namespace) -> None:
     repo_path = common.ensure_repo(repo)
     head = pr["headRefName"]
     common.run(["git", "checkout", "-B", head, f"origin/{head}"], cwd=repo_path)
+    checked_out = common.run(["git", "rev-parse", "HEAD"], cwd=repo_path).stdout.strip()
+    expected = str(pr.get("headRefOid") or "").strip()
+    if expected and checked_out != expected:
+        raise SystemExit(f"Refusing to repair wrong checkout: HEAD is {checked_out}, PR head is {expected}")
     status = common.run(["git", "status", "--short"], cwd=repo_path).stdout.strip()
     if status:
         raise SystemExit(f"Refusing to repair with dirty worktree:\n{status}")
 
     checks = collect_checks(repo, number, job_dir)
     failed_log = collect_failed_run_log(repo, head, job_dir)
-    run_codex(repo_path, job_dir, build_prompt(pr, checks, failed_log))
+    review_comments = collect_review_comments(repo, number, job_dir)
+    run_codex(repo_path, job_dir, build_prompt(pr, checks, failed_log, review_comments, current_head_semantic_review(pr)))
 
     status = common.run(["git", "status", "--short"], cwd=repo_path).stdout
     diff_stat = common.run(["git", "diff", "--stat"], cwd=repo_path).stdout

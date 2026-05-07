@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Run a semantic PR review and record current-head review evidence."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+COMMENT_MARKER = "<!-- atlas-agent-semantic-review -->"
+LABELS = {
+    "agent:semantic-review-required": "5319E7",
+    "agent:semantic-review-passed": "0E8A16",
+    "agent:semantic-review-failed": "D93F0B",
+    "agent:needs-repair": "D93F0B",
+}
+PR_FIELDS = (
+    "number,title,url,body,headRefName,baseRefName,headRefOid,"
+    "statusCheckRollup,labels,comments"
+)
+
+
+def ensure_labels(repo: str) -> None:
+    for label, color in LABELS.items():
+        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+
+
+def linked_issue_number(pr: dict[str, Any]) -> int | None:
+    body = str(pr.get("body") or "")
+    text = body + "\n" + str(pr.get("headRefName") or "")
+    for pattern in (
+        r"(?im)^\s*Closes\s+#(\d+)\s*$",
+        r"(?im)^\s*Automated local Codex agent run for #(\d+)\.",
+        r"agent/issue-(\d+)/",
+    ):
+        match = re.search(pattern, text)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def compact(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 20].rstrip() + "\n... [truncated]"
+
+
+def pr_json(repo: str, number: int) -> dict[str, Any]:
+    return common.gh_json(["pr", "view", str(number), "--repo", repo, "--json", PR_FIELDS], retries=2)
+
+
+def issue_json(repo: str, number: int | None) -> dict[str, Any] | None:
+    if number is None:
+        return None
+    return common.gh_json_or_none(
+        ["issue", "view", str(number), "--repo", repo, "--json", "number,title,body,state,labels,url"],
+        retries=2,
+    )
+
+
+def pr_diff(repo: str, number: int) -> str:
+    proc = common.run(["gh", "pr", "diff", str(number), "--repo", repo], check=False)
+    return proc.stdout or ""
+
+
+def pr_files(repo: str, number: int) -> list[str]:
+    proc = common.run(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"], check=False)
+    if proc.returncode != 0:
+        return []
+    return [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+
+
+def build_prompt(repo: str, pr: dict[str, Any], issue: dict[str, Any] | None, files: list[str], diff_text: str) -> str:
+    issue_text = "No linked issue could be loaded."
+    if issue:
+        issue_text = (
+            f"Issue #{issue.get('number')}: {issue.get('title')}\n"
+            f"URL: {issue.get('url')}\n\n"
+            f"{issue.get('body') or ''}"
+        )
+    return f"""You are performing a semantic code review for an automated local-agent PR.
+
+Review whether the PR actually satisfies the linked issue and whether the validation evidence is sufficient.
+Do not suggest style nits. Focus on correctness, scope, missing tests, missing evidence, and mismatches between the issue and diff.
+
+Return exactly these sections:
+
+Result: pass|fail|needs-human
+Summary:
+Blocking Findings:
+- ...
+Validation Assessment:
+Rationale:
+
+Rules:
+- Use `pass` only when the diff appears to satisfy the issue and validation evidence is credible for the changed surface.
+- Use `fail` when code changes are incomplete, risky, incoherent, untested, or unrelated to the issue.
+- Use `needs-human` when manual/deployed validation or product judgment is required before approval.
+- Treat a PR body that says "No explicit test command/result section was found" as insufficient validation unless GitHub checks clearly cover the change.
+- Include at least one blocking finding for `fail` or `needs-human`.
+
+Repository: {repo}
+PR #{pr.get('number')}: {pr.get('title')}
+PR URL: {pr.get('url')}
+Head SHA: {pr.get('headRefOid')}
+Base branch: {pr.get('baseRefName')}
+
+PR Body:
+{compact(str(pr.get('body') or ''), 8000)}
+
+Linked Issue:
+{compact(issue_text, 8000)}
+
+Changed Files:
+{chr(10).join(f"- {path}" for path in files) or "- none"}
+
+Diff:
+```diff
+{compact(diff_text, 20000)}
+```
+"""
+
+
+def parse_result(text: str) -> str:
+    match = re.search(r"(?im)^\s*Result:\s*(pass|passed|fail|failed|needs-human|needs_human|blocked)\s*$", text)
+    if not match:
+        return "failed"
+    value = match.group(1).lower().replace("_", "-")
+    if value == "passed":
+        return "passed"
+    if value == "pass":
+        return "passed"
+    if value in {"needs-human", "blocked"}:
+        return "needs-human"
+    return "failed"
+
+
+def run_codex_review(job_dir: Path, prompt: str) -> str:
+    prompt_path = job_dir / "semantic-review-prompt.md"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    run_home = common.codex_home_copy(job_dir)
+    image = common.codex_image()
+    cmd = [
+        *common.podman_cmd(),
+        "run",
+        "--rm",
+        "--userns=keep-id",
+        "--network=slirp4netns",
+        "-v",
+        f"{run_home}:/home/agent/.codex:Z",
+        "-v",
+        f"{job_dir}:/job:Z",
+        image,
+        "bash",
+        "-lc",
+        "cd /job && codex exec --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < semantic-review-prompt.md",
+    ]
+    proc = common.run(cmd, check=False)
+    shutil.rmtree(run_home, ignore_errors=True)
+    raw_output = proc.stdout or ""
+    if proc.returncode != 0:
+        output = (
+            "Result: needs-human\n"
+            "Summary:\n"
+            "Codex semantic review command failed before completing a review.\n"
+            "Blocking Findings:\n"
+            f"- Semantic review infrastructure exited {proc.returncode}; this PR was not reviewed.\n"
+            "Validation Assessment:\n"
+            "No semantic review was completed.\n"
+            "Rationale:\n"
+            f"See artifacts: `{job_dir}`\n\n"
+            "Command output excerpt:\n"
+            "```text\n"
+            f"{compact(raw_output, 4000)}\n"
+            "```\n"
+        )
+    else:
+        output = raw_output
+    (job_dir / "semantic-review.md").write_text(output, encoding="utf-8")
+    return output
+
+
+def comment_body(number: int, head: str, result: str, review_text: str, job_dir: Path) -> str:
+    return (
+        f"{COMMENT_MARKER}\n"
+        f"Semantic review for PR #{number}.\n\n"
+        f"Head: `{head}`\n"
+        f"Result: {result}\n"
+        f"Artifacts: `{job_dir}`\n\n"
+        f"{review_text.strip()}\n"
+    )
+
+
+def apply_result(repo: str, number: int, result: str, body: str) -> None:
+    ensure_labels(repo)
+    if result == "passed":
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:semantic-review-required"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:semantic-review-failed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:semantic-review-passed"], retries=3)
+    else:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:semantic-review-passed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:semantic-review-failed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:semantic-review-required"], retries=3)
+        if result == "failed":
+            common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:semantic-review-failed"], retries=3)
+            common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:needs-repair"], retries=3)
+    common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
+
+
+def review(args: argparse.Namespace) -> int:
+    repo, number = common.pr_ref_parts(args.pr)
+    pr = pr_json(repo, number)
+    issue = issue_json(repo, linked_issue_number(pr))
+    files = pr_files(repo, number)
+    diff_text = pr_diff(repo, number)
+    job_dir = common.jobs_dir() / f"pr-{number}-semantic-review-{common.now_id()}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    common.write_json(job_dir / "pr.json", pr)
+    if issue:
+        common.write_json(job_dir / "issue.json", issue)
+    (job_dir / "files.txt").write_text("\n".join(files) + "\n", encoding="utf-8")
+    (job_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
+    prompt = build_prompt(repo, pr, issue, files, diff_text)
+    review_text = run_codex_review(job_dir, prompt)
+    result = parse_result(review_text)
+    body = comment_body(number, str(pr.get("headRefOid") or "unknown"), result, review_text, job_dir)
+    (job_dir / "comment.md").write_text(body, encoding="utf-8")
+    common.write_json(job_dir / "semantic-review.json", {"result": result, "pr": args.pr})
+    if args.apply:
+        apply_result(repo, number, result, body)
+    print(f"Semantic review {result}. Artifacts: {job_dir}")
+    return 0 if result == "passed" else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pr", help="OWNER/REPO#PR_NUMBER")
+    parser.add_argument("--apply", action="store_true", help="Apply labels and comment with semantic review evidence.")
+    parser.add_argument("--soft-fail", action="store_true", help="Exit zero after recording failed/needs-human semantic results.")
+    args = parser.parse_args()
+    result = review(args)
+    return 0 if args.soft_fail else result
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

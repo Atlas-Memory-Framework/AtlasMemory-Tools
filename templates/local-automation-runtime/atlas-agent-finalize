@@ -19,6 +19,8 @@ PR_VIEW_FIELDS = (
 )
 LOCAL_VALIDATION_PASSED_LABEL = "agent:local-validation-passed"
 LOCAL_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-local-validation -->"
+DEPLOYED_VALIDATION_PASSED_LABEL = "agent:deployed-validation-passed"
+DEPLOYED_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-deployed-validation -->"
 
 
 @dataclass
@@ -114,6 +116,23 @@ def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
     for comment in pr.get("comments") or []:
         body = str(comment.get("body") or "")
         if LOCAL_VALIDATION_COMMENT_MARKER not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        if re.search(r"(?im)^\s*Result:\s*passed\s*$", body):
+            return True
+    return False
+
+
+def deployed_validation_passed_for_head(pr: dict[str, Any]) -> bool:
+    if DEPLOYED_VALIDATION_PASSED_LABEL not in label_names(pr):
+        return False
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return False
+    for comment in pr.get("comments") or []:
+        body = str(comment.get("body") or "")
+        if DEPLOYED_VALIDATION_COMMENT_MARKER not in body:
             continue
         if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
             continue
@@ -233,6 +252,7 @@ def decide(
     issue_number = linked_issue_number(pr)
     labels = label_names(pr)
     no_check_local_validated = False
+    no_check_deployed_validated = False
     if not issue_number:
         reasons.append("missing linked issue")
     if require_review_label and require_review_label not in labels:
@@ -247,7 +267,9 @@ def decide(
         reasons.append(f"mergeable is {mergeable}")
     check_state, check_details = check_rollup_state(pr, required_check_names)
     if check_state == "none":
-        if not required_check_names and local_validation_passed_for_head(pr):
+        if deployed_validation_passed_for_head(pr):
+            no_check_deployed_validated = True
+        elif not required_check_names and local_validation_passed_for_head(pr):
             no_check_local_validated = True
         elif allow_no_checks and not merge:
             pass
@@ -261,6 +283,8 @@ def decide(
     reasons.extend(issue_guard_reasons(repo, issue_number, check_dependencies=check_dependencies))
     if reasons:
         action = "blocked"
+    elif no_check_deployed_validated and merge:
+        action = "ready_then_merge" if pr.get("isDraft") else "merge"
     elif no_check_local_validated and merge:
         if pr.get("isDraft"):
             action = "ready"

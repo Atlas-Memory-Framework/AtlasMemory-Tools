@@ -3,6 +3,7 @@ import fnmatch
 import json
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -179,6 +180,134 @@ Instructions:
 - Do not change workflows, secrets, auth, deployment, or infrastructure.
 - Run relevant tests if available.
 - Leave a clear summary of changes and a Tests section with exact commands and results in your final response.
+"""
+
+
+def compact_lines(text, limit=3000):
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 20].rstrip() + "\n... [truncated]"
+
+
+def issue_excerpt(issue):
+    body = issue.get("body") or ""
+    for header in ("## Excerpt", "## Implementation Notes", "## Registry Story Record"):
+        match = re.search(rf"(?ims)^{re.escape(header)}\s*\n(.*?)(?:\n##\s+|\Z)", body)
+        if match:
+            return compact_lines(match.group(1), 1200)
+    return compact_lines(body, 1200)
+
+
+def bullet_list(lines, empty="- none"):
+    values = [line.strip() for line in lines if str(line).strip()]
+    if not values:
+        return empty
+    return "\n".join(f"- `{value}`" for value in values)
+
+
+def extract_codex_final_response(codex_log, limit=5000):
+    lines = [line.rstrip() for line in (codex_log or "").splitlines()]
+    for index, line in enumerate(lines):
+        if line.strip().lower() == "tokens used":
+            lines = lines[:index]
+            break
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return ""
+    start = max(0, len(lines) - 80)
+    heading = re.compile(r"^(Implemented|Changed|Summary|Tests|Verification|Fixed|Added|Updated)\b", re.I)
+    for index in range(len(lines) - 1, -1, -1):
+        if heading.match(lines[index].strip()):
+            start = index
+            break
+    return compact_lines("\n".join(lines[start:]), limit)
+
+
+def extract_validation_section(final_response):
+    lines = (final_response or "").splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if re.match(r"^\s*(Tests|Verification)\s*:?\s*$", line, re.I):
+            start = index
+            break
+    if start is None:
+        return ""
+    collected = []
+    for line in lines[start + 1 :]:
+        if collected and re.match(r"^[A-Z][A-Za-z ]+\s*:?\s*$", line.strip()):
+            break
+        collected.append(line)
+    return compact_lines("\n".join(collected).strip(), 1600)
+
+
+def pr_title(issue):
+    raw = str(issue.get("title") or "").strip()
+    title = f"agent: #{issue['number']} {raw}" if raw else f"agent: address issue #{issue['number']}"
+    return compact_lines(title.replace("\n", " "), 120)
+
+
+def build_pr_body(issue, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log):
+    final_response = extract_codex_final_response(codex_log)
+    validation = extract_validation_section(final_response)
+    changed_files = []
+    for raw in (status or "").splitlines():
+        parts = raw.strip().split(maxsplit=1)
+        if len(parts) == 2:
+            changed_files.append(parts[1])
+    if validation:
+        validation_text = validation
+    else:
+        validation_text = (
+            "No explicit test command/result section was found in the worker final response. "
+            "Do not approve this PR until validation evidence is added by CI, local validation, or a reviewer comment."
+        )
+    return f"""## Summary
+
+Automated local Codex implementation for issue #{issue["number"]}: **{issue.get("title", "")}**.
+
+- Issue: {issue.get("url", "not recorded")}
+- Job: `{job_id}`
+- Base branch: `{base_branch}`
+- Base SHA: `{base_sha}`
+- Agent branch: `{branch}`
+
+## Issue Context
+
+{issue_excerpt(issue) or "_No issue body was available._"}
+
+## Code Changes
+
+Changed files:
+{bullet_list(changed_files)}
+
+Diff stat:
+```text
+{compact_lines(diff_stat, 2000)}
+```
+
+## Agent Implementation Notes
+
+```text
+{final_response or "No final response was captured from the worker."}
+```
+
+## Validation Evidence
+
+```text
+{validation_text}
+```
+
+## Review Requirements
+
+- Confirm the implementation actually satisfies the linked issue.
+- Confirm the changed files are expected and scoped.
+- Confirm the validation evidence is real and current for this head SHA.
+- If GitHub checks are absent, require `agent:local-validation-passed` evidence for this exact head before approval.
+- Keep this PR draft until review and validation gates are satisfied.
+
+Closes #{issue["number"]}
 """
 
 
@@ -371,24 +500,13 @@ Local artifacts:
             run(f'git commit -m "agent: address issue #{number}"', cwd=worktree_dir)
             run(f"git push -u origin {shlex.quote(branch)}", cwd=worktree_dir)
 
-            pr_body = f"""Automated local Codex agent run for #{number}.
-
-Job: `{job_id}`
-Base: `{base_sha}`
-
-Validation:
-- See commit diff and local run artifacts.
-- Worker prompt requires exact local test commands/results in final output.
-- This PR is draft until manually reviewed.
-
-Closes #{number}
-"""
+            pr_body = build_pr_body(issue_full, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log)
             (job_dir / "pr-body.md").write_text(pr_body, encoding="utf-8")
             pr_url = run(
                 f"gh pr create --repo {shlex.quote(repo)} "
                 f"--base {shlex.quote(base_branch)} "
                 f"--head {shlex.quote(branch)} "
-                f'--title "agent: address issue #{number}" '
+                f"--title {shlex.quote(pr_title(issue_full))} "
                 f"--body-file {quote_path(job_dir / 'pr-body.md')} "
                 "--draft"
             ).strip()
@@ -398,6 +516,16 @@ Closes #{number}
 PR: {pr_url}
 Job: `{job_id}`
 Branch: `{branch}`
+
+Changed files:
+```text
+{status[:3000]}
+```
+
+Validation evidence:
+```text
+{extract_validation_section(extract_codex_final_response(codex_log)) or "No explicit test command/result section was found in the worker final response."}
+```
 """
         else:
             comment = f"""Local Codex agent dry-run completed for issue #{number}.

@@ -1,4 +1,7 @@
 {
+  "Atlas-Memory-Framework/Atlas-Memory-Azure": [
+    "python3 -m compileall -q functions scripts tests"
+  ],
   "Atlas-Memory-Framework/Atlas-Memory-Admin-UI": [
     "npm ci",
     "npm run typecheck",

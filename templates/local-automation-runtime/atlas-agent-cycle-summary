@@ -68,7 +68,11 @@ def action_instruction(item: dict) -> str:
             f"Open {repo}#{number}; either configure `local-validation.json` for this repo/path or "
             "run the local validation manually and add the passing evidence."
         )
+    if label == "agent:semantic-review-required" or "semantic review required" in reason_text:
+        return f"Run `./atlas-agent-semantic-review {repo}#{number} --apply`, address any findings, then rerun review."
     if label == "agent:needs-repair":
+        if "semantic review failed" in reason_text:
+            return f"Open {repo}#{number}, address the semantic review blocking findings, run `./atlas-agent-semantic-review {repo}#{number} --apply`, then rerun review."
         if "no checks reported" in reason_text:
             return (
                 f"Open {repo}#{number}; make GitHub publish a check for this PR, or configure the repo's "
@@ -135,6 +139,15 @@ def urgent_items(summary: dict) -> list[dict]:
                 "instruction": action_instruction(item),
             }
         )
+    for item in summary.get("automation", {}).get("failed_stages", []):
+        target = item.get("target") or item.get("stage") or "automation"
+        items.append(
+            {
+                "kind": f"{item.get('stage')}-failed",
+                "title": str(target),
+                "instruction": f"Inspect `{item.get('log_file')}` for the {item.get('stage')} failure on {target}, then rerun automation.",
+            }
+        )
     for item in summary["finalizer"]["blocked"]:
         items.append(
             {
@@ -166,11 +179,30 @@ def load_review(chain_dir: Path, cycle: int) -> list[dict]:
     return decisions if isinstance(decisions, list) else []
 
 
+def load_stage_failures(chain_dir: Path, cycle: int) -> list[dict]:
+    failures: list[dict] = []
+    for stage in ("local-validate", "semantic-review", "deployed-validate", "repair"):
+        data = read_json(chain_dir / f"{stage}-cycle-{cycle}.results.json")
+        for result in data.get("results") or []:
+            if result.get("status") == "ok":
+                continue
+            failures.append(
+                {
+                    "stage": stage,
+                    "target": result.get("name") or stage,
+                    "log_file": result.get("log_file"),
+                    "returncode": result.get("returncode"),
+                }
+            )
+    return failures
+
+
 def summarize(chain_dir: Path, cycle: int) -> dict:
     build_results = load_build_results(chain_dir, cycle)
     triage_blockers = load_triage_blockers(chain_dir, cycle)
     review = load_review(chain_dir, cycle)
     finalizer = load_finalizer(chain_dir, cycle)
+    stage_failures = load_stage_failures(chain_dir, cycle)
     review_counts: dict[str, int] = {}
     for item in review:
         label = str(item.get("label") or "unknown")
@@ -198,6 +230,9 @@ def summarize(chain_dir: Path, cycle: int) -> dict:
             "blocked": [item for item in review if item.get("label") != "agent:review-approved"][:25],
             "approved": [item for item in review if item.get("label") == "agent:review-approved"][:25],
         },
+        "automation": {
+            "failed_stages": stage_failures[:25],
+        },
         "finalizer": {
             "counts": finalizer_counts,
             "blocked": [item for item in finalizer if item.get("action") == "blocked"][:25],
@@ -212,6 +247,7 @@ def message_card(summary: dict) -> dict:
         f"**Build:** {summary['build']['ok']} ok, {summary['build']['failed']} failed",
         f"**Triage blockers:** {summary['triage']['blocker_count']}",
         f"**Review:** {summary.get('review', {}).get('counts', {})}",
+        f"**Automation stage failures:** {len(summary.get('automation', {}).get('failed_stages', []))}",
         f"**Finalizer:** {summary['finalizer']['counts']}",
         f"**State:** `{summary['chain_dir']}`",
     ]

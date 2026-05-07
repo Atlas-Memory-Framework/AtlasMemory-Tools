@@ -51,6 +51,8 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         cls.finalize = load_script("atlas_agent_finalize_test", "atlas-agent-finalize")
         cls.reconcile = load_script("atlas_agent_reconcile_test", "atlas-agent-reconcile")
         cls.project_reconcile = load_script("atlas_agent_project_reconcile_test", "atlas-agent-project-reconcile")
+        cls.semantic_review = load_script("atlas_agent_semantic_review_test", "atlas-agent-semantic-review")
+        cls.pr_repair = load_script("atlas_agent_pr_repair_test", "atlas-agent-pr-repair")
 
     def test_triage_approves_review_before_dispatch_with_stale_needs_human(self) -> None:
         record = self.triage.classify_issue(
@@ -167,6 +169,139 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertTrue(any('--add-label "agent:pr-open"' in call for call in calls))
         self.assertFalse(any('--add-label "agent:done"' in call for call in calls))
+
+    def test_worker_builds_descriptive_pr_body_with_validation_evidence(self) -> None:
+        body = self.worker.build_pr_body(
+            issue(
+                number=7,
+                title="[WS] Add workflow route",
+                body="## Excerpt\nImplement the workflow route.\n\n## Other\nIgnore",
+            ),
+            job_id="20260507T000000Z",
+            base_sha="abc123",
+            base_branch="main",
+            branch="agent/issue-7/20260507T000000Z",
+            status="M src/workflows.py\nA tests/test_workflows.py\n",
+            diff_stat=" src/workflows.py | 10 +++++\n tests/test_workflows.py | 20 ++++++++++\n",
+            codex_log=(
+                "noise\n"
+                "Implemented workflow route.\n\n"
+                "Changed:\n"
+                "- src/workflows.py\n\n"
+                "Verification:\n"
+                "- `pytest tests/test_workflows.py` passed: `2 passed`\n"
+                "tokens used\n"
+                "123"
+            ),
+        )
+
+        self.assertIn("## Issue Context", body)
+        self.assertIn("Implement the workflow route.", body)
+        self.assertIn("`src/workflows.py`", body)
+        self.assertIn("pytest tests/test_workflows.py", body)
+        self.assertIn("Review Requirements", body)
+
+    def test_worker_pr_body_warns_when_validation_is_missing(self) -> None:
+        body = self.worker.build_pr_body(
+            issue(number=7, title="[WS] Add workflow route", body="Body"),
+            job_id="20260507T000000Z",
+            base_sha="abc123",
+            base_branch="main",
+            branch="agent/issue-7/20260507T000000Z",
+            status="M src/workflows.py\n",
+            diff_stat=" src/workflows.py | 10 +++++\n",
+            codex_log="Implemented change without a validation section.",
+        )
+
+        self.assertIn("No explicit test command/result section was found", body)
+
+    def test_semantic_review_parses_result_values(self) -> None:
+        self.assertEqual(self.semantic_review.parse_result("Result: pass\n"), "passed")
+        self.assertEqual(self.semantic_review.parse_result("Result: failed\n"), "failed")
+        self.assertEqual(self.semantic_review.parse_result("Result: needs-human\n"), "needs-human")
+        self.assertEqual(self.semantic_review.parse_result("Summary only\n"), "failed")
+
+    def test_semantic_review_prompt_includes_issue_diff_and_validation_rules(self) -> None:
+        prompt = self.semantic_review.build_prompt(
+            "owner/repo",
+            {
+                "number": 7,
+                "title": "agent: #7 Add route",
+                "url": "https://example.invalid/pr/7",
+                "body": "## Validation Evidence\nNo explicit test command/result section was found",
+                "headRefOid": "abc123",
+                "baseRefName": "main",
+            },
+            {"number": 7, "title": "[WS] Story", "url": "https://example.invalid/issue/7", "body": "Implement route."},
+            ["src/workflows.py"],
+            "diff --git a/src/workflows.py b/src/workflows.py",
+        )
+
+        self.assertIn("Result: pass|fail|needs-human", prompt)
+        self.assertIn("Treat a PR body that says", prompt)
+        self.assertIn("Implement route.", prompt)
+        self.assertIn("src/workflows.py", prompt)
+
+    def test_semantic_review_needs_human_clears_stale_failed_label(self) -> None:
+        calls: list[list[str]] = []
+        original_run = self.semantic_review.common.run
+        self.semantic_review.common.run = lambda args, **_kwargs: calls.append(args)
+        try:
+            self.semantic_review.apply_result("owner/repo", 7, "needs-human", "body")
+        finally:
+            self.semantic_review.common.run = original_run
+
+        self.assertIn(
+            ["gh", "issue", "edit", "7", "--repo", "owner/repo", "--remove-label", "agent:semantic-review-failed"],
+            calls,
+        )
+        self.assertIn(
+            ["gh", "issue", "edit", "7", "--repo", "owner/repo", "--add-label", "agent:semantic-review-required"],
+            calls,
+        )
+
+    def test_semantic_review_command_failure_needs_human(self) -> None:
+        class Completed:
+            returncode = 30
+            stdout = "Error: Read-only file system"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            job_dir = Path(tmp)
+            original_run = self.semantic_review.common.run
+            original_home = self.semantic_review.common.codex_home_copy
+            self.semantic_review.common.run = lambda *_args, **_kwargs: Completed()
+            self.semantic_review.common.codex_home_copy = lambda _job_dir: job_dir / "codex-home-copy"
+            (job_dir / "codex-home-copy").mkdir()
+            try:
+                output = self.semantic_review.run_codex_review(job_dir, "Review this PR.")
+            finally:
+                self.semantic_review.common.run = original_run
+                self.semantic_review.common.codex_home_copy = original_home
+
+        self.assertIn("Result: needs-human", output)
+        self.assertIn("Semantic review infrastructure exited 30", output)
+        self.assertEqual(self.semantic_review.parse_result(output), "needs-human")
+
+    def test_pr_repair_prompt_includes_inline_review_comments(self) -> None:
+        body = self.pr_repair.build_prompt(
+            {
+                "number": 7,
+                "url": "https://example.invalid/pr/7",
+                "title": "agent: address issue #7",
+                "baseRefName": "main",
+                "headRefName": "agent/issue-7/job",
+                "body": "Closes #7",
+                "comments": [],
+                "reviews": [{"state": "CHANGES_REQUESTED", "body": "Please fix auth."}],
+            },
+            checks="unit-tests failed",
+            failed_log="AssertionError",
+            review_comments='[{"path":"src/app.py","body":"This branch misses tenant validation."}]',
+        )
+
+        self.assertIn("Inline review comments", body)
+        self.assertIn("This branch misses tenant validation.", body)
+        self.assertIn("semantic review findings", body)
 
     def test_reconcile_requeues_open_stale_done_issue_without_open_pr(self) -> None:
         original_open_prs = self.reconcile.open_prs_for_issue

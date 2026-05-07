@@ -19,16 +19,25 @@ APPROVED_LABEL = "agent:review-approved"
 NEEDS_REPAIR_LABEL = "agent:needs-repair"
 LOCAL_VALIDATION_REQUIRED_LABEL = "agent:local-validation-required"
 MANUAL_VALIDATION_REQUIRED_LABEL = "agent:manual-validation-required"
+SEMANTIC_REVIEW_REQUIRED_LABEL = "agent:semantic-review-required"
 DEFAULT_STAGES = (
     "reconcile",
     "project-reconcile",
     "dispatch",
     "review",
+    "semantic-review",
+    "review",
     "local-validate",
+    "review",
+    "semantic-review",
     "review",
     "deployed-validate",
     "review",
+    "semantic-review",
+    "review",
     "repair",
+    "review",
+    "semantic-review",
     "review",
     "finalize",
     "summary",
@@ -81,6 +90,7 @@ def parse_stages(raw: str | None) -> list[str]:
         "project-reconcile",
         "dispatch",
         "review",
+        "semantic-review",
         "local-validate",
         "deployed-validate",
         "repair",
@@ -253,7 +263,7 @@ def local_validation_targets_from_summary(path: Path, limit: int) -> list[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     targets: list[str] = []
     for decision in payload.get("decisions") or []:
-        if decision.get("label") != LOCAL_VALIDATION_REQUIRED_LABEL:
+        if decision_route(decision) != "local-validate":
             continue
         repo = str(decision.get("repo") or "")
         number = decision.get("number")
@@ -262,6 +272,56 @@ def local_validation_targets_from_summary(path: Path, limit: int) -> list[str]:
         if len(targets) >= limit:
             break
     return targets
+
+
+def semantic_review_targets_from_summary(path: Path, limit: int) -> list[str]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    targets: list[str] = []
+    for decision in payload.get("decisions") or []:
+        if decision_route(decision) != "semantic-review":
+            continue
+        repo = str(decision.get("repo") or "")
+        number = decision.get("number")
+        if repo and number:
+            targets.append(f"{repo}#{int(number)}")
+        if len(targets) >= limit:
+            break
+    return targets
+
+
+def semantic_review_apply_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "semantic_review_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "review_apply", False) or getattr(args, "apply", False))
+
+
+def build_semantic_review_commands(
+    args: argparse.Namespace,
+    chain_id: str,
+    cycle: int,
+    review_summary: Path | None,
+) -> list[CommandSpec]:
+    if review_summary is None or not review_summary.exists():
+        return []
+    commands: list[CommandSpec] = []
+    for target in semantic_review_targets_from_summary(review_summary, args.semantic_review_max):
+        repo, number = common.pr_ref_parts(target)
+        cmd = [str(common.RUNTIME_DIR / "atlas-agent-semantic-review"), target, "--soft-fail"]
+        if semantic_review_apply_enabled(args):
+            cmd.append("--apply")
+        commands.append(
+            CommandSpec(
+                name=target,
+                args=cmd,
+                log_file=common.RUNTIME_DIR
+                / "logs"
+                / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-semantic-review-cycle-{cycle}.log",
+            )
+        )
+    return commands
 
 
 def deployed_validation_configured_repos(path: str | Path) -> tuple[set[str], bool]:
@@ -284,7 +344,7 @@ def deployed_validation_targets_from_summary(path: Path, limit: int, configured_
     payload = json.loads(path.read_text(encoding="utf-8"))
     targets: list[str] = []
     for decision in payload.get("decisions") or []:
-        if decision.get("label") != MANUAL_VALIDATION_REQUIRED_LABEL:
+        if decision_route(decision) != "deployed-validate":
             continue
         repo = str(decision.get("repo") or "")
         number = decision.get("number")
@@ -372,6 +432,24 @@ def deployed_validation_apply_enabled(args: argparse.Namespace) -> bool:
     if configured is not None:
         return bool(configured)
     return bool(getattr(args, "review_apply", False) or getattr(args, "apply", False))
+
+
+def decision_route(decision: dict[str, Any]) -> str:
+    route = str(decision.get("route") or "")
+    if route:
+        return route
+    label = str(decision.get("label") or "")
+    if label == LOCAL_VALIDATION_REQUIRED_LABEL:
+        return "local-validate"
+    if label == MANUAL_VALIDATION_REQUIRED_LABEL:
+        return "deployed-validate"
+    if label == SEMANTIC_REVIEW_REQUIRED_LABEL:
+        return "semantic-review"
+    if label == NEEDS_REPAIR_LABEL and repairable_review_decision(decision):
+        return "repair"
+    if label == "agent:review-approved":
+        return "approved"
+    return "human"
 
 
 def build_summary_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
@@ -501,7 +579,7 @@ def repair_targets_from_summary(path: Path, limit: int) -> list[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     targets: list[str] = []
     for decision in payload.get("decisions") or []:
-        if decision.get("label") != NEEDS_REPAIR_LABEL:
+        if decision_route(decision) != "repair":
             continue
         if not repairable_review_decision(decision):
             continue
@@ -515,12 +593,17 @@ def repair_targets_from_summary(path: Path, limit: int) -> list[str]:
 
 
 def repairable_review_decision(decision: dict[str, Any]) -> bool:
+    if "repairable" in decision:
+        return bool(decision.get("repairable"))
     reasons = [str(reason) for reason in decision.get("reasons") or []]
     if not reasons:
         return False
     repairable_prefixes = (
         "checks failed:",
-        "checks pending:",
+        "semantic review failed for current head",
+        "merge state is ",
+        "mergeable is ",
+        "review changes requested",
     )
     return any(reason.startswith(repairable_prefixes) for reason in reasons)
 
@@ -549,11 +632,39 @@ def repair_targets_from_labels(args: argparse.Namespace, limit: int) -> list[str
         ) or []
         for pr in prs:
             number = pr.get("number")
-            if number:
+            if number and repairable_label_target(repo, int(number)):
                 targets.append(f"{repo}#{int(number)}")
             if len(targets) >= limit:
                 return targets
     return targets
+
+
+def repairable_label_target(repo: str, number: int) -> bool:
+    payload = common.gh_json_or_none(
+        ["pr", "view", str(number), "--repo", repo, "--json", "comments,title,url"],
+        retries=2,
+    ) or {}
+    for comment in reversed(payload.get("comments") or []):
+        body = str(comment.get("body") or "")
+        if "<!-- atlas-agent-review -->" not in body:
+            continue
+        label_match = re.search(r"(?im)^\s*Classification:\s*`?([^`\n]+)`?\s*$", body)
+        reasons_match = re.search(r"(?ims)^Reasons:\s*(.*?)(?:\n\nChanged files reviewed:|\n\nRequired next action:|$)", body)
+        reasons: list[str] = []
+        if reasons_match:
+            reasons = [
+                line.strip().lstrip("- ").strip()
+                for line in reasons_match.group(1).splitlines()
+                if line.strip()
+            ]
+        decision = {
+            "repo": repo,
+            "number": number,
+            "label": label_match.group(1).strip() if label_match else NEEDS_REPAIR_LABEL,
+            "reasons": reasons,
+        }
+        return decision_route(decision) == "repair" and repairable_review_decision(decision)
+    return False
 
 
 def repaired_targets_in_chain(chain_dir: Path, cycle: int) -> set[str]:
@@ -769,6 +880,13 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
                 print("LOCAL-VALIDATE targets: " + ", ".join(command.name for command in commands), flush=True)
             results = run_parallel("local-validate", commands)
             print_stage_report(stage, results)
+        elif stage == "semantic-review":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: semantic review ===", flush=True)
+            commands = build_semantic_review_commands(args, chain_id, cycle, latest_review_summary)
+            if commands:
+                print("SEMANTIC-REVIEW targets: " + ", ".join(command.name for command in commands), flush=True)
+            results = run_sequential("semantic-review", commands)
+            print_stage_report(stage, results)
         elif stage == "deployed-validate":
             print(f"=== unattended cycle {cycle}/{args.cycles}: deployed validate ===", flush=True)
             commands = build_deployed_validate_commands(args, chain_id, cycle, latest_review_summary)
@@ -821,6 +939,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repair-cooldown-hours", type=float, default=24.0)
     parser.add_argument("--local-validate-max", type=int, default=4)
     parser.add_argument("--local-validation-file", default=str(common.RUNTIME_DIR / "local-validation.json"))
+    parser.add_argument("--semantic-review-max", type=int, default=4)
     parser.add_argument("--deployed-validate-max", type=int, default=4)
     parser.add_argument("--deployed-validation-file", default=str(common.RUNTIME_DIR / "deployed-validation.json"))
     parser.add_argument(
@@ -836,8 +955,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply deployed/manual validation approval labels/comments. Defaults to enabled when --review-apply or --apply is used.",
     )
     parser.add_argument(
+        "--semantic-review-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply semantic review labels/comments. Defaults to enabled when --review-apply or --apply is used.",
+    )
+    parser.add_argument(
         "--stages",
-        help="Comma-separated stages. Default: reconcile,project-reconcile,dispatch,review,local-validate,review,deployed-validate,review,repair,review,finalize,summary.",
+        help="Comma-separated stages. Default includes review, semantic-review, validation, repair, finalizer, and summary gates.",
     )
     parser.add_argument(
         "--reconcile-apply",

@@ -98,11 +98,13 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("repair", names)
         self.assertIn("local-validate", names)
         self.assertIn("deployed-validate", names)
+        self.assertIn("semantic-review", names)
         self.assertIn("review", names)
         self.assertIn("finalize", names)
         self.assertLess(names.index("reconcile"), names.index("dispatch"))
         self.assertLess(names.index("project-reconcile"), names.index("dispatch"))
         self.assertLess(names.index("review"), names.index("local-validate"))
+        self.assertLess(names.index("review"), names.index("semantic-review"))
         self.assertLess(names.index("local-validate"), names.index("deployed-validate"))
         self.assertLess(names.index("review"), names.index("repair"))
 
@@ -261,13 +263,40 @@ class UnattendedLoopTests(unittest.TestCase):
                                 "label": "agent:needs-repair",
                                 "reasons": ["checks failed: unit-tests=FAILURE"],
                             },
+                            {
+                                "repo": "owner/repo",
+                                "number": 9,
+                                "label": "agent:needs-repair",
+                                "reasons": ["semantic review failed for current head"],
+                            },
+                            {
+                                "repo": "owner/repo",
+                                "number": 10,
+                                "label": "agent:needs-repair",
+                                "reasons": ["review changes requested"],
+                            },
+                            {
+                                "repo": "owner/repo",
+                                "number": 11,
+                                "label": "agent:needs-repair",
+                                "reasons": ["dependency blocked: owner/repo issue #2 is not closed"],
+                            },
+                            {
+                                "repo": "owner/repo",
+                                "number": 12,
+                                "label": "agent:needs-repair",
+                                "reasons": ["linked issue #12 could not be verified"],
+                            },
                         ]
                     }
                 ),
                 encoding="utf-8",
             )
 
-            self.assertEqual(self.loop.repair_targets_from_summary(path, 10), ["owner/repo#8"])
+            self.assertEqual(
+                self.loop.repair_targets_from_summary(path, 10),
+                ["owner/repo#8", "owner/repo#9", "owner/repo#10"],
+            )
 
     def test_local_validation_targets_from_review_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -341,6 +370,33 @@ class UnattendedLoopTests(unittest.TestCase):
                 ["owner/repo#7"],
             )
 
+    def test_semantic_review_targets_from_review_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "review.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "decisions": [
+                            {
+                                "repo": "owner/repo",
+                                "number": 7,
+                                "label": "agent:semantic-review-required",
+                                "reasons": ["semantic review required for current head"],
+                            },
+                            {
+                                "repo": "owner/repo",
+                                "number": 8,
+                                "label": "agent:needs-repair",
+                                "reasons": ["checks failed: ci=FAILURE"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(self.loop.semantic_review_targets_from_summary(path, 10), ["owner/repo#7"])
+
     def test_local_validation_apply_defaults_to_review_apply(self) -> None:
         args = types.SimpleNamespace(review_apply=True, apply=False, local_validation_apply=None)
 
@@ -360,6 +416,16 @@ class UnattendedLoopTests(unittest.TestCase):
         args = types.SimpleNamespace(review_apply=True, apply=True, deployed_validation_apply=False)
 
         self.assertFalse(self.loop.deployed_validation_apply_enabled(args))
+
+    def test_semantic_review_apply_defaults_to_review_apply(self) -> None:
+        args = types.SimpleNamespace(review_apply=True, apply=False, semantic_review_apply=None)
+
+        self.assertTrue(self.loop.semantic_review_apply_enabled(args))
+
+    def test_semantic_review_apply_can_be_disabled_explicitly(self) -> None:
+        args = types.SimpleNamespace(review_apply=True, apply=True, semantic_review_apply=False)
+
+        self.assertFalse(self.loop.semantic_review_apply_enabled(args))
 
     def test_reconcile_apply_defaults_to_apply_or_review_apply(self) -> None:
         self.assertTrue(
