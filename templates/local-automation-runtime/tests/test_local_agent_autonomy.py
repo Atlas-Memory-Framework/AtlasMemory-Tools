@@ -221,6 +221,34 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         self.assertEqual(self.semantic_review.parse_result("Result: needs-human\n"), "needs-human")
         self.assertEqual(self.semantic_review.parse_result("Summary only\n"), "failed")
 
+    def test_semantic_review_extracts_final_answer_from_codex_transcript(self) -> None:
+        raw = (
+            "OpenAI Codex v0.128.0\n"
+            "user\n"
+            "Return exactly these sections:\n"
+            "Result: pass|fail|needs-human\n"
+            "codex\n"
+            "Result: fail\n"
+            "Summary:\n"
+            "Needs deployed evidence.\n"
+            "Blocking Findings:\n"
+            "- Hosted validation evidence is missing.\n"
+            "Validation Assessment:\n"
+            "Insufficient.\n"
+            "Rationale:\n"
+            "CI does not exercise the hosted endpoint.\n"
+            "tokens used\n"
+            "120\n"
+        )
+
+        text = self.semantic_review.extract_review_text(raw)
+        body = self.semantic_review.comment_body(7, "abc123", "failed", text, Path("/tmp/job"))
+
+        self.assertNotIn("OpenAI Codex", body)
+        self.assertNotIn("Result: pass|fail|needs-human", body)
+        self.assertEqual(body.count("Result:"), 1)
+        self.assertIn("Needs deployed evidence.", body)
+
     def test_semantic_review_prompt_includes_issue_diff_and_validation_rules(self) -> None:
         prompt = self.semantic_review.build_prompt(
             "owner/repo",
@@ -245,11 +273,14 @@ class LocalAgentAutonomyTests(unittest.TestCase):
     def test_semantic_review_needs_human_clears_stale_failed_label(self) -> None:
         calls: list[list[str]] = []
         original_run = self.semantic_review.common.run
+        original_gh_json_or_none = self.semantic_review.common.gh_json_or_none
         self.semantic_review.common.run = lambda args, **_kwargs: calls.append(args)
+        self.semantic_review.common.gh_json_or_none = lambda *_args, **_kwargs: {"comments": []}
         try:
             self.semantic_review.apply_result("owner/repo", 7, "needs-human", "body")
         finally:
             self.semantic_review.common.run = original_run
+            self.semantic_review.common.gh_json_or_none = original_gh_json_or_none
 
         self.assertIn(
             ["gh", "issue", "edit", "7", "--repo", "owner/repo", "--remove-label", "agent:semantic-review-failed"],

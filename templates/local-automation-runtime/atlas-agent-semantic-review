@@ -84,10 +84,19 @@ def build_prompt(repo: str, pr: dict[str, Any], issue: dict[str, Any] | None, fi
             f"URL: {issue.get('url')}\n\n"
             f"{issue.get('body') or ''}"
         )
+    checks = []
+    for check in pr.get("statusCheckRollup") or []:
+        name = str(check.get("name") or check.get("context") or "unnamed")
+        status = str(check.get("status") or "")
+        conclusion = str(check.get("conclusion") or "")
+        workflow = str(check.get("workflowName") or "")
+        checks.append(f"- {name}: status={status or 'unknown'} conclusion={conclusion or 'none'} workflow={workflow or 'none'}")
+    checks_text = "\n".join(checks) or "- none reported"
     return f"""You are performing a semantic code review for an automated local-agent PR.
 
 Review whether the PR actually satisfies the linked issue and whether the validation evidence is sufficient.
 Do not suggest style nits. Focus on correctness, scope, missing tests, missing evidence, and mismatches between the issue and diff.
+Keep findings actionable and tied to files changed by this PR or validation evidence this PR can provide.
 
 Return exactly these sections:
 
@@ -104,12 +113,18 @@ Rules:
 - Use `needs-human` when manual/deployed validation or product judgment is required before approval.
 - Treat a PR body that says "No explicit test command/result section was found" as insufficient validation unless GitHub checks clearly cover the change.
 - Include at least one blocking finding for `fail` or `needs-human`.
+- Do not quote this prompt, the full diff, tool logs, or command transcripts in your answer.
+- If the issue body mentions target repos outside `Repository`, treat that as planning context unless the linked issue explicitly requires this PR to modify those repos.
+- Prefer precise findings like "hosted/deployed validation evidence is missing" over broad claims like "missing parity in another repo" unless the diff or issue explicitly requires the other repo in this PR.
 
 Repository: {repo}
 PR #{pr.get('number')}: {pr.get('title')}
 PR URL: {pr.get('url')}
 Head SHA: {pr.get('headRefOid')}
 Base branch: {pr.get('baseRefName')}
+
+GitHub Checks:
+{checks_text}
 
 PR Body:
 {compact(str(pr.get('body') or ''), 8000)}
@@ -139,6 +154,32 @@ def parse_result(text: str) -> str:
     if value in {"needs-human", "blocked"}:
         return "needs-human"
     return "failed"
+
+
+def extract_review_text(raw_output: str) -> str:
+    matches = list(re.finditer(r"(?im)^\s*Result:\s*(pass|passed|fail|failed|needs-human|needs_human|blocked)\s*$", raw_output or ""))
+    if not matches:
+        return (raw_output or "").strip()
+    text = raw_output[matches[-1].start() :].strip()
+    text = re.split(r"(?im)^\s*tokens used\s*$", text, maxsplit=1)[0].strip()
+    return text
+
+
+def display_review_text(review_text: str) -> str:
+    text = re.sub(r"(?im)^\s*Result:\s*(pass|passed|fail|failed|needs-human|needs_human|blocked)\s*$\n?", "", review_text.strip(), count=1)
+    forbidden = ("OpenAI Codex", "--------\nuser\n", "workdir: /job", "semantic-review-prompt.md")
+    if any(token in text for token in forbidden):
+        return (
+            "Summary:\n"
+            "Semantic review output could not be rendered cleanly.\n\n"
+            "Blocking Findings:\n"
+            "- Review output contained command transcript or prompt text; inspect artifacts for details.\n\n"
+            "Validation Assessment:\n"
+            "No clean semantic review text was produced.\n\n"
+            "Rationale:\n"
+            "The review runner suppressed raw transcript output to avoid noisy PR comments."
+        )
+    return compact(text, 6000)
 
 
 def run_codex_review(job_dir: Path, prompt: str) -> str:
@@ -181,7 +222,7 @@ def run_codex_review(job_dir: Path, prompt: str) -> str:
             "```\n"
         )
     else:
-        output = raw_output
+        output = extract_review_text(raw_output)
     (job_dir / "semantic-review.md").write_text(output, encoding="utf-8")
     return output
 
@@ -193,8 +234,47 @@ def comment_body(number: int, head: str, result: str, review_text: str, job_dir:
         f"Head: `{head}`\n"
         f"Result: {result}\n"
         f"Artifacts: `{job_dir}`\n\n"
-        f"{review_text.strip()}\n"
+        f"{display_review_text(review_text)}\n"
     )
+
+
+def update_comment(repo: str, comment_id: str, body: str) -> bool:
+    proc = common.run(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { issueComment { id } } }",
+            "-f",
+            f"id={comment_id}",
+            "-f",
+            f"body={body}",
+        ],
+        check=False,
+    )
+    if proc.returncode == 0:
+        return True
+    if comment_id.isdigit():
+        proc = common.run(["gh", "issue", "comment", "edit", comment_id, "--repo", repo, "--body", body], check=False)
+        return proc.returncode == 0
+    return False
+
+
+def post_or_update_comment(repo: str, number: int, head: str, body: str) -> None:
+    payload = common.gh_json_or_none(["pr", "view", str(number), "--repo", repo, "--json", "comments"], retries=2) or {}
+    marker_comments = [
+        comment
+        for comment in payload.get("comments") or []
+        if COMMENT_MARKER in str(comment.get("body") or "")
+    ]
+    for comment in reversed(marker_comments):
+        comment_body_text = str(comment.get("body") or "")
+        if re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head)}`?\s*$", comment_body_text):
+            comment_id = str(comment.get("id") or "")
+            if comment_id and update_comment(repo, comment_id, body):
+                return
+    common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
 
 
 def apply_result(repo: str, number: int, result: str, body: str) -> None:
@@ -210,7 +290,8 @@ def apply_result(repo: str, number: int, result: str, body: str) -> None:
         if result == "failed":
             common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:semantic-review-failed"], retries=3)
             common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:needs-repair"], retries=3)
-    common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
+    head_match = re.search(r"(?im)^\s*Head:\s*`?([0-9a-f]{7,40}|unknown)`?\s*$", body)
+    post_or_update_comment(repo, number, head_match.group(1) if head_match else "unknown", body)
 
 
 def review(args: argparse.Namespace) -> int:
