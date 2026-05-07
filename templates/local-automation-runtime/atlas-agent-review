@@ -250,7 +250,13 @@ def semantic_failure_reasons_for_head(pr: dict[str, Any]) -> list[str]:
     if not body:
         return ["semantic review failed for current head"]
     reasons: list[str] = []
-    if any(token in body for token in ("admin ui", "admin-ui", "target repo", "target repo(s)", "cross-repo", "cross repo")):
+    explicit_cross_repo = (
+        "this pr must modify" in body
+        or "this pr needs to modify" in body
+        or "same pr must modify" in body
+        or "requires changes in another repo in this pr" in body
+    )
+    if explicit_cross_repo:
         reasons.append("semantic review failed: cross-repo scope gap")
     if any(token in body for token in ("deployed validation", "hosted walkthrough", "apim", "manual/deployed validation")):
         reasons.append("semantic review failed: deployed validation evidence missing")
@@ -605,9 +611,21 @@ def classify(
 def review_comment_body(decision: ReviewDecision) -> str:
     files = "\n".join(f"- `{path}`" for path in decision.files[:20]) or "- none recorded"
     blocker_types = blocker_types_for(decision.label, decision.reasons)
+    reason_text = " ".join(decision.reasons).lower()
     next_action = "No action required before finalizer review." if decision.label == APPROVED_LABEL else "Clear the reasons above, add validation evidence if missing, then rerun review."
     if decision.label == MANUAL_LABEL:
-        next_action = "Run the required manual/deployed validation, comment with evidence, then add `agent:manual-validation-approved`."
+        if "local validation passed" in reason_text:
+            next_action = (
+                f"Local validation is current for this head. Remaining gate is deployed/manual validation: "
+                f"run `./atlas-agent-deployed-validate {decision.repo}#{decision.number} --apply` if configured, "
+                "or run the named deployed gates from the issue, comment the evidence, then add `agent:manual-validation-approved`."
+            )
+        else:
+            next_action = (
+                f"Run configured validation for this PR head. Start with local validation if GitHub checks are absent: "
+                f"`./atlas-agent-local-validate {decision.repo}#{decision.number} --apply`; then run deployed/manual gates "
+                "or configure `deployed-validation.json`, comment current-head evidence, and add `agent:manual-validation-approved`."
+            )
     elif decision.label == LOCAL_VALIDATION_REQUIRED_LABEL:
         next_action = "Run configured local validation for this PR head; review will require current-head `agent:local-validation-passed` evidence."
     elif decision.label == OVERLAP_LABEL:

@@ -145,7 +145,7 @@ class ReviewAgentTests(unittest.TestCase):
                             "Head: `abc123`\n"
                             "Result: failed\n"
                             "Blocking Findings:\n"
-                            "- Missing Admin UI parity for the target repo.\n"
+                            "- This PR must modify the Admin UI repo to satisfy the issue.\n"
                             "- Missing deployed validation evidence.\n"
                         ),
                     }
@@ -448,6 +448,23 @@ class ReviewAgentTests(unittest.TestCase):
         self.assertIn("`src/workflows.py`", body)
         self.assertIn("agent:manual-validation-approved", body)
         self.assertIn("Finalization requires `agent:review-approved`", body)
+
+    def test_review_comment_calls_out_remaining_deployed_gate_after_local_pass(self) -> None:
+        body = self.review.review_comment_body(
+            self.review.ReviewDecision(
+                repo="owner/repo",
+                number=7,
+                title="agent: #7 Add route",
+                url="https://example.invalid/pr/7",
+                issue_number=7,
+                label="agent:manual-validation-required",
+                reasons=["local validation passed with no GitHub checks", "manual or deployed validation required"],
+                files=["src/workflows.py"],
+            )
+        )
+
+        self.assertIn("Local validation is current", body)
+        self.assertIn("./atlas-agent-deployed-validate owner/repo#7 --apply", body)
 
     def test_review_comment_includes_semantic_next_action(self) -> None:
         body = self.review.review_comment_body(
