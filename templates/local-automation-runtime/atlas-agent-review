@@ -231,6 +231,36 @@ def semantic_review_state_for_head(pr: dict[str, Any]) -> str:
     return "missing"
 
 
+def semantic_review_body_for_head(pr: dict[str, Any]) -> str:
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return ""
+    for comment in reversed(pr.get("comments") or []):
+        body = str(comment.get("body") or "")
+        if SEMANTIC_REVIEW_COMMENT_MARKER not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        return body
+    return ""
+
+
+def semantic_failure_reasons_for_head(pr: dict[str, Any]) -> list[str]:
+    body = semantic_review_body_for_head(pr).lower()
+    if not body:
+        return ["semantic review failed for current head"]
+    reasons: list[str] = []
+    if any(token in body for token in ("admin ui", "admin-ui", "target repo", "target repo(s)", "cross-repo", "cross repo")):
+        reasons.append("semantic review failed: cross-repo scope gap")
+    if any(token in body for token in ("deployed validation", "hosted walkthrough", "apim", "manual/deployed validation")):
+        reasons.append("semantic review failed: deployed validation evidence missing")
+    if any(token in body for token in ("missing test", "tests do not cover", "insufficient test", "coverage")):
+        reasons.append("semantic review failed: test coverage missing")
+    if not reasons:
+        reasons.append("semantic review failed for current head")
+    return reasons
+
+
 def issue_has_manual_validation(issue: dict[str, Any] | None) -> bool:
     if not issue:
         return False
@@ -281,6 +311,12 @@ def blocker_types_for(label: str, reasons: list[str]) -> list[str]:
         types.add("semantic_review")
     if "semantic review failed for current head" in reason_text:
         types.add("semantic_scope_repair")
+    if "semantic review failed: cross-repo scope gap" in reason_text:
+        types.add("cross_repo_scope")
+    if "semantic review failed: deployed validation evidence missing" in reason_text:
+        types.add("deployed_validation")
+    if "semantic review failed: test coverage missing" in reason_text:
+        types.add("code_repair")
     if "review changes requested" in reason_text:
         types.add("requested_changes")
     if "checks failed:" in reason_text:
@@ -304,6 +340,8 @@ def blocker_types_for(label: str, reasons: list[str]) -> list[str]:
 
 def repair_scope_for(blocker_types: list[str]) -> str:
     blockers = set(blocker_types)
+    if "cross_repo_scope" in blockers:
+        return "cross-repo"
     if blockers & {"dependency_blocker", "metadata_blocker"}:
         return "metadata"
     if blockers & {"deployed_validation", "local_validation"} and not blockers & CURRENT_REPO_REPAIR_TYPES:
@@ -316,7 +354,8 @@ def repair_scope_for(blocker_types: list[str]) -> str:
 
 
 def repairable_for(blocker_types: list[str]) -> bool:
-    return bool(set(blocker_types) & CURRENT_REPO_REPAIR_TYPES) and repair_scope_for(blocker_types) == "current-repo"
+    blockers = set(blocker_types)
+    return "cross_repo_scope" not in blockers and bool(blockers & CURRENT_REPO_REPAIR_TYPES) and repair_scope_for(blocker_types) == "current-repo"
 
 
 def route_for(label: str, reasons: list[str]) -> str:
@@ -329,14 +368,20 @@ def route_for(label: str, reasons: list[str]) -> str:
         return "deployed-validate"
     if label == SEMANTIC_REVIEW_REQUIRED_LABEL:
         return "semantic-review"
-    if repairable_for(blocker_types):
-        return "repair"
-    if "check_wait" in blocker_types:
-        return "wait"
     if label == OVERLAP_LABEL:
         return "wait"
     if label == SUPERSEDED_LABEL:
         return "terminal"
+    if repairable_for(blocker_types):
+        return "repair"
+    if "cross_repo_scope" in blocker_types:
+        return "human"
+    if "deployed_validation" in blocker_types:
+        return "deployed-validate"
+    if "local_validation" in blocker_types:
+        return "local-validate"
+    if "check_wait" in blocker_types:
+        return "wait"
     return "human"
 
 
@@ -536,7 +581,7 @@ def classify(
             reasons.append("semantic review passed for current head")
         elif semantic_state == "failed":
             label = NEEDS_REPAIR_LABEL
-            reasons.append("semantic review failed for current head")
+            reasons.extend(semantic_failure_reasons_for_head(pr))
         elif semantic_state == "needs-human" and label == APPROVED_LABEL:
             label = SEMANTIC_REVIEW_REQUIRED_LABEL
             reasons.append("semantic review needs human attention for current head")

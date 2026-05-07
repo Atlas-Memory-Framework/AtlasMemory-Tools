@@ -134,6 +134,37 @@ class ReviewAgentTests(unittest.TestCase):
         self.assertEqual(decision.label, "agent:needs-repair")
         self.assertIn("semantic review failed for current head", decision.reasons)
 
+    def test_semantic_scope_gap_is_not_current_repo_repairable(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                comments=[
+                    {
+                        "body": (
+                            "<!-- atlas-agent-semantic-review -->\n"
+                            "Head: `abc123`\n"
+                            "Result: failed\n"
+                            "Blocking Findings:\n"
+                            "- Missing Admin UI parity for the target repo.\n"
+                            "- Missing deployed validation evidence.\n"
+                        ),
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        blocker_types = self.review.blocker_types_for(decision.label, decision.reasons)
+        self.assertEqual(decision.label, "agent:needs-repair")
+        self.assertIn("semantic review failed: cross-repo scope gap", decision.reasons)
+        self.assertIn("semantic review failed: deployed validation evidence missing", decision.reasons)
+        self.assertEqual(self.review.route_for_decision(decision), "human")
+        self.assertEqual(self.review.repair_scope_for(blocker_types), "cross-repo")
+        self.assertFalse(self.review.repairable_for(blocker_types))
+
     def test_semantic_failure_overrides_manual_validation_wait(self) -> None:
         decision = self.review.classify(
             "owner/repo",
@@ -310,6 +341,7 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decision.label, "agent:overlap-queued")
         self.assertIn("overlaps open local-agent PRs: #8", decision.reasons)
+        self.assertEqual(self.review.route_for_decision(decision), "wait")
 
     def test_manual_validation_no_check_routes_to_deployed_validation(self) -> None:
         decision = self.review.classify(
