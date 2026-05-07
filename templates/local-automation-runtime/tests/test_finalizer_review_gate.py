@@ -19,18 +19,20 @@ def load_script(name: str, filename: str):
     return module
 
 
-def green_pr(*, labels: list[str] | None = None) -> dict:
-    return {
+def green_pr(*, labels: list[str] | None = None, **overrides) -> dict:
+    payload = {
         "number": 7,
         "title": "agent: address issue #12",
         "url": "https://example.invalid/pr/7",
         "body": "Closes #12",
         "headRefName": "agent/issue-12/work",
+        "headRefOid": "abc123",
         "state": "OPEN",
         "mergeStateStatus": "CLEAN",
         "mergeable": "MERGEABLE",
         "isDraft": False,
         "labels": [{"name": label} for label in (labels or [])],
+        "comments": [],
         "statusCheckRollup": [
             {
                 "name": "test",
@@ -39,6 +41,8 @@ def green_pr(*, labels: list[str] | None = None) -> dict:
             }
         ],
     }
+    payload.update(overrides)
+    return payload
 
 
 class FinalizerReviewGateTests(unittest.TestCase):
@@ -74,6 +78,62 @@ class FinalizerReviewGateTests(unittest.TestCase):
 
     def test_pr_view_fields_include_labels(self) -> None:
         self.assertIn("labels", self.finalize.PR_VIEW_FIELDS.split(","))
+
+    def test_local_validation_passed_no_check_draft_is_readied_not_merged(self) -> None:
+        decision = self.finalize.decide(
+            "owner/repo",
+            green_pr(
+                labels=["reviewed", "agent:local-validation-passed"],
+                statusCheckRollup=[],
+                isDraft=True,
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-local-validation -->\nHead: `abc123`\nResult: passed",
+                    }
+                ],
+            ),
+            allow_no_checks=False,
+            merge=True,
+            check_dependencies=False,
+            require_review_label="reviewed",
+        )
+
+        self.assertEqual(decision.action, "ready")
+
+    def test_stale_local_validation_passed_label_is_blocked(self) -> None:
+        decision = self.finalize.decide(
+            "owner/repo",
+            green_pr(
+                labels=["reviewed", "agent:local-validation-passed"],
+                statusCheckRollup=[],
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-local-validation -->\nHead: `oldsha`\nResult: passed",
+                    }
+                ],
+            ),
+            allow_no_checks=True,
+            merge=True,
+            check_dependencies=False,
+            require_review_label="reviewed",
+        )
+
+        self.assertEqual(decision.action, "blocked")
+        self.assertIn("local validation pass missing for current head", decision.reasons)
+
+    def test_local_validation_does_not_override_required_github_checks(self) -> None:
+        decision = self.finalize.decide(
+            "owner/repo",
+            green_pr(labels=["reviewed", "agent:local-validation-passed"], statusCheckRollup=[]),
+            allow_no_checks=False,
+            merge=True,
+            required_check_names=["ci"],
+            check_dependencies=False,
+            require_review_label="reviewed",
+        )
+
+        self.assertEqual(decision.action, "blocked")
+        self.assertIn("no checks reported", decision.reasons)
 
 
 if __name__ == "__main__":

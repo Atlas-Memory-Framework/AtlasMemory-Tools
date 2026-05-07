@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""Reconcile GitHub Project status with issue and child-item state."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+DEFAULT_OWNER = "Atlas-Memory-Framework"
+DEFAULT_PROJECT_NUMBER = 2
+
+
+@dataclass
+class ProjectConfig:
+    project_id: str
+    status_field_id: str
+    status_options: dict[str, str]
+    execution_state_field_id: str | None
+    execution_state_options: dict[str, str]
+
+
+@dataclass
+class ProjectDecision:
+    owner: str
+    project_number: int
+    project_id: str
+    item_id: str
+    repo: str
+    number: int
+    title: str
+    action: str
+    status_from: str
+    status_to: str
+    reasons: list[str]
+    child_refs: list[str]
+
+
+def project_targets(path: str | None, owner: str, project_number: int) -> list[tuple[str, int]]:
+    if not path:
+        return [(owner, project_number)]
+    target_file = Path(path)
+    targets: list[tuple[str, int]] = []
+    for raw in target_file.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "/" in line:
+            target_owner, raw_number = line.rsplit("/", 1)
+        else:
+            parts = line.split()
+            if len(parts) != 2:
+                raise ValueError(f"Project target must look like OWNER/NUMBER or 'OWNER NUMBER': {raw}")
+            target_owner, raw_number = parts
+        targets.append((target_owner.strip(), int(raw_number.strip())))
+    return targets
+
+
+def project_info(owner: str, project_number: int) -> dict[str, Any]:
+    projects = common.gh_json(
+        ["project", "list", "--owner", owner, "--format", "json", "--limit", "100"],
+        retries=2,
+    ).get("projects") or []
+    for project in projects:
+        if int(project.get("number") or 0) == project_number:
+            return project
+    raise RuntimeError(f"Project not found: {owner}/{project_number}")
+
+
+def project_fields(owner: str, project_number: int) -> list[dict[str, Any]]:
+    return (common.gh_json(
+        ["project", "field-list", str(project_number), "--owner", owner, "--format", "json", "--limit", "100"],
+        retries=2,
+    ).get("fields") or [])
+
+
+def project_config(owner: str, project_number: int) -> ProjectConfig:
+    info = project_info(owner, project_number)
+    fields = project_fields(owner, project_number)
+    status_field = next((field for field in fields if field.get("name") == "Status"), None)
+    if not status_field:
+        raise RuntimeError("Project Status field was not found")
+    execution_field = next((field for field in fields if field.get("name") == "ExecutionState"), None)
+    return ProjectConfig(
+        project_id=str(info["id"]),
+        status_field_id=str(status_field["id"]),
+        status_options={str(option["name"]): str(option["id"]) for option in status_field.get("options") or []},
+        execution_state_field_id=str(execution_field["id"]) if execution_field else None,
+        execution_state_options={
+            str(option["name"]): str(option["id"]) for option in (execution_field or {}).get("options") or []
+        },
+    )
+
+
+def project_items(owner: str, project_number: int, limit: int) -> list[dict[str, Any]]:
+    return common.gh_json(
+        ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(limit)],
+        retries=2,
+    ).get("items") or []
+
+
+def issue_key(item: dict[str, Any]) -> tuple[str, int] | None:
+    content = item.get("content") or {}
+    repo = content.get("repository")
+    number = content.get("number")
+    if repo and number:
+        return str(repo), int(number)
+    return None
+
+
+def issue_ref(item: dict[str, Any]) -> str:
+    key = issue_key(item)
+    if not key:
+        return "unknown"
+    return f"{key[0]}#{key[1]}"
+
+
+def issue_url(item: dict[str, Any]) -> str:
+    return str((item.get("content") or {}).get("url") or "")
+
+
+def parent_urls(item: dict[str, Any]) -> list[str]:
+    body = str((item.get("content") or {}).get("body") or "")
+    urls = re.findall(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/\d+", body)
+    seen: set[str] = set()
+    result: list[str] = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
+
+
+def is_epic_item(item: dict[str, Any]) -> bool:
+    labels = set(item.get("labels") or [])
+    title = str((item.get("content") or {}).get("title") or "")
+    return (
+        "type:epic" in labels
+        or item.get("executionState") == "Epic"
+        or title.startswith("[Epic]")
+        or "[Epic]" in title
+    )
+
+
+def issue_state(repo: str, number: int) -> str:
+    data = common.gh_json(
+        ["issue", "view", str(number), "--repo", repo, "--json", "state"],
+        retries=2,
+    )
+    return str(data.get("state") or "UNKNOWN").upper()
+
+
+def item_complete(item: dict[str, Any], issue_states: dict[tuple[str, int], str]) -> bool:
+    key = issue_key(item)
+    state = issue_states.get(key or ("", 0), "UNKNOWN")
+    return item.get("status") == "Done" and state == "CLOSED"
+
+
+def target_status_for_children(children: list[dict[str, Any]], issue_states: dict[tuple[str, int], str]) -> str:
+    if any(not item_complete(child, issue_states) and child.get("status") == "In Progress" for child in children):
+        return "In Progress"
+    if any(issue_states.get(issue_key(child) or ("", 0)) == "OPEN" for child in children):
+        return "In Progress"
+    return "Todo"
+
+
+def decide(owner: str, project_number: int, config: ProjectConfig, items: list[dict[str, Any]]) -> list[ProjectDecision]:
+    issue_states: dict[tuple[str, int], str] = {}
+    for item in items:
+        key = issue_key(item)
+        if key:
+            issue_states[key] = issue_state(*key)
+
+    by_url = {issue_url(item): item for item in items if issue_url(item)}
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        for url in parent_urls(item):
+            children_by_parent.setdefault(url, []).append(item)
+
+    decisions: list[ProjectDecision] = []
+    for parent_url, children in children_by_parent.items():
+        parent = by_url.get(parent_url)
+        if not parent or not is_epic_item(parent) or parent.get("status") != "Done":
+            continue
+        incomplete = [child for child in children if not item_complete(child, issue_states)]
+        if not incomplete:
+            continue
+        target_status = target_status_for_children(incomplete, issue_states)
+        if target_status not in config.status_options:
+            continue
+        key = issue_key(parent)
+        if not key:
+            continue
+        decisions.append(
+            ProjectDecision(
+                owner=owner,
+                project_number=project_number,
+                project_id=config.project_id,
+                item_id=str(parent["id"]),
+                repo=key[0],
+                number=key[1],
+                title=str((parent.get("content") or {}).get("title") or ""),
+                action="set-epic-status",
+                status_from=str(parent.get("status") or ""),
+                status_to=target_status,
+                reasons=[f"{len(incomplete)} child item(s) are not complete"],
+                child_refs=[issue_ref(child) for child in incomplete],
+            )
+        )
+    return decisions
+
+
+def apply_decision(decision: ProjectDecision, config: ProjectConfig) -> None:
+    option_id = config.status_options[decision.status_to]
+    common.run(
+        [
+            "gh",
+            "project",
+            "item-edit",
+            "--id",
+            decision.item_id,
+            "--project-id",
+            decision.project_id,
+            "--field-id",
+            config.status_field_id,
+            "--single-select-option-id",
+            option_id,
+        ],
+        retries=3,
+    )
+
+
+def write_summary(path: str, decisions: list[ProjectDecision]) -> None:
+    common.write_json(
+        Path(path),
+        {
+            "generated_at": common.now_id(),
+            "decisions": [
+                {
+                    "owner": decision.owner,
+                    "project_number": decision.project_number,
+                    "repo": decision.repo,
+                    "number": decision.number,
+                    "title": decision.title,
+                    "action": decision.action,
+                    "status_from": decision.status_from,
+                    "status_to": decision.status_to,
+                    "reasons": decision.reasons,
+                    "child_refs": decision.child_refs,
+                }
+                for decision in decisions
+            ],
+        },
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--owner", default=DEFAULT_OWNER)
+    parser.add_argument("--project-number", type=int, default=DEFAULT_PROJECT_NUMBER)
+    parser.add_argument(
+        "--projects-file",
+        help="Optional file of project targets, one per line as OWNER/NUMBER or 'OWNER NUMBER'.",
+    )
+    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--summary")
+    args = parser.parse_args()
+
+    configs: dict[tuple[str, int], ProjectConfig] = {}
+    decisions: list[ProjectDecision] = []
+    for owner, project_number in project_targets(args.projects_file, args.owner, args.project_number):
+        config = project_config(owner, project_number)
+        configs[(owner, project_number)] = config
+        decisions.extend(decide(owner, project_number, config, project_items(owner, project_number, args.limit)))
+    if args.summary:
+        write_summary(args.summary, decisions)
+    for decision in decisions:
+        ref = f"{decision.repo}#{decision.number}"
+        children = ", ".join(decision.child_refs[:8])
+        print(
+            f"{'APPLY' if args.apply else 'DRY-RUN'} PROJECT-RECONCILE {ref}: "
+            f"{decision.status_from} -> {decision.status_to}: {', '.join(decision.reasons)}"
+            + (f" ({children})" if children else ""),
+            flush=True,
+        )
+        if args.apply:
+            apply_decision(decision, configs[(decision.owner, decision.project_number)])
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,894 @@
+#!/usr/bin/env python3
+"""Run the unattended local-agent issue-to-merge loop."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+APPROVED_LABEL = "agent:review-approved"
+NEEDS_REPAIR_LABEL = "agent:needs-repair"
+LOCAL_VALIDATION_REQUIRED_LABEL = "agent:local-validation-required"
+MANUAL_VALIDATION_REQUIRED_LABEL = "agent:manual-validation-required"
+DEFAULT_STAGES = (
+    "reconcile",
+    "project-reconcile",
+    "dispatch",
+    "review",
+    "local-validate",
+    "review",
+    "deployed-validate",
+    "review",
+    "repair",
+    "review",
+    "finalize",
+    "summary",
+)
+WARNING_PATTERNS = (
+    "Traceback (most recent call last):",
+    "RuntimeError: Command failed:",
+    "non-200 OK status code",
+    "Gateway Timeout",
+)
+
+
+@dataclass
+class CommandSpec:
+    name: str
+    args: list[str]
+    log_file: Path
+    summary_file: Path | None = None
+
+
+@dataclass
+class StageResult:
+    stage: str
+    name: str
+    status: str
+    returncode: int
+    log_file: str
+
+
+def target_repos(path: str | None) -> list[str]:
+    repo_file = Path(path) if path else common.RUNTIME_DIR / "repos.txt"
+    repos: list[str] = []
+    for raw in repo_file.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            repos.append(line)
+    return repos
+
+
+def safe_repo_name(repo: str) -> str:
+    return repo.replace("/", "__")
+
+
+def parse_stages(raw: str | None) -> list[str]:
+    if not raw:
+        return list(DEFAULT_STAGES)
+    stages = [stage.strip() for stage in raw.split(",") if stage.strip()]
+    allowed = {
+        "reconcile",
+        "project-reconcile",
+        "dispatch",
+        "review",
+        "local-validate",
+        "deployed-validate",
+        "repair",
+        "finalize",
+        "summary",
+    }
+    unknown = [stage for stage in stages if stage not in allowed]
+    if unknown:
+        raise ValueError(f"Unknown stage(s): {', '.join(unknown)}")
+    return stages
+
+
+def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> list[CommandSpec]:
+    commands: list[CommandSpec] = []
+    for repo in target_repos(args.repos_file):
+        safe_name = safe_repo_name(repo)
+        shard_file = chain_dir / f"{safe_name}.repos.txt"
+        shard_file.write_text(repo + "\n", encoding="utf-8")
+        summary_file = chain_dir / f"local-needs-human-summary-{safe_name}-cycle-{cycle}.json"
+        for lane in range(1, args.max_per_repo + 1):
+            cmd = [
+                str(common.RUNTIME_DIR / "atlas-agent-orchestrator"),
+                "--once",
+                "--inspect-failed",
+                "--auto-create-missing-base",
+                "--triage-needs-human",
+                "--triage-apply-stale",
+                "--triage-approve-review-before-dispatch",
+                "--triage-summary",
+                str(summary_file),
+                "--auto-queue-label",
+                args.auto_queue_label,
+                "--auto-queue-max",
+                "1",
+                "--max-per-repo",
+                "1",
+                "--limit",
+                str(args.limit),
+                "--repos-file",
+                str(shard_file),
+            ]
+            if args.publish:
+                cmd.insert(2, "--publish")
+            if args.post_triage_teams_per_repo:
+                cmd.extend(["--triage-teams-preview", "--triage-post-teams"])
+            commands.append(
+                CommandSpec(
+                    name=f"{repo}/lane-{lane}",
+                    args=cmd,
+                    log_file=common.RUNTIME_DIR
+                    / "logs"
+                    / f"unattended-{chain_id}-{safe_name}-cycle-{cycle}-lane-{lane}.log",
+                    summary_file=summary_file,
+                )
+            )
+    return commands
+
+
+def reconcile_apply_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "reconcile_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "apply", False) or getattr(args, "review_apply", False))
+
+
+def build_reconcile_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    summary_file = chain_dir / f"reconcile-cycle-{cycle}.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-reconcile"),
+        "--repos-file",
+        str(args.repos_file),
+        "--limit",
+        str(args.limit),
+        "--summary",
+        str(summary_file),
+    ]
+    if reconcile_apply_enabled(args):
+        cmd.append("--apply")
+    return CommandSpec(
+        name="reconcile",
+        args=cmd,
+        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-reconcile-cycle-{cycle}.log",
+        summary_file=summary_file,
+    )
+
+
+def project_reconcile_apply_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "project_reconcile_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "apply", False) or getattr(args, "review_apply", False))
+
+
+def build_project_reconcile_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    summary_file = chain_dir / f"project-reconcile-cycle-{cycle}.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-project-reconcile"),
+        "--limit",
+        str(args.project_item_limit),
+        "--summary",
+        str(summary_file),
+    ]
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
+    else:
+        cmd.extend(["--owner", str(args.project_owner), "--project-number", str(args.project_number)])
+    if project_reconcile_apply_enabled(args):
+        cmd.append("--apply")
+    return CommandSpec(
+        name="project-reconcile",
+        args=cmd,
+        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-project-reconcile-cycle-{cycle}.log",
+        summary_file=summary_file,
+    )
+
+
+def build_review_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int, pass_name: str) -> CommandSpec:
+    summary_file = chain_dir / f"review-cycle-{cycle}-{pass_name}.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-review"),
+        "--repos-file",
+        str(args.repos_file),
+        "--required-checks-file",
+        str(args.required_checks_file),
+        "--summary",
+        str(summary_file),
+    ]
+    if args.review_apply:
+        cmd.append("--apply")
+    if args.allow_no_checks:
+        cmd.append("--allow-no-checks")
+    return CommandSpec(
+        name=f"review-{pass_name}",
+        args=cmd,
+        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-review-cycle-{cycle}-{pass_name}.log",
+        summary_file=summary_file,
+    )
+
+
+def build_finalize_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    summary_file = chain_dir / f"finalize-cycle-{cycle}.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-finalize"),
+        "--required-checks-file",
+        str(args.required_checks_file),
+        "--summary",
+        str(summary_file),
+    ]
+    if args.apply:
+        cmd.append("--apply")
+    if args.merge:
+        cmd.append("--merge")
+    if args.close_issues:
+        cmd.append("--close-issues")
+    if args.allow_no_checks:
+        cmd.append("--allow-no-checks")
+    if args.require_review_approval:
+        cmd.extend(["--require-review-label", args.review_label])
+    return CommandSpec(
+        name="finalize",
+        args=cmd,
+        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-finalize-cycle-{cycle}.log",
+        summary_file=summary_file,
+    )
+
+
+def local_validation_targets_from_summary(path: Path, limit: int) -> list[str]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    targets: list[str] = []
+    for decision in payload.get("decisions") or []:
+        if decision.get("label") != LOCAL_VALIDATION_REQUIRED_LABEL:
+            continue
+        repo = str(decision.get("repo") or "")
+        number = decision.get("number")
+        if repo and number:
+            targets.append(f"{repo}#{int(number)}")
+        if len(targets) >= limit:
+            break
+    return targets
+
+
+def deployed_validation_configured_repos(path: str | Path) -> tuple[set[str], bool]:
+    config_path = Path(path)
+    if not config_path.exists():
+        return set(), False
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return set(), False
+    if not isinstance(payload, dict):
+        return set(), False
+    repos = {str(repo) for repo in payload if repo != "*"}
+    return repos, "*" in payload
+
+
+def deployed_validation_targets_from_summary(path: Path, limit: int, configured_repos: set[str] | None = None, wildcard: bool = True) -> list[str]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    targets: list[str] = []
+    for decision in payload.get("decisions") or []:
+        if decision.get("label") != MANUAL_VALIDATION_REQUIRED_LABEL:
+            continue
+        repo = str(decision.get("repo") or "")
+        number = decision.get("number")
+        if not wildcard and repo not in (configured_repos or set()):
+            continue
+        if repo and number:
+            targets.append(f"{repo}#{int(number)}")
+        if len(targets) >= limit:
+            break
+    return targets
+
+
+def build_local_validate_commands(
+    args: argparse.Namespace,
+    chain_id: str,
+    cycle: int,
+    review_summary: Path | None,
+) -> list[CommandSpec]:
+    if review_summary is None or not review_summary.exists():
+        return []
+    commands: list[CommandSpec] = []
+    for target in local_validation_targets_from_summary(review_summary, args.local_validate_max):
+        repo, number = common.pr_ref_parts(target)
+        cmd = [str(common.RUNTIME_DIR / "atlas-agent-local-validate"), target, "--commands-file", str(args.local_validation_file)]
+        if local_validation_apply_enabled(args):
+            cmd.append("--apply")
+        commands.append(
+            CommandSpec(
+                name=target,
+                args=cmd,
+                log_file=common.RUNTIME_DIR
+                / "logs"
+                / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-local-validate-cycle-{cycle}.log",
+            )
+        )
+    return commands
+
+
+def local_validation_apply_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "local_validation_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "review_apply", False) or getattr(args, "apply", False))
+
+
+def build_deployed_validate_commands(
+    args: argparse.Namespace,
+    chain_id: str,
+    cycle: int,
+    review_summary: Path | None,
+) -> list[CommandSpec]:
+    if review_summary is None or not review_summary.exists():
+        return []
+    commands: list[CommandSpec] = []
+    configured_repos, wildcard = deployed_validation_configured_repos(args.deployed_validation_file)
+    for target in deployed_validation_targets_from_summary(
+        review_summary,
+        args.deployed_validate_max,
+        configured_repos=configured_repos,
+        wildcard=wildcard,
+    ):
+        repo, number = common.pr_ref_parts(target)
+        cmd = [
+            str(common.RUNTIME_DIR / "atlas-agent-deployed-validate"),
+            target,
+            "--commands-file",
+            str(args.deployed_validation_file),
+        ]
+        if deployed_validation_apply_enabled(args):
+            cmd.append("--apply")
+        commands.append(
+            CommandSpec(
+                name=target,
+                args=cmd,
+                log_file=common.RUNTIME_DIR
+                / "logs"
+                / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-deployed-validate-cycle-{cycle}.log",
+            )
+        )
+    return commands
+
+
+def deployed_validation_apply_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "deployed_validation_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "review_apply", False) or getattr(args, "apply", False))
+
+
+def build_summary_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    output_file = chain_dir / f"cycle-{cycle}-summary.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-cycle-summary"),
+        "--chain-dir",
+        str(chain_dir),
+        "--cycle",
+        str(cycle),
+        "--output",
+        str(output_file),
+    ]
+    if args.post_cycle_summary:
+        cmd.append("--post-teams")
+    return CommandSpec(
+        name="summary",
+        args=cmd,
+        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-summary-cycle-{cycle}.log",
+        summary_file=output_file,
+    )
+
+
+def should_continue_to_summary(*_args: Any, **_kwargs: Any) -> bool:
+    return True
+
+
+def write_command_header(handle: Any, command: CommandSpec) -> None:
+    handle.write("+ " + " ".join(str(part) for part in command.args) + "\n")
+    handle.flush()
+
+
+def log_has_warning(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return False
+    return any(pattern in text for pattern in WARNING_PATTERNS)
+
+
+def stage_status(returncode: int, log_file: Path) -> str:
+    if returncode != 0:
+        return "failed"
+    if log_has_warning(log_file):
+        return "warning"
+    return "ok"
+
+
+def run_command(command: CommandSpec) -> StageResult:
+    command.log_file.parent.mkdir(parents=True, exist_ok=True)
+    with command.log_file.open("w", encoding="utf-8") as handle:
+        write_command_header(handle, command)
+        proc = subprocess.run(
+            command.args,
+            cwd=str(common.RUNTIME_DIR),
+            text=True,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+        )
+    return StageResult(
+        stage=command.name.split("-", 1)[0],
+        name=command.name,
+        status=stage_status(proc.returncode, command.log_file),
+        returncode=proc.returncode,
+        log_file=str(command.log_file),
+    )
+
+
+def run_parallel(stage: str, commands: list[CommandSpec]) -> list[StageResult]:
+    if not commands:
+        return []
+    processes: list[tuple[CommandSpec, Any, subprocess.Popen[str]]] = []
+    for command in commands:
+        command.log_file.parent.mkdir(parents=True, exist_ok=True)
+        handle = command.log_file.open("w", encoding="utf-8")
+        write_command_header(handle, command)
+        proc = subprocess.Popen(
+            command.args,
+            cwd=str(common.RUNTIME_DIR),
+            text=True,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+        )
+        processes.append((command, handle, proc))
+    results: list[StageResult] = []
+    for command, handle, proc in processes:
+        returncode = proc.wait()
+        handle.close()
+        results.append(
+            StageResult(
+                stage=stage,
+                name=command.name,
+                status=stage_status(returncode, command.log_file),
+                returncode=returncode,
+                log_file=str(command.log_file),
+            )
+        )
+    return results
+
+
+def run_sequential(_stage: str, commands: list[CommandSpec]) -> list[StageResult]:
+    return [run_command(command) for command in commands]
+
+
+def write_stage_results(chain_dir: Path, cycle: int, stage: str, results: list[StageResult]) -> None:
+    if stage == "dispatch":
+        path = chain_dir / f"dispatch-cycle-{cycle}.results.tsv"
+        path.write_text(
+            "".join(f"{result.status}\t{result.name}\t{result.log_file}\n" for result in results),
+            encoding="utf-8",
+        )
+        # Keep the existing cycle-summary reader useful until it learns the new name.
+        (chain_dir / f"build-cycle-{cycle}.results.tsv").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    common.write_json(
+        chain_dir / f"{stage}-cycle-{cycle}.results.json",
+        {
+            "cycle": cycle,
+            "stage": stage,
+            "results": [result.__dict__ for result in results],
+        },
+    )
+
+
+def repair_targets_from_summary(path: Path, limit: int) -> list[str]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    targets: list[str] = []
+    for decision in payload.get("decisions") or []:
+        if decision.get("label") != NEEDS_REPAIR_LABEL:
+            continue
+        if not repairable_review_decision(decision):
+            continue
+        repo = str(decision.get("repo") or "")
+        number = decision.get("number")
+        if repo and number:
+            targets.append(f"{repo}#{int(number)}")
+        if len(targets) >= limit:
+            break
+    return targets
+
+
+def repairable_review_decision(decision: dict[str, Any]) -> bool:
+    reasons = [str(reason) for reason in decision.get("reasons") or []]
+    if not reasons:
+        return False
+    repairable_prefixes = (
+        "checks failed:",
+        "checks pending:",
+    )
+    return any(reason.startswith(repairable_prefixes) for reason in reasons)
+
+
+def repair_targets_from_labels(args: argparse.Namespace, limit: int) -> list[str]:
+    targets: list[str] = []
+    if limit <= 0:
+        return targets
+    for repo in target_repos(args.repos_file):
+        prs = common.gh_json_or_none(
+            [
+                "pr",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "open",
+                "--search",
+                f'label:"{NEEDS_REPAIR_LABEL}"',
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,url",
+            ],
+            retries=2,
+        ) or []
+        for pr in prs:
+            number = pr.get("number")
+            if number:
+                targets.append(f"{repo}#{int(number)}")
+            if len(targets) >= limit:
+                return targets
+    return targets
+
+
+def repaired_targets_in_chain(chain_dir: Path, cycle: int) -> set[str]:
+    seen: set[str] = set()
+    for prior in range(1, cycle):
+        path = chain_dir / f"repair-cycle-{prior}.results.json"
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        for result in payload.get("results") or []:
+            name = result.get("name")
+            if name:
+                seen.add(str(name))
+    return seen
+
+
+def repair_state_path() -> Path:
+    return common.jobs_dir() / "unattended-repair-state.json"
+
+
+def read_repair_state() -> dict[str, float]:
+    path = repair_state_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return {str(key): float(value) for key, value in (payload.get("targets") or {}).items()}
+
+
+def write_repair_state(state: dict[str, float]) -> None:
+    common.write_json(repair_state_path(), {"targets": state})
+
+
+def target_from_pr_payload(payload: dict[str, Any]) -> str | None:
+    url = str(payload.get("url") or "")
+    match = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
+    if match:
+        return f"{match.group(1)}#{int(match.group(2))}"
+    return None
+
+
+def recent_repair_targets_from_artifacts(cutoff: float) -> set[str]:
+    targets: set[str] = set()
+    for job_dir in common.jobs_dir().glob("pr-*-repair-*"):
+        if not job_dir.is_dir() or job_dir.stat().st_mtime < cutoff:
+            continue
+        pr_json = job_dir / "pr.json"
+        if not pr_json.exists():
+            continue
+        try:
+            target = target_from_pr_payload(json.loads(pr_json.read_text(encoding="utf-8")))
+        except json.JSONDecodeError:
+            target = None
+        if target:
+            targets.add(target)
+    return targets
+
+
+def repair_cooldown_targets(cooldown_hours: float) -> set[str]:
+    if cooldown_hours <= 0:
+        return set()
+    cutoff = time.time() - (cooldown_hours * 60 * 60)
+    state = read_repair_state()
+    targets = {target for target, timestamp in state.items() if timestamp >= cutoff}
+    targets.update(recent_repair_targets_from_artifacts(cutoff))
+    return targets
+
+
+def record_repair_attempts(results: list[StageResult]) -> None:
+    if not results:
+        return
+    state = read_repair_state()
+    now = time.time()
+    for result in results:
+        state[result.name] = now
+    write_repair_state(state)
+
+
+def build_repair_commands(
+    args: argparse.Namespace,
+    chain_dir: Path,
+    chain_id: str,
+    cycle: int,
+    review_summary: Path | None,
+) -> list[CommandSpec]:
+    if review_summary is not None and review_summary.exists():
+        targets = repair_targets_from_summary(review_summary, args.repair_max)
+    else:
+        targets = repair_targets_from_labels(args, args.repair_max)
+    already_repaired = repaired_targets_in_chain(chain_dir, cycle)
+    cooldown_targets = repair_cooldown_targets(args.repair_cooldown_hours)
+    targets = [target for target in targets if target not in already_repaired and target not in cooldown_targets]
+    commands: list[CommandSpec] = []
+    for target in targets:
+        repo, number = common.pr_ref_parts(target)
+        cmd = [str(common.RUNTIME_DIR / "atlas-agent-pr-repair"), target]
+        if not args.apply or args.repair_dry_run:
+            cmd.append("--dry-run")
+        commands.append(
+            CommandSpec(
+                name=target,
+                args=cmd,
+                log_file=common.RUNTIME_DIR
+                / "logs"
+                / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-repair-cycle-{cycle}.log",
+            )
+        )
+    return commands
+
+
+def any_failed(results: list[StageResult]) -> bool:
+    return any(result.returncode != 0 for result in results)
+
+
+def stage_counts(results: list[StageResult]) -> dict[str, int]:
+    counts = {"ok": 0, "warning": 0, "failed": 0}
+    for result in results:
+        counts[result.status] = counts.get(result.status, 0) + 1
+    return counts
+
+
+def print_stage_report(stage: str, results: list[StageResult]) -> None:
+    if not results:
+        print(f"{stage.upper()} none", flush=True)
+        return
+    counts = stage_counts(results)
+    print(
+        f"{stage.upper()} ok={counts.get('ok', 0)} "
+        f"warning={counts.get('warning', 0)} failed={counts.get('failed', 0)}",
+        flush=True,
+    )
+    for result in results:
+        if result.status != "ok":
+            print(f"{stage.upper()} {result.status.upper()} {result.name} :: {result.log_file}", flush=True)
+
+
+def summarize_json_counts(path: Path | None, key: str) -> dict[str, int]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    counts: dict[str, int] = {}
+    for decision in payload.get("decisions") or []:
+        value = str(decision.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def print_decision_counts(stage: str, summary_file: Path | None, key: str) -> None:
+    counts = summarize_json_counts(summary_file, key)
+    if not counts:
+        return
+    parts = ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+    print(f"{stage.upper()} decisions: {parts}", flush=True)
+
+
+def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> list[StageResult]:
+    all_results: list[StageResult] = []
+    stages = parse_stages(args.stages)
+    latest_review_summary: Path | None = None
+    review_pass = 1
+    for stage in stages:
+        if stage == "reconcile":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: reconcile ===", flush=True)
+            command = build_reconcile_command(args, chain_dir, chain_id, cycle)
+            results = [run_command(command)]
+            print_stage_report(stage, results)
+            print_decision_counts(stage, command.summary_file, "action")
+        elif stage == "project-reconcile":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: project reconcile ===", flush=True)
+            command = build_project_reconcile_command(args, chain_dir, chain_id, cycle)
+            results = [run_command(command)]
+            print_stage_report(stage, results)
+            print_decision_counts(stage, command.summary_file, "action")
+        elif stage == "dispatch":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: dispatch ===", flush=True)
+            results = run_parallel("dispatch", build_dispatch_commands(args, chain_dir, chain_id, cycle))
+            print_stage_report(stage, results)
+        elif stage == "review":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: review {review_pass} ===", flush=True)
+            command = build_review_command(args, chain_dir, chain_id, cycle, f"pass-{review_pass}")
+            result = run_command(command)
+            if result.returncode == 0 and command.summary_file is not None:
+                latest_review_summary = command.summary_file
+                compatibility_summary = chain_dir / f"review-cycle-{cycle}.json"
+                compatibility_summary.write_text(command.summary_file.read_text(encoding="utf-8"), encoding="utf-8")
+            review_pass += 1
+            results = [result]
+            print_stage_report(stage, results)
+            print_decision_counts(stage, command.summary_file, "label")
+        elif stage == "repair":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: repair ===", flush=True)
+            repair_summary = latest_review_summary
+            if repair_summary is None and cycle > 1:
+                repair_summary = chain_dir / f"review-cycle-{cycle - 1}.json"
+            commands = build_repair_commands(args, chain_dir, chain_id, cycle, repair_summary)
+            if commands:
+                print("REPAIR targets: " + ", ".join(command.name for command in commands), flush=True)
+            results = run_parallel("repair", commands)
+            record_repair_attempts(results)
+            print_stage_report(stage, results)
+        elif stage == "local-validate":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: local validate ===", flush=True)
+            commands = build_local_validate_commands(args, chain_id, cycle, latest_review_summary)
+            if commands:
+                print("LOCAL-VALIDATE targets: " + ", ".join(command.name for command in commands), flush=True)
+            results = run_parallel("local-validate", commands)
+            print_stage_report(stage, results)
+        elif stage == "deployed-validate":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: deployed validate ===", flush=True)
+            commands = build_deployed_validate_commands(args, chain_id, cycle, latest_review_summary)
+            if commands:
+                print("DEPLOYED-VALIDATE targets: " + ", ".join(command.name for command in commands), flush=True)
+            results = run_sequential("deployed-validate", commands)
+            print_stage_report(stage, results)
+        elif stage == "finalize":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: finalize ===", flush=True)
+            command = build_finalize_command(args, chain_dir, chain_id, cycle)
+            results = [run_command(command)]
+            print_stage_report(stage, results)
+            print_decision_counts(stage, command.summary_file, "action")
+        elif stage == "summary":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: summary ===", flush=True)
+            results = [run_command(build_summary_command(args, chain_dir, chain_id, cycle))]
+            print_stage_report(stage, results)
+        else:
+            raise AssertionError(stage)
+        write_stage_results(chain_dir, cycle, stage, results)
+        all_results.extend(results)
+        if args.stop_on_error and any_failed(results):
+            break
+    return all_results
+
+
+def write_chain_summary(chain_dir: Path, chain_id: str, results: list[StageResult]) -> None:
+    common.write_json(
+        chain_dir / "unattended-summary.json",
+        {
+            "chain_id": chain_id,
+            "results": [result.__dict__ for result in results],
+            "counts": {
+                "ok": sum(1 for result in results if result.status == "ok"),
+                "failed": sum(1 for result in results if result.status != "ok"),
+            },
+        },
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cycles", type=int, default=1)
+    parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
+    parser.add_argument("--required-checks-file", default=str(common.RUNTIME_DIR / "required-checks.json"))
+    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--max-per-repo", type=int, default=1)
+    parser.add_argument("--auto-queue-label", default="status:ready")
+    parser.add_argument("--repair-max", type=int, default=4)
+    parser.add_argument("--repair-cooldown-hours", type=float, default=24.0)
+    parser.add_argument("--local-validate-max", type=int, default=4)
+    parser.add_argument("--local-validation-file", default=str(common.RUNTIME_DIR / "local-validation.json"))
+    parser.add_argument("--deployed-validate-max", type=int, default=4)
+    parser.add_argument("--deployed-validation-file", default=str(common.RUNTIME_DIR / "deployed-validation.json"))
+    parser.add_argument(
+        "--local-validation-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply local validation labels/comments. Defaults to enabled when --review-apply or --apply is used.",
+    )
+    parser.add_argument(
+        "--deployed-validation-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply deployed/manual validation approval labels/comments. Defaults to enabled when --review-apply or --apply is used.",
+    )
+    parser.add_argument(
+        "--stages",
+        help="Comma-separated stages. Default: reconcile,project-reconcile,dispatch,review,local-validate,review,deployed-validate,review,repair,review,finalize,summary.",
+    )
+    parser.add_argument(
+        "--reconcile-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply issue lifecycle label reconciliation. Defaults to enabled when --review-apply or --apply is used.",
+    )
+    parser.add_argument(
+        "--project-reconcile-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply GitHub Project status reconciliation. Defaults to enabled when --review-apply or --apply is used.",
+    )
+    parser.add_argument("--project-owner", default="Atlas-Memory-Framework")
+    parser.add_argument("--project-number", type=int, default=2)
+    parser.add_argument("--projects-file", help="Optional file of GitHub Project targets for project-reconcile.")
+    parser.add_argument("--project-item-limit", type=int, default=100)
+    parser.add_argument("--publish", action="store_true", help="Let dispatch workers publish draft PRs.")
+    parser.add_argument("--apply", action="store_true", help="Apply repair/finalize actions. Repairs dry-run without this.")
+    parser.add_argument("--merge", action="store_true")
+    parser.add_argument("--close-issues", action="store_true")
+    parser.add_argument("--allow-no-checks", action="store_true")
+    parser.add_argument("--review-apply", action="store_true", help="Apply review labels/comments.")
+    parser.add_argument("--require-review-approval", action="store_true", default=True)
+    parser.add_argument("--review-label", default=APPROVED_LABEL)
+    parser.add_argument("--repair-dry-run", action="store_true")
+    parser.add_argument("--post-cycle-summary", action="store_true")
+    parser.add_argument("--post-triage-teams-per-repo", action="store_true")
+    parser.add_argument("--stop-on-error", action="store_true")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.cycles < 1:
+        raise SystemExit("--cycles must be >= 1")
+    if args.max_per_repo < 1:
+        raise SystemExit("--max-per-repo must be >= 1")
+    if args.repair_max < 0:
+        raise SystemExit("--repair-max must be >= 0")
+
+    chain_id = common.now_id()
+    chain_dir = common.jobs_dir() / f"unattended-{chain_id}"
+    chain_dir.mkdir(parents=True, exist_ok=True)
+    all_results: list[StageResult] = []
+    for cycle in range(1, args.cycles + 1):
+        all_results.extend(run_cycle(args, chain_dir, chain_id, cycle))
+    write_chain_summary(chain_dir, chain_id, all_results)
+    print(f"Unattended chain complete. Chain state is {chain_dir}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

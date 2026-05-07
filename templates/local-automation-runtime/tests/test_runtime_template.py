@@ -10,6 +10,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE_ROOT = ROOT / "AtlasMemory-Tools" / "templates" / "local-automation-runtime"
+if not TEMPLATE_ROOT.exists():
+    TEMPLATE_ROOT = ROOT
 
 
 def load_script(name: str, filename: str):
@@ -91,6 +94,57 @@ class RuntimeTemplateTests(unittest.TestCase):
         self.assertEqual(summary["review"]["counts"]["agent:needs-repair"], 1)
         self.assertEqual(summary["review"]["counts"]["agent:review-approved"], 1)
 
+    def test_cycle_summary_reads_items_triage_summaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chain_dir = Path(tmp)
+            (chain_dir / "local-needs-human-summary-owner__repo-cycle-1.json").write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "repo": "owner/repo",
+                                "entity_id": "9",
+                                "dedupe_key": "owner/repo#9",
+                                "reasons": ["manual_gates_remaining"],
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = self.cycle.summarize(chain_dir, 1)
+
+        self.assertEqual(summary["triage"]["blocker_count"], 1)
+        self.assertEqual(summary["triage"]["blockers"][0]["repo"], "owner/repo")
+
+    def test_urgent_message_contains_explicit_manual_validation_instruction(self) -> None:
+        summary = {
+            "chain_id": "unattended-test",
+            "chain_dir": "/tmp/chain",
+            "cycle": 1,
+            "build": {"results": []},
+            "triage": {"blockers": [], "blocker_count": 0},
+            "review": {
+                "blocked": [
+                    {
+                        "repo": "owner/repo",
+                        "number": 7,
+                        "url": "https://github.com/owner/repo/pull/7",
+                        "label": "agent:manual-validation-required",
+                        "reasons": ["manual or deployed validation required"],
+                    }
+                ]
+            },
+            "finalizer": {"blocked": []},
+        }
+
+        card = self.cycle.urgent_message_card(summary)
+
+        self.assertIn("URGENT", card["title"])
+        self.assertIn("[owner/repo#7](https://github.com/owner/repo/pull/7)", card["text"])
+        self.assertIn("add `agent:manual-validation-approved`", card["text"])
+
     def test_plan_queue_blocks_children_with_dependencies(self) -> None:
         child = {
             "labels": ["status:ready"],
@@ -112,6 +166,41 @@ class RuntimeTemplateTests(unittest.TestCase):
         }
 
         self.assertEqual(self.bridge.child_blockers(child), [])
+
+    def test_durable_template_contains_unattended_validation_runtime(self) -> None:
+        for relative in (
+            "atlas-agent-unattended",
+            "atlas-agent-reconcile",
+            "atlas-agent-project-reconcile",
+            "atlas-agent-review",
+            "atlas-agent-finalize",
+            "atlas-agent-local-validate",
+            "atlas-agent-deployed-validate",
+            "atlas_agent_common.py",
+        ):
+            self.assertEqual(
+                (ROOT / relative).read_bytes(),
+                (TEMPLATE_ROOT / relative).read_bytes(),
+                f"{relative} should be synced into the durable runtime template",
+            )
+
+    def test_durable_template_contains_local_validation_example(self) -> None:
+        source = ROOT / "local-validation.json"
+        if not source.exists():
+            source = ROOT / "config" / "local-validation.example.json"
+        self.assertEqual(
+            source.read_text(encoding="utf-8"),
+            (TEMPLATE_ROOT / "config" / "local-validation.example.json").read_text(encoding="utf-8"),
+        )
+
+    def test_durable_template_contains_deployed_validation_example(self) -> None:
+        source = ROOT / "deployed-validation.json"
+        if not source.exists():
+            source = ROOT / "config" / "deployed-validation.example.json"
+        self.assertEqual(
+            source.read_text(encoding="utf-8"),
+            (TEMPLATE_ROOT / "config" / "deployed-validation.example.json").read_text(encoding="utf-8"),
+        )
 
 
 if __name__ == "__main__":

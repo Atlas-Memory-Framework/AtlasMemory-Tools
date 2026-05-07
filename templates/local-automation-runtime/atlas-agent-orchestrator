@@ -20,6 +20,7 @@ AGENT_LABELS = {
     "agent:ready": "0E8A16",
     "agent:running": "FBCA04",
     "agent:done": "5319E7",
+    "agent:pr-open": "1D76DB",
     "agent:failed": "B60205",
     "agent:allow-workflows": "C5DEF5",
     "agent:allow-infra": "C5DEF5",
@@ -172,6 +173,7 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
         "agent:ready",
         "agent:running",
         "agent:done",
+        "agent:pr-open",
         "agent:failed",
     }
     reasons = hard_non_execution_reasons(issue)
@@ -187,7 +189,7 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
         print(f"Not queueing {repo}#{issue['number']}: open PR appears linked.", flush=True)
         return False
     print(f"Queueing {repo}#{issue['number']} from {args.auto_queue_label}: {issue['title']}", flush=True)
-    common.run(["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--add-label", "agent:ready"])
+    common.run(["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--add-label", "agent:ready"], retries=3)
     return True
 
 
@@ -407,8 +409,9 @@ def admin_inspect(
 
 def requeue_ready(repo: str, number: int) -> None:
     common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:done"], check=False)
+    common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:pr-open"], check=False)
     common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:failed"], check=False)
-    common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:ready"])
+    common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:ready"], retries=3)
 
 
 def maybe_dispatch_deploy_candidate(repo: str, issue: dict, args: argparse.Namespace) -> None:

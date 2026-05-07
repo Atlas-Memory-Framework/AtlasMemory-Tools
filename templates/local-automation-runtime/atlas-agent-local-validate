@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Run deterministic local validation for a no-check local-agent PR."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+from pathlib import Path
+
+import atlas_agent_common as common
+
+
+LABELS = {
+    "agent:local-validation-required": "FBCA04",
+    "agent:local-validation-passed": "0E8A16",
+    "agent:local-validation-failed": "D93F0B",
+    "agent:needs-repair": "D93F0B",
+}
+
+COMMENT_MARKER = "<!-- atlas-agent-local-validation -->"
+
+
+def ensure_labels(repo: str) -> None:
+    for label, color in LABELS.items():
+        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+
+
+def pr_json(repo: str, number: int) -> dict:
+    return common.gh_json(
+        [
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,url,headRefName,baseRefName,headRefOid,statusCheckRollup,labels",
+        ],
+        retries=2,
+    )
+
+
+def configured_commands(repo: str, path: str | None) -> list[str]:
+    config_path = Path(path) if path else common.RUNTIME_DIR / "local-validation.json"
+    if not config_path.exists():
+        return []
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    commands = data.get(repo) or data.get("*") or []
+    return [str(command) for command in commands if str(command).strip()]
+
+
+def inferred_commands(worktree: Path) -> list[str]:
+    if (worktree / "pyproject.toml").exists() or (worktree / "tests").exists() or (worktree / "src").exists():
+        return ["python3 -m compileall -q ."]
+    return []
+
+
+def validation_commands(repo: str, worktree: Path, config_path: str | None) -> list[str]:
+    return configured_commands(repo, config_path) or inferred_commands(worktree)
+
+
+def clean_worktree(repo: str, pr: dict, job_dir: Path) -> Path:
+    repo_path = common.ensure_repo(repo)
+    safe_repo = repo.replace("/", "__")
+    worktree = common.jobs_dir() / "checkouts" / safe_repo / f"pr-{pr['number']}-validate-{common.now_id()}"
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    number = int(pr["number"])
+    pr_ref = f"refs/remotes/origin/pr/{number}"
+    fetch = common.run(["git", "fetch", "origin", f"+refs/pull/{number}/head:{pr_ref}"], cwd=repo_path, check=False)
+    ref = pr_ref if fetch.returncode == 0 else f"origin/{pr['headRefName']}"
+    common.run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_path)
+    (job_dir / "worktree.txt").write_text(str(worktree) + "\n", encoding="utf-8")
+    return worktree
+
+
+def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path) -> list[dict]:
+    results: list[dict] = []
+    with (job_dir / "commands.log").open("w", encoding="utf-8") as log:
+        for command in commands:
+            log.write("+ " + command + "\n")
+            log.flush()
+            proc = subprocess.run(
+                command,
+                cwd=str(worktree),
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            output = proc.stdout or ""
+            log.write(output)
+            if output and not output.endswith("\n"):
+                log.write("\n")
+            log.flush()
+            results.append({"command": command, "returncode": proc.returncode})
+            if proc.returncode != 0:
+                break
+    return results
+
+
+def apply_result(repo: str, number: int, passed: bool, job_dir: Path, head_oid: str) -> None:
+    ensure_labels(repo)
+    if passed:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:local-validation-required"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:local-validation-failed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:local-validation-passed"], retries=3)
+        result = "passed"
+    else:
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:local-validation-passed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:local-validation-failed"], retries=3)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:needs-repair"], retries=3)
+        result = "failed"
+    body = (
+        f"{COMMENT_MARKER}\n"
+        f"Local validation {result} for PR #{number}.\n\n"
+        f"Head: `{head_oid}`\n"
+        f"Result: {result}\n"
+        f"Artifacts: `{job_dir}`"
+    )
+    common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
+
+
+def validate(args: argparse.Namespace) -> int:
+    repo, number = common.pr_ref_parts(args.pr)
+    pr = pr_json(repo, number)
+    job_dir = common.jobs_dir() / f"pr-{number}-validate-{common.now_id()}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    common.write_json(job_dir / "pr.json", pr)
+    worktree = clean_worktree(repo, pr, job_dir)
+    commands = validation_commands(repo, worktree, args.commands_file)
+    if not commands:
+        common.write_json(job_dir / "validation.json", {"passed": False, "error": "no local validation commands configured"})
+        if args.apply:
+            apply_result(repo, number, False, job_dir, str(pr.get("headRefOid") or "unknown"))
+        print(f"No local validation commands configured. Artifacts: {job_dir}")
+        return 1
+    results = run_validation_commands(worktree, commands, job_dir)
+    passed = bool(results) and all(result["returncode"] == 0 for result in results)
+    common.write_json(job_dir / "validation.json", {"passed": passed, "results": results})
+    if args.apply:
+        apply_result(repo, number, passed, job_dir, str(pr.get("headRefOid") or "unknown"))
+    print(f"Local validation {'passed' if passed else 'failed'}. Artifacts: {job_dir}")
+    return 0 if passed else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pr", help="OWNER/REPO#PR_NUMBER")
+    parser.add_argument("--commands-file", help="JSON map of repo full name to shell commands.")
+    parser.add_argument("--apply", action="store_true", help="Apply local-validation labels/comments.")
+    args = parser.parse_args()
+    return validate(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

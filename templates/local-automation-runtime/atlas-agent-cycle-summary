@@ -36,7 +36,7 @@ def load_triage_blockers(chain_dir: Path, cycle: int) -> list[dict]:
     seen: set[str] = set()
     for path in sorted(chain_dir.glob(f"local-needs-human-summary-*-cycle-{cycle}.json")):
         data = read_json(path)
-        records = data.get("records") or data.get("issues") or []
+        records = data.get("records") or data.get("issues") or data.get("items") or []
         if isinstance(records, dict):
             records = list(records.values())
         for item in records if isinstance(records, list) else []:
@@ -48,6 +48,110 @@ def load_triage_blockers(chain_dir: Path, cycle: int) -> list[dict]:
             seen.add(key)
             blockers.append(item)
     return blockers
+
+
+def action_instruction(item: dict) -> str:
+    reasons = [str(reason) for reason in item.get("reasons") or []]
+    reason_text = " ".join(reasons).lower()
+    label = str(item.get("label") or "")
+    action = str(item.get("action") or "")
+    repo = item.get("repo") or "unknown repo"
+    number = item.get("number") or item.get("entity_id") or "?"
+
+    if label == "agent:manual-validation-required" or "manual or deployed validation required" in reason_text:
+        return (
+            f"Open {repo}#{number}, run the manual/deployed validation named by the PR or project gate, "
+            "record the evidence in a PR comment, then add `agent:manual-validation-approved`."
+        )
+    if label == "agent:local-validation-required" or "local validation required" in reason_text:
+        return (
+            f"Open {repo}#{number}; either configure `local-validation.json` for this repo/path or "
+            "run the local validation manually and add the passing evidence."
+        )
+    if label == "agent:needs-repair":
+        if "no checks reported" in reason_text:
+            return (
+                f"Open {repo}#{number}; make GitHub publish a check for this PR, or configure the repo's "
+                "local/docs-only validation path so review can approve it without CI."
+            )
+        return f"Open {repo}#{number}, inspect the review reasons, and repair the PR before rerunning automation."
+    if label == "agent:overlap-queued" or "queued behind overlapping pr" in reason_text:
+        return (
+            f"Open {repo}#{number}; merge or close the earlier overlapping PR named in the review reason, "
+            "then rerun the unattended cycle."
+        )
+    if "merge state is blocked" in reason_text:
+        return f"Open {repo}#{number}, resolve branch protection, conflicts, or required status checks blocking merge."
+    if "no checks reported" in reason_text:
+        return (
+            f"Open {repo}#{number}; trigger or add the expected GitHub check, or explicitly configure "
+            "local/docs-only validation for this repo."
+        )
+    if action == "blocked":
+        return f"Open {repo}#{number}, clear the listed finalizer blockers, then rerun automation."
+    return f"Inspect {repo}#{number} and complete the human action described in the linked issue or PR."
+
+
+def item_url(item: dict) -> str:
+    for key in ("url", "pr_url", "issue_url", "dashboard_url"):
+        value = str(item.get(key) or "")
+        if value.startswith("https://"):
+            return value
+    return ""
+
+
+def item_title(item: dict) -> str:
+    repo = item.get("repo") or "unknown repo"
+    number = item.get("number") or item.get("entity_id") or "?"
+    title = f"{repo}#{number}"
+    url = item_url(item)
+    return f"[{title}]({url})" if url else title
+
+
+def urgent_items(summary: dict) -> list[dict]:
+    items: list[dict] = []
+    for row in summary["build"]["results"]:
+        if row.get("status") == "failed":
+            items.append(
+                {
+                    "kind": "dispatch-failure",
+                    "title": row.get("repo"),
+                    "instruction": f"Inspect `{row.get('log_file')}` and fix the worker/runtime failure, then rerun automation.",
+                }
+            )
+    for item in summary["triage"]["blockers"]:
+        items.append(
+            {
+                "kind": "needs-human",
+                "title": item_title(item),
+                "instruction": action_instruction(item),
+            }
+        )
+    for item in summary["review"]["blocked"]:
+        items.append(
+            {
+                "kind": "review-blocked",
+                "title": item_title(item),
+                "instruction": action_instruction(item),
+            }
+        )
+    for item in summary["finalizer"]["blocked"]:
+        items.append(
+            {
+                "kind": "finalizer-blocked",
+                "title": item_title(item),
+                "instruction": action_instruction(item),
+            }
+        )
+    deduped: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        key = (str(item.get("title")), str(item.get("instruction")))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped[:12]
 
 
 def load_finalizer(chain_dir: Path, cycle: int) -> list[dict]:
@@ -135,6 +239,26 @@ def message_card(summary: dict) -> dict:
     }
 
 
+def urgent_message_card(summary: dict) -> dict:
+    items = urgent_items(summary)
+    lines = [
+        f"**Chain:** `{summary['chain_id']}` cycle `{summary['cycle']}`",
+        f"**State:** `{summary['chain_dir']}`",
+        "",
+        "**Automation is blocked and needs human action. Do these in order:**",
+    ]
+    for idx, item in enumerate(items, start=1):
+        lines.append(f"{idx}. **{item.get('title')}** - {item.get('instruction')}")
+    return {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "themeColor": "D13438",
+        "summary": f"Atlas local-agent blocked {summary['chain_id']}:{summary['cycle']}",
+        "title": "URGENT: Atlas automation blocked",
+        "text": "\n\n".join(lines),
+    }
+
+
 def post_teams(payload: dict, webhook: str) -> int:
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(webhook, data=data, headers={"Content-Type": "application/json"}, method="POST")
@@ -155,11 +279,18 @@ def main() -> int:
     if args.post_teams:
         cfg = common.read_config()
         webhook = os.environ.get("TEAMS_DAILY_DIGEST_WEBHOOK_URL") or cfg.get("TEAMS_DAILY_DIGEST_WEBHOOK_URL")
-        if not webhook:
+        if webhook:
+            status = post_teams(message_card(summary), webhook)
+            print(f"Teams cycle summary accepted with HTTP {status}.", flush=True)
+        else:
             print("No Teams cycle-summary webhook configured.", flush=True)
-            return 0
-        status = post_teams(message_card(summary), webhook)
-        print(f"Teams cycle summary accepted with HTTP {status}.", flush=True)
+        urgent = urgent_items(summary)
+        urgent_webhook = os.environ.get("TEAMS_URGENT_WEBHOOK_URL") or cfg.get("TEAMS_URGENT_WEBHOOK_URL")
+        if urgent and urgent_webhook:
+            status = post_teams(urgent_message_card(summary), urgent_webhook)
+            print(f"Teams urgent blocker notification accepted with HTTP {status}.", flush=True)
+        elif urgent:
+            print("Automation is blocked, but no TEAMS_URGENT_WEBHOOK_URL is configured.", flush=True)
     return 0
 
 

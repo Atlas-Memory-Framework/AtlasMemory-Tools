@@ -1,0 +1,5 @@
+{
+  "Atlas-Memory-Framework/Atlas-Memory-Chainlit": [
+    "gh pr checks \"$PR_NUMBER\" --repo \"$REPO\""
+  ]
+}

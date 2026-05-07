@@ -15,8 +15,10 @@ import atlas_agent_common as common
 
 PR_VIEW_FIELDS = (
     "number,title,state,isDraft,url,body,headRefName,baseRefName,"
-    "headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,labels"
+    "headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,labels,comments"
 )
+LOCAL_VALIDATION_PASSED_LABEL = "agent:local-validation-passed"
+LOCAL_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-local-validation -->"
 
 
 @dataclass
@@ -103,6 +105,23 @@ def label_names(pr: dict[str, Any]) -> set[str]:
     return names
 
 
+def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
+    if LOCAL_VALIDATION_PASSED_LABEL not in label_names(pr):
+        return False
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return False
+    for comment in pr.get("comments") or []:
+        body = str(comment.get("body") or "")
+        if LOCAL_VALIDATION_COMMENT_MARKER not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        if re.search(r"(?im)^\s*Result:\s*passed\s*$", body):
+            return True
+    return False
+
+
 def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = None) -> tuple[str, list[str]]:
     checks = pr.get("statusCheckRollup") or []
     if not checks:
@@ -160,6 +179,18 @@ def issue_view(repo: str, number: int) -> dict[str, Any] | None:
     )
 
 
+def is_non_execution_issue(issue: dict[str, Any]) -> bool:
+    labels = common.label_names(issue)
+    title = str(issue.get("title") or "")
+    body = str(issue.get("body") or "").lower()
+    return (
+        bool(labels & {"type:epic", "type:tracker", "tracking-only"})
+        or title.startswith("[Epic]")
+        or title.startswith("[Tracker]")
+        or "dispatch recommendation: `tracking-only`" in body
+    )
+
+
 def issue_dependency_reasons(repo: str, issue_number: int | None, *, check_dependencies: bool) -> list[str]:
     if not check_dependencies or issue_number is None:
         return []
@@ -168,6 +199,20 @@ def issue_dependency_reasons(repo: str, issue_number: int | None, *, check_depen
         return [f"linked issue #{issue_number} could not be verified"]
     blockers = common.issue_dependency_blockers(repo, issue)
     return [f"dependency blocked: {blocker}" for blocker in blockers]
+
+
+def issue_guard_reasons(repo: str, issue_number: int | None, *, check_dependencies: bool) -> list[str]:
+    if issue_number is None or not check_dependencies:
+        return []
+    issue = issue_view(repo, issue_number)
+    if not issue:
+        return [f"linked issue #{issue_number} could not be verified"]
+    reasons: list[str] = []
+    if is_non_execution_issue(issue):
+        reasons.append("linked issue is an epic/tracker/non-execution issue")
+    blockers = common.issue_dependency_blockers(repo, issue)
+    reasons.extend(f"dependency blocked: {blocker}" for blocker in blockers)
+    return reasons
 
 
 def required_checks(repo: str, config_path: str | None) -> list[str]:
@@ -186,9 +231,11 @@ def decide(
 ) -> FinalizeDecision:
     reasons: list[str] = []
     issue_number = linked_issue_number(pr)
+    labels = label_names(pr)
+    no_check_local_validated = False
     if not issue_number:
         reasons.append("missing linked issue")
-    if require_review_label and require_review_label not in label_names(pr):
+    if require_review_label and require_review_label not in labels:
         reasons.append(f"review-label missing: {require_review_label}")
     if pr.get("state") != "OPEN":
         reasons.append(f"state is {pr.get('state')}")
@@ -199,13 +246,27 @@ def decide(
     if mergeable and mergeable not in {"MERGEABLE", "UNKNOWN"}:
         reasons.append(f"mergeable is {mergeable}")
     check_state, check_details = check_rollup_state(pr, required_check_names)
-    if check_state == "none" and not allow_no_checks:
-        reasons.append("no checks reported")
+    if check_state == "none":
+        if not required_check_names and local_validation_passed_for_head(pr):
+            no_check_local_validated = True
+        elif allow_no_checks and not merge:
+            pass
+        else:
+            if not required_check_names and LOCAL_VALIDATION_PASSED_LABEL in labels:
+                reasons.append("local validation pass missing for current head")
+            else:
+                reasons.append("no checks reported")
     elif check_state in {"failed", "pending"}:
         reasons.append(f"checks {check_state}: {', '.join(check_details[:5])}")
-    reasons.extend(issue_dependency_reasons(repo, issue_number, check_dependencies=check_dependencies))
+    reasons.extend(issue_guard_reasons(repo, issue_number, check_dependencies=check_dependencies))
     if reasons:
         action = "blocked"
+    elif no_check_local_validated and merge:
+        if pr.get("isDraft"):
+            action = "ready"
+        else:
+            action = "blocked"
+            reasons.append("no GitHub checks reported; local validation passed but unattended merge requires GitHub checks")
     elif pr.get("isDraft"):
         action = "ready" if not merge else "ready_then_merge"
     elif merge:
@@ -234,6 +295,11 @@ def merge_pr(repo: str, number: int, *, method: str) -> None:
 def close_issue(repo: str, number: int, pr_number: int) -> None:
     body = f"Local agent finalizer merged PR #{pr_number} and resolved this issue."
     common.run(["gh", "issue", "close", str(number), "--repo", repo, "--comment", body], check=False)
+
+
+def can_close_linked_issue(repo: str, number: int, *, check_dependencies: bool) -> tuple[bool, list[str]]:
+    reasons = issue_guard_reasons(repo, number, check_dependencies=check_dependencies)
+    return not reasons, reasons
 
 
 def revalidated_merge_decision(
@@ -300,7 +366,18 @@ def finalize_decision(
             return
         merge_pr(refreshed.repo, refreshed.number, method=merge_method)
         if close_issues and refreshed.issue_number is not None:
-            close_issue(refreshed.repo, refreshed.issue_number, refreshed.number)
+            can_close, close_reasons = can_close_linked_issue(
+                refreshed.repo,
+                refreshed.issue_number,
+                check_dependencies=check_dependencies,
+            )
+            if can_close:
+                close_issue(refreshed.repo, refreshed.issue_number, refreshed.number)
+            else:
+                print(
+                    f"SKIP CLOSE {refreshed.repo}#{refreshed.issue_number}: {', '.join(close_reasons)}",
+                    flush=True,
+                )
 
 
 def scan(args: argparse.Namespace) -> list[FinalizeDecision]:
