@@ -173,9 +173,12 @@ class RuntimeTemplateTests(unittest.TestCase):
             "atlas-agent-reconcile",
             "atlas-agent-project-reconcile",
             "atlas-agent-review",
+            "atlas-agent-semantic-review",
             "atlas-agent-finalize",
             "atlas-agent-local-validate",
             "atlas-agent-deployed-validate",
+            "atlas-agent-worker",
+            "atlas-agent-cycle-summary",
             "atlas_agent_common.py",
         ):
             self.assertEqual(

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -69,7 +71,161 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decision.label, "agent:review-approved")
 
-    def test_review_blocks_no_check_pr_for_repair(self) -> None:
+    def test_review_requested_changes_blocks_for_repair(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(reviewDecision="CHANGES_REQUESTED", latestReviews=[{"state": "CHANGES_REQUESTED"}]),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+        )
+
+        self.assertEqual(decision.label, "agent:needs-repair")
+        self.assertIn("review changes requested", decision.reasons)
+
+    def test_review_requires_current_semantic_review_when_enabled(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        self.assertEqual(decision.label, "agent:semantic-review-required")
+        self.assertIn("semantic review required for current head", decision.reasons)
+
+    def test_review_accepts_current_semantic_review_pass(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-semantic-review -->\nHead: `abc123`\nResult: passed",
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+        self.assertIn("semantic review passed for current head", decision.reasons)
+
+    def test_review_blocks_current_semantic_review_failure(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-semantic-review -->\nHead: `abc123`\nResult: failed",
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        self.assertEqual(decision.label, "agent:needs-repair")
+        self.assertIn("semantic review failed for current head", decision.reasons)
+
+    def test_semantic_scope_gap_is_not_current_repo_repairable(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                comments=[
+                    {
+                        "body": (
+                            "<!-- atlas-agent-semantic-review -->\n"
+                            "Head: `abc123`\n"
+                            "Result: failed\n"
+                            "Blocking Findings:\n"
+                            "- Missing Admin UI parity for the target repo.\n"
+                            "- Missing deployed validation evidence.\n"
+                        ),
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        blocker_types = self.review.blocker_types_for(decision.label, decision.reasons)
+        self.assertEqual(decision.label, "agent:needs-repair")
+        self.assertIn("semantic review failed: cross-repo scope gap", decision.reasons)
+        self.assertIn("semantic review failed: deployed validation evidence missing", decision.reasons)
+        self.assertEqual(self.review.route_for_decision(decision), "human")
+        self.assertEqual(self.review.repair_scope_for(blocker_types), "cross-repo")
+        self.assertFalse(self.review.repairable_for(blocker_types))
+
+    def test_semantic_failure_overrides_manual_validation_wait(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-semantic-review -->\nHead: `abc123`\nResult: failed",
+                    }
+                ],
+            ),
+            issue=issue(body="Validation scope: deployed"),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        self.assertEqual(decision.label, "agent:needs-repair")
+        self.assertIn("manual or deployed validation required", decision.reasons)
+        self.assertIn("semantic review failed for current head", decision.reasons)
+
+    def test_review_uses_latest_current_head_semantic_review_comment(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-semantic-review -->\nHead: `abc123`\nResult: failed",
+                    },
+                    {
+                        "body": "<!-- atlas-agent-semantic-review -->\nHead: `abc123`\nResult: passed",
+                    },
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+        self.assertIn("semantic review passed for current head", decision.reasons)
+
+    def test_review_ignores_stale_semantic_review_pass(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-semantic-review -->\nHead: `oldsha`\nResult: passed",
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+            require_semantic_review=True,
+        )
+
+        self.assertEqual(decision.label, "agent:semantic-review-required")
+
+    def test_review_routes_required_no_check_pr_to_local_validation(self) -> None:
         decision = self.review.classify(
             "owner/repo",
             pr(statusCheckRollup=[]),
@@ -78,8 +234,8 @@ class ReviewAgentTests(unittest.TestCase):
             required_checks=["ci"],
         )
 
-        self.assertEqual(decision.label, "agent:needs-repair")
-        self.assertIn("no checks reported", decision.reasons)
+        self.assertEqual(decision.label, "agent:local-validation-required")
+        self.assertIn("no checks reported; local validation required", decision.reasons)
 
     def test_review_requires_local_validation_for_no_check_pr_without_required_checks(self) -> None:
         decision = self.review.classify(
@@ -106,6 +262,28 @@ class ReviewAgentTests(unittest.TestCase):
             ),
             issue=issue(),
             files=["src/app.py"],
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+        self.assertIn("local validation passed with no GitHub checks", decision.reasons)
+
+    def test_review_accepts_draft_blocked_after_current_local_validation_pass(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                isDraft=True,
+                mergeStateStatus="BLOCKED",
+                statusCheckRollup=[],
+                labels=[{"name": "agent:local-validation-passed"}],
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-local-validation -->\nHead: `abc123`\nResult: passed",
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["ci"],
         )
 
         self.assertEqual(decision.label, "agent:review-approved")
@@ -163,8 +341,9 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decision.label, "agent:overlap-queued")
         self.assertIn("overlaps open local-agent PRs: #8", decision.reasons)
+        self.assertEqual(self.review.route_for_decision(decision), "wait")
 
-    def test_manual_validation_waits_for_repair_blockers(self) -> None:
+    def test_manual_validation_no_check_routes_to_deployed_validation(self) -> None:
         decision = self.review.classify(
             "owner/repo",
             pr(statusCheckRollup=[]),
@@ -173,9 +352,8 @@ class ReviewAgentTests(unittest.TestCase):
             required_checks=["ci"],
         )
 
-        self.assertEqual(decision.label, "agent:needs-repair")
-        self.assertIn("no checks reported", decision.reasons)
-        self.assertIn("manual/deployed validation pending after repair", decision.reasons)
+        self.assertEqual(decision.label, "agent:manual-validation-required")
+        self.assertIn("manual or deployed validation required", decision.reasons)
 
     def test_review_marks_duplicate_as_superseded(self) -> None:
         decision = self.review.classify(
@@ -252,6 +430,68 @@ class ReviewAgentTests(unittest.TestCase):
             calls,
         )
 
+    def test_review_comment_includes_files_and_next_action(self) -> None:
+        body = self.review.review_comment_body(
+            self.review.ReviewDecision(
+                repo="owner/repo",
+                number=7,
+                title="agent: #7 Add route",
+                url="https://example.invalid/pr/7",
+                issue_number=7,
+                label="agent:manual-validation-required",
+                reasons=["manual or deployed validation required"],
+                files=["src/workflows.py", "tests/test_workflows.py"],
+            )
+        )
+
+        self.assertIn("Automated Review Decision", body)
+        self.assertIn("`src/workflows.py`", body)
+        self.assertIn("agent:manual-validation-approved", body)
+        self.assertIn("Finalization requires `agent:review-approved`", body)
+
+    def test_review_comment_includes_semantic_next_action(self) -> None:
+        body = self.review.review_comment_body(
+            self.review.ReviewDecision(
+                repo="owner/repo",
+                number=7,
+                title="agent: #7 Add route",
+                url="https://example.invalid/pr/7",
+                issue_number=7,
+                label="agent:semantic-review-required",
+                reasons=["semantic review required for current head"],
+                files=["src/workflows.py"],
+            )
+        )
+
+        self.assertIn("atlas-agent-semantic-review OWNER/REPO#PR --apply", body)
+
+    def test_write_summary_includes_route_and_repair_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "review.json"
+            self.review.write_summary(
+                str(path),
+                [
+                    self.review.ReviewDecision(
+                        repo="owner/repo",
+                        number=7,
+                        title="agent: #7 Add route",
+                        url="https://example.invalid/pr/7",
+                        issue_number=7,
+                        label="agent:needs-repair",
+                        reasons=["semantic review failed for current head"],
+                        files=["src/workflows.py"],
+                    )
+                ],
+            )
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        decision = payload["decisions"][0]
+        self.assertEqual(decision["route"], "repair")
+        self.assertEqual(decision["repair_scope"], "current-repo")
+        self.assertTrue(decision["repairable"])
+        self.assertIn("semantic_scope_repair", decision["blocker_types"])
+
     def test_overlap_frontier_approves_only_one_green_pr(self) -> None:
         decisions = [
             self.review.ReviewDecision("owner/repo", 7, "agent: address issue #7", "url", 7, "agent:review-approved", ["green"], ["src/app.py"]),
@@ -282,6 +522,7 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decisions[0].label, "agent:needs-repair")
         self.assertEqual(decisions[1].label, "agent:review-approved")
+
 
 if __name__ == "__main__":
     unittest.main()

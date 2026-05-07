@@ -14,7 +14,8 @@ import atlas_agent_common as common
 
 PR_VIEW_FIELDS = (
     "number,title,state,isDraft,url,body,headRefName,baseRefName,"
-    "headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels,comments"
+    "headRefOid,mergeable,mergeStateStatus,statusCheckRollup,labels,comments,"
+    "reviewDecision,latestReviews"
 )
 
 REVIEW_LABELS = {
@@ -24,9 +25,12 @@ REVIEW_LABELS = {
     "agent:manual-validation-required": "B60205",
     "agent:overlap-queued": "1D76DB",
     "agent:local-validation-required": "FBCA04",
+    "agent:semantic-review-required": "5319E7",
 }
 REVIEW_AUX_LABELS = {
     "agent:manual-validation-approved": "0E8A16",
+    "agent:semantic-review-passed": "0E8A16",
+    "agent:semantic-review-failed": "D93F0B",
 }
 APPROVED_LABEL = "agent:review-approved"
 NEEDS_REPAIR_LABEL = "agent:needs-repair"
@@ -37,6 +41,13 @@ OVERLAP_LABEL = "agent:overlap-queued"
 LOCAL_VALIDATION_REQUIRED_LABEL = "agent:local-validation-required"
 LOCAL_VALIDATION_PASSED_LABEL = "agent:local-validation-passed"
 LOCAL_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-local-validation -->"
+DEPLOYED_VALIDATION_PASSED_LABEL = "agent:deployed-validation-passed"
+DEPLOYED_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-deployed-validation -->"
+SEMANTIC_REVIEW_REQUIRED_LABEL = "agent:semantic-review-required"
+SEMANTIC_REVIEW_PASSED_LABEL = "agent:semantic-review-passed"
+SEMANTIC_REVIEW_FAILED_LABEL = "agent:semantic-review-failed"
+SEMANTIC_REVIEW_COMMENT_MARKER = "<!-- atlas-agent-semantic-review -->"
+CURRENT_REPO_REPAIR_TYPES = {"code_repair", "semantic_scope_repair", "requested_changes", "merge_repair"}
 
 
 @dataclass
@@ -173,7 +184,7 @@ def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
     head_oid = str(pr.get("headRefOid") or "").strip()
     if not head_oid:
         return False
-    for comment in pr.get("comments") or []:
+    for comment in reversed(pr.get("comments") or []):
         body = str(comment.get("body") or "")
         if LOCAL_VALIDATION_COMMENT_MARKER not in body:
             continue
@@ -182,6 +193,72 @@ def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
         if re.search(r"(?im)^\s*Result:\s*passed\s*$", body):
             return True
     return False
+
+
+def deployed_validation_passed_for_head(pr: dict[str, Any]) -> bool:
+    if DEPLOYED_VALIDATION_PASSED_LABEL not in common.label_names(pr):
+        return False
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return False
+    for comment in reversed(pr.get("comments") or []):
+        body = str(comment.get("body") or "")
+        if DEPLOYED_VALIDATION_COMMENT_MARKER not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        if re.search(r"(?im)^\s*Result:\s*passed\s*$", body):
+            return True
+    return False
+
+
+def semantic_review_state_for_head(pr: dict[str, Any]) -> str:
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return "missing"
+    for comment in reversed(pr.get("comments") or []):
+        body = str(comment.get("body") or "")
+        if SEMANTIC_REVIEW_COMMENT_MARKER not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        if re.search(r"(?im)^\s*Result:\s*(pass|passed)\s*$", body):
+            return "passed"
+        if re.search(r"(?im)^\s*Result:\s*(fail|failed)\s*$", body):
+            return "failed"
+        if re.search(r"(?im)^\s*Result:\s*(needs-human|needs_human|blocked)\s*$", body):
+            return "needs-human"
+    return "missing"
+
+
+def semantic_review_body_for_head(pr: dict[str, Any]) -> str:
+    head_oid = str(pr.get("headRefOid") or "").strip()
+    if not head_oid:
+        return ""
+    for comment in reversed(pr.get("comments") or []):
+        body = str(comment.get("body") or "")
+        if SEMANTIC_REVIEW_COMMENT_MARKER not in body:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", body):
+            continue
+        return body
+    return ""
+
+
+def semantic_failure_reasons_for_head(pr: dict[str, Any]) -> list[str]:
+    body = semantic_review_body_for_head(pr).lower()
+    if not body:
+        return ["semantic review failed for current head"]
+    reasons: list[str] = []
+    if any(token in body for token in ("admin ui", "admin-ui", "target repo", "target repo(s)", "cross-repo", "cross repo")):
+        reasons.append("semantic review failed: cross-repo scope gap")
+    if any(token in body for token in ("deployed validation", "hosted walkthrough", "apim", "manual/deployed validation")):
+        reasons.append("semantic review failed: deployed validation evidence missing")
+    if any(token in body for token in ("missing test", "tests do not cover", "insufficient test", "coverage")):
+        reasons.append("semantic review failed: test coverage missing")
+    if not reasons:
+        reasons.append("semantic review failed for current head")
+    return reasons
 
 
 def issue_has_manual_validation(issue: dict[str, Any] | None) -> bool:
@@ -205,7 +282,111 @@ def manual_validation_approved(pr: dict[str, Any], issue: dict[str, Any] | None)
     labels = common.label_names(pr)
     if issue:
         labels |= common.label_names(issue)
+    if DEPLOYED_VALIDATION_PASSED_LABEL in labels:
+        return deployed_validation_passed_for_head(pr)
     return MANUAL_APPROVED_LABEL in labels
+
+
+def review_changes_requested(pr: dict[str, Any]) -> bool:
+    decision = str(pr.get("reviewDecision") or "").upper()
+    if decision == "CHANGES_REQUESTED":
+        return True
+    for review in pr.get("latestReviews") or []:
+        state = str(review.get("state") or "").upper()
+        if state in {"CHANGES_REQUESTED", "REQUEST_CHANGES"}:
+            return True
+    return False
+
+
+def blocker_types_for(label: str, reasons: list[str]) -> list[str]:
+    if label == APPROVED_LABEL:
+        return []
+    types: set[str] = set()
+    reason_text = " ".join(reasons).lower()
+    if label == LOCAL_VALIDATION_REQUIRED_LABEL or "local validation required" in reason_text:
+        types.add("local_validation")
+    if label == MANUAL_LABEL or "manual or deployed validation required" in reason_text:
+        types.add("deployed_validation")
+    if label == SEMANTIC_REVIEW_REQUIRED_LABEL or "semantic review required" in reason_text or "semantic review needs human" in reason_text:
+        types.add("semantic_review")
+    if "semantic review failed for current head" in reason_text:
+        types.add("semantic_scope_repair")
+    if "semantic review failed: cross-repo scope gap" in reason_text:
+        types.add("cross_repo_scope")
+    if "semantic review failed: deployed validation evidence missing" in reason_text:
+        types.add("deployed_validation")
+    if "semantic review failed: test coverage missing" in reason_text:
+        types.add("code_repair")
+    if "review changes requested" in reason_text:
+        types.add("requested_changes")
+    if "checks failed:" in reason_text:
+        types.add("code_repair")
+    if "checks pending:" in reason_text:
+        types.add("check_wait")
+    if "merge state is" in reason_text or "mergeable is" in reason_text:
+        types.add("merge_repair")
+    if "missing linked issue" in reason_text or "could not be verified" in reason_text:
+        types.add("metadata_blocker")
+    if "dependency blocked:" in reason_text:
+        types.add("dependency_blocker")
+    if label == OVERLAP_LABEL or "queued behind overlapping pr" in reason_text or "overlaps open local-agent prs" in reason_text:
+        types.add("overlap_wait")
+    if label == SUPERSEDED_LABEL:
+        types.add("superseded")
+    if not types:
+        types.add("human_decision")
+    return sorted(types)
+
+
+def repair_scope_for(blocker_types: list[str]) -> str:
+    blockers = set(blocker_types)
+    if "cross_repo_scope" in blockers:
+        return "cross-repo"
+    if blockers & {"dependency_blocker", "metadata_blocker"}:
+        return "metadata"
+    if blockers & {"deployed_validation", "local_validation"} and not blockers & CURRENT_REPO_REPAIR_TYPES:
+        return "validation"
+    if blockers & {"overlap_wait", "check_wait", "semantic_review", "superseded"}:
+        return "state"
+    if blockers & CURRENT_REPO_REPAIR_TYPES:
+        return "current-repo"
+    return "human"
+
+
+def repairable_for(blocker_types: list[str]) -> bool:
+    blockers = set(blocker_types)
+    return "cross_repo_scope" not in blockers and bool(blockers & CURRENT_REPO_REPAIR_TYPES) and repair_scope_for(blocker_types) == "current-repo"
+
+
+def route_for(label: str, reasons: list[str]) -> str:
+    blocker_types = blocker_types_for(label, reasons)
+    if label == APPROVED_LABEL:
+        return "approved"
+    if label == LOCAL_VALIDATION_REQUIRED_LABEL:
+        return "local-validate"
+    if label == MANUAL_LABEL:
+        return "deployed-validate"
+    if label == SEMANTIC_REVIEW_REQUIRED_LABEL:
+        return "semantic-review"
+    if label == OVERLAP_LABEL:
+        return "wait"
+    if label == SUPERSEDED_LABEL:
+        return "terminal"
+    if repairable_for(blocker_types):
+        return "repair"
+    if "cross_repo_scope" in blocker_types:
+        return "human"
+    if "deployed_validation" in blocker_types:
+        return "deployed-validate"
+    if "local_validation" in blocker_types:
+        return "local-validate"
+    if "check_wait" in blocker_types:
+        return "wait"
+    return "human"
+
+
+def route_for_decision(decision: ReviewDecision) -> str:
+    return route_for(decision.label, decision.reasons)
 
 
 def has_superseded_signal(pr: dict[str, Any], issue: dict[str, Any] | None) -> bool:
@@ -315,11 +496,14 @@ def classify(
     required_checks: list[str] | None = None,
     check_dependencies: bool = True,
     allow_no_checks: bool = False,
+    require_semantic_review: bool = False,
 ) -> ReviewDecision:
     reasons: list[str] = []
     issue_number = linked_issue_number(pr)
     label = APPROVED_LABEL
     labels = common.label_names(pr)
+    manual_validation = issue_has_manual_validation(issue)
+    manual_approved = manual_validation_approved(pr, issue)
     if not issue_number:
         label = NEEDS_REPAIR_LABEL
         reasons.append("missing linked issue")
@@ -329,8 +513,9 @@ def classify(
     if str(pr.get("state") or "") != "OPEN":
         label = NEEDS_REPAIR_LABEL
         reasons.append(f"state is {pr.get('state')}")
+    is_draft = bool(pr.get("isDraft"))
     merge_state = str(pr.get("mergeStateStatus") or "")
-    if merge_state and merge_state not in {"CLEAN", "HAS_HOOKS", "UNKNOWN"}:
+    if merge_state and merge_state not in {"CLEAN", "HAS_HOOKS", "UNKNOWN"} and not (is_draft and merge_state == "BLOCKED"):
         label = NEEDS_REPAIR_LABEL
         reasons.append(f"merge state is {merge_state}")
     mergeable = str(pr.get("mergeable") or "")
@@ -339,11 +524,17 @@ def classify(
         reasons.append(f"mergeable is {mergeable}")
     check_state, check_details = check_rollup_state(pr, required_checks)
     if check_state == "none":
-        if required_checks:
-            label = NEEDS_REPAIR_LABEL
-            reasons.append("no checks reported")
-        elif local_validation_passed_for_head(pr):
+        if local_validation_passed_for_head(pr):
             reasons.append("local validation passed with no GitHub checks")
+        elif manual_validation:
+            if manual_approved:
+                reasons.append("manual or deployed validation approved with no GitHub checks")
+            else:
+                label = MANUAL_LABEL
+                reasons.append("manual or deployed validation required")
+        elif required_checks:
+            label = LOCAL_VALIDATION_REQUIRED_LABEL
+            reasons.append("no checks reported; local validation required")
         else:
             label = LOCAL_VALIDATION_REQUIRED_LABEL
             if LOCAL_VALIDATION_PASSED_LABEL in labels:
@@ -358,9 +549,10 @@ def classify(
         if blockers:
             label = NEEDS_REPAIR_LABEL
             reasons.extend(f"dependency blocked: {blocker}" for blocker in blockers)
+    if review_changes_requested(pr):
+        label = NEEDS_REPAIR_LABEL
+        reasons.append("review changes requested")
     superseded = has_superseded_signal(pr, issue) or duplicate_issue
-    manual_validation = issue_has_manual_validation(issue)
-    manual_approved = manual_validation_approved(pr, issue)
     if superseded:
         label = SUPERSEDED_LABEL
         if duplicate_issue:
@@ -372,13 +564,30 @@ def classify(
         label = OVERLAP_LABEL if label in {APPROVED_LABEL, MANUAL_LABEL} else label
         reasons.append("overlaps open local-agent PRs: " + ", ".join(f"#{n}" for n in overlaps))
     if manual_validation and label != SUPERSEDED_LABEL:
-        if label == APPROVED_LABEL and manual_approved:
+        if "manual or deployed validation approved with no GitHub checks" in reasons:
+            pass
+        elif label == APPROVED_LABEL and manual_approved:
             reasons.append("manual or deployed validation approved")
+        elif "manual or deployed validation required" in reasons:
+            pass
         elif label == APPROVED_LABEL:
             label = MANUAL_LABEL
             reasons.append("manual or deployed validation required")
         else:
             reasons.append("manual/deployed validation pending after repair")
+    if require_semantic_review and label in {APPROVED_LABEL, MANUAL_LABEL}:
+        semantic_state = semantic_review_state_for_head(pr)
+        if semantic_state == "passed":
+            reasons.append("semantic review passed for current head")
+        elif semantic_state == "failed":
+            label = NEEDS_REPAIR_LABEL
+            reasons.extend(semantic_failure_reasons_for_head(pr))
+        elif semantic_state == "needs-human" and label == APPROVED_LABEL:
+            label = SEMANTIC_REVIEW_REQUIRED_LABEL
+            reasons.append("semantic review needs human attention for current head")
+        elif semantic_state == "missing" and label == APPROVED_LABEL:
+            label = SEMANTIC_REVIEW_REQUIRED_LABEL
+            reasons.append("semantic review required for current head")
     if not reasons:
         reasons.append("green checks and no review blockers")
     return ReviewDecision(
@@ -394,11 +603,32 @@ def classify(
 
 
 def review_comment_body(decision: ReviewDecision) -> str:
+    files = "\n".join(f"- `{path}`" for path in decision.files[:20]) or "- none recorded"
+    blocker_types = blocker_types_for(decision.label, decision.reasons)
+    next_action = "No action required before finalizer review." if decision.label == APPROVED_LABEL else "Clear the reasons above, add validation evidence if missing, then rerun review."
+    if decision.label == MANUAL_LABEL:
+        next_action = "Run the required manual/deployed validation, comment with evidence, then add `agent:manual-validation-approved`."
+    elif decision.label == LOCAL_VALIDATION_REQUIRED_LABEL:
+        next_action = "Run configured local validation for this PR head; review will require current-head `agent:local-validation-passed` evidence."
+    elif decision.label == OVERLAP_LABEL:
+        next_action = "Wait for the earlier overlapping PR named in the reasons to merge or close, then rerun review."
+    elif decision.label == SEMANTIC_REVIEW_REQUIRED_LABEL:
+        next_action = "Run `atlas-agent-semantic-review OWNER/REPO#PR --apply`, address any findings, then rerun review."
     return (
         "<!-- atlas-agent-review -->\n"
-        f"Automated local review classified this PR as `{decision.label}`.\n\n"
+        f"## Automated Review Decision\n\n"
+        f"Classification: `{decision.label}`\n\n"
+        f"Route: `{route_for_decision(decision)}`\n"
+        f"Repair scope: `{repair_scope_for(blocker_types)}`\n\n"
         "Reasons:\n"
         + "\n".join(f"- {reason}" for reason in decision.reasons)
+        + "\n\nChanged files reviewed:\n"
+        + files
+        + "\n\nRequired next action:\n"
+        + f"- {next_action}\n\n"
+        "Review gate:\n"
+        "- Finalization requires `agent:review-approved`.\n"
+        "- Approval requires current validation evidence from GitHub checks, local validation, or an explicit manual/deployed validation approval.\n"
     )
 
 
@@ -493,6 +723,7 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
                     required_checks=common.required_checks_for_repo(repo, Path(args.required_checks_file) if args.required_checks_file else None),
                     check_dependencies=args.check_dependencies,
                     allow_no_checks=args.allow_no_checks,
+                    require_semantic_review=args.require_semantic_review,
                 )
             )
         if args.detect_overlap:
@@ -514,6 +745,10 @@ def write_summary(path: str, decisions: list[ReviewDecision]) -> None:
                     "url": decision.url,
                     "issue_number": decision.issue_number,
                     "label": decision.label,
+                    "route": route_for_decision(decision),
+                    "blocker_types": blocker_types_for(decision.label, decision.reasons),
+                    "repair_scope": repair_scope_for(blocker_types_for(decision.label, decision.reasons)),
+                    "repairable": repairable_for(blocker_types_for(decision.label, decision.reasons)),
                     "reasons": decision.reasons,
                     "files": decision.files,
                 }
@@ -531,6 +766,7 @@ def main() -> None:
     parser.add_argument("--allow-no-checks", action="store_true")
     parser.add_argument("--check-dependencies", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--detect-overlap", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--require-semantic-review", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--comment", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--summary", help="Write structured review decisions to this JSON path.")
