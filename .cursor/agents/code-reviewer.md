@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=agents/code-reviewer.md manifest=atlas-tools.v1 checksum=sha256:355c9f30acb5e79edcee5f6516297277ff66aaa34a5149055d685b11f4a81353
+# atlas-tools-generated-end
 name: code-reviewer
 description: Build-phase code review gate owner. Review changes for correctness, security, and regressions. Use after implementation tasks in /build.
 ---

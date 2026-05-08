@@ -70,6 +70,30 @@ def action_instruction(item: dict) -> str:
         )
     if label == "agent:semantic-review-required" or "semantic review required" in reason_text:
         return f"Run `./atlas-agent-semantic-review {repo}#{number} --apply`, address any findings, then rerun review."
+    if label == "agent:human-action-required" or "failed workflow classified: secret/config" in reason_text:
+        return (
+            f"Open {repo}#{number}, fix the missing secret/configuration blocker named in the failed-workflow review, "
+            "then rerun the failed GitHub workflow."
+        )
+    if "failed workflow classified: infra/env" in reason_text:
+        return (
+            f"Open {repo}#{number}, fix the Azure/environment blocker named in the failed-workflow review, "
+            "then rerun the failed GitHub workflow."
+        )
+    if "failed workflow classified: human-action" in reason_text:
+        return (
+            f"Open {repo}#{number}, complete the required GitHub/Azure approval or manual action, "
+            "then rerun the failed workflow."
+        )
+    if "failed workflow classified: dependency-blocked" in reason_text:
+        return (
+            f"Open {repo}#{number}, wait for or unblock the external dependency named in the failed-workflow review, "
+            "then rerun the failed workflow."
+        )
+    if "failed workflow classified: deployed-validation" in reason_text:
+        return f"Run `./atlas-agent-deployed-validate {repo}#{number} --apply`, then rerun review."
+    if "ci review required" in reason_text:
+        return f"Run `./atlas-agent-review --apply` so the failed workflow is reviewed on {repo}#{number} before any repair agent runs."
     if label == "agent:needs-repair":
         if "semantic review failed" in reason_text:
             return f"Open {repo}#{number}, address the semantic review blocking findings, run `./atlas-agent-semantic-review {repo}#{number} --apply`, then rerun review."
@@ -94,6 +118,17 @@ def action_instruction(item: dict) -> str:
     if action == "blocked":
         return f"Open {repo}#{number}, clear the listed finalizer blockers, then rerun automation."
     return f"Inspect {repo}#{number} and complete the human action described in the linked issue or PR."
+
+
+def failed_workflow_link(item: dict) -> str:
+    ci_review = item.get("ci_review") or {}
+    runs = ci_review.get("runs") or []
+    for run in runs:
+        url = str(run.get("url") or "")
+        name = str(run.get("name") or "failed workflow")
+        if url.startswith("https://"):
+            return f"[{name}]({url})"
+    return ""
 
 
 def item_url(item: dict) -> str:
@@ -132,11 +167,15 @@ def urgent_items(summary: dict) -> list[dict]:
             }
         )
     for item in summary["review"]["blocked"]:
+        instruction = action_instruction(item)
+        workflow = failed_workflow_link(item)
+        if workflow:
+            instruction = f"{instruction} Failed workflow: {workflow}."
         items.append(
             {
                 "kind": "review-blocked",
                 "title": item_title(item),
-                "instruction": action_instruction(item),
+                "instruction": instruction,
             }
         )
     for item in summary.get("automation", {}).get("failed_stages", []):
@@ -269,8 +308,8 @@ def message_card(summary: dict) -> dict:
         "@type": "MessageCard",
         "@context": "https://schema.org/extensions",
         "themeColor": theme,
-        "summary": f"Atlas local-agent cycle {summary['chain_id']}:{summary['cycle']}",
-        "title": "Atlas local-agent cycle summary",
+        "summary": f"Local automation cycle {summary['chain_id']}:{summary['cycle']}",
+        "title": "Local automation cycle summary",
         "text": "\n\n".join(lines),
     }
 
@@ -289,8 +328,8 @@ def urgent_message_card(summary: dict) -> dict:
         "@type": "MessageCard",
         "@context": "https://schema.org/extensions",
         "themeColor": "D13438",
-        "summary": f"Atlas local-agent blocked {summary['chain_id']}:{summary['cycle']}",
-        "title": "URGENT: Atlas automation blocked",
+        "summary": f"Local automation blocked {summary['chain_id']}:{summary['cycle']}",
+        "title": "URGENT: Local automation blocked",
         "text": "\n\n".join(lines),
     }
 

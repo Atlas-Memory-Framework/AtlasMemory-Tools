@@ -976,8 +976,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Apply GitHub Project status reconciliation. Defaults to enabled when --review-apply or --apply is used.",
     )
-    parser.add_argument("--project-owner", default="Atlas-Memory-Framework")
-    parser.add_argument("--project-number", type=int, default=2)
+    cfg = common.read_config()
+    parser.add_argument("--project-owner", default=cfg.get("AGENT_PROJECT_OWNER", "OWNER"))
+    parser.add_argument("--project-number", type=int, default=int(cfg.get("AGENT_PROJECT_NUMBER", "1")))
     parser.add_argument("--projects-file", help="Optional file of GitHub Project targets for project-reconcile.")
     parser.add_argument("--project-item-limit", type=int, default=100)
     parser.add_argument("--publish", action="store_true", help="Let dispatch workers publish draft PRs.")

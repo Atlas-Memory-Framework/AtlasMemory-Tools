@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,8 +14,8 @@ from typing import Any
 import atlas_agent_common as common
 
 
-DEFAULT_OWNER = "Atlas-Memory-Framework"
-DEFAULT_PROJECT_NUMBER = 2
+DEFAULT_OWNER = os.environ.get("AGENT_PROJECT_OWNER", "OWNER")
+DEFAULT_PROJECT_NUMBER = int(os.environ.get("AGENT_PROJECT_NUMBER", "1"))
 
 
 @dataclass

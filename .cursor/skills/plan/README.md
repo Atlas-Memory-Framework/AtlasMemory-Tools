@@ -1,3 +1,5 @@
+<!-- atlas-tools-generated: source=skills/plan/README.md manifest=atlas-tools.v1 checksum=sha256:606676fd8716ea1f061f45f4aba51cefa097364240d88878c35d53d846bc0db3 -->
+<!-- atlas-tools-generated-end -->
 # /plan skill — how we use it
 
 This directory contains the `/plan` **orchestrator** skill (`SKILL.md`) and the plan template it uses to create new plan artifacts (`reference.md`).
@@ -6,7 +8,7 @@ This README explains the *human workflow* for using `/plan` day-to-day.
 
 ## What `/plan` does
 
-`/plan` creates or updates a **single plan artifact** (a markdown file under `.cursor/plans/`) and moves it through:
+`/plan` creates or updates a **single plan artifact** (a markdown file in the active harness planning directory) and moves it through:
 
 - **Problem → Feature → Technical → Implementation → Reviews**
 
@@ -33,7 +35,7 @@ Authority model:
 In chat, reference the plan file:
 
 ```text
-@Atlat-Memory-Azure-Implmentation/.cursor/plans/my-plan.plan.md /plan continue
+@project/plans/my-plan.plan.md /plan continue
 ```
 
 ## Typical ways to use `/plan`
@@ -53,7 +55,7 @@ If no plan is referenced, `/plan` will create a new plan doc from `reference.md`
 ### 2) Continue an existing plan
 
 ```text
-@Atlat-Memory-Azure-Implmentation/.cursor/plans/<plan>.plan.md /plan continue
+@project/plans/<plan>.plan.md /plan continue
 ```
 
 `/plan` will:
@@ -142,4 +144,3 @@ Recommended pattern:
 - keep tracking metadata additive and optional
 - use the new `plan-to-issues` skill to preview or apply issue projections
 - avoid patching unstable plan drafts with issue links until the tracking objects actually exist
-

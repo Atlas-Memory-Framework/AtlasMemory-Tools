@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:8af5bff0bf4ab999bb668fe7eeec45f8ef31c753b79544dc90697edd24976e4a
+# atlas-tools-generated-end
 name: plan
 description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by Cursor) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
 ---
@@ -11,7 +13,7 @@ Create or update the current markdown plan artifact and move it through Problem,
 ## Core rules
 - The current markdown plan artifact is the planning write surface; do not assume a fixed filename.
 - **Artifact authority contract (required)**:
-  - `.cursor/plans/*.plan.md` is authoritative for authoring intent, rationale, and amendments.
+  - the selected harness-local plan artifact is authoritative for authoring intent, rationale, and amendments.
   - compiled registry YAML is authoritative for local planning structure, joins, validator inputs, and projection metadata after successful compile in `registry-first`.
   - GitHub issues and PRs are authoritative for execution state and mutation authority.
   - GitHub Projects v2 is downstream execution UI/signal only.

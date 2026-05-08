@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/review/SKILL.md manifest=atlas-tools.v1 checksum=sha256:ac08cb1427251bfff79795107713de3599dc6e5a1904e16e7b693eb1f458b702
+# atlas-tools-generated-end
 name: review
 description: Perform planning-phase document reviews for the current plan artifact. Use when running /review with mode=zero-context, mode=expert-tech, or mode=implementer-readiness.
 ---

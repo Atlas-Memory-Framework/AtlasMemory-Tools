@@ -1,50 +1,62 @@
-# AtlasMemory Cursor Tools
+# AtlasMemory Tools
 
-Reusable Cursor skills, agents, and local automation templates for planning and implementation.
+Harness-neutral planning, implementation, GitHub issue projection, and local automation runtime tools.
 
-Most of this repo lives in `.cursor/skills/` and `.cursor/agents/`.
-The host-side local Codex automation template lives in `templates/local-automation-runtime/`.
+Canonical source lives at the repository root:
+
+- `skills/`: reusable skills for planning, implementation, review, issue projection, and runtime operation
+- `agents/`: shared role documents for implementers and reviewers
+- `templates/local-automation-runtime/`: reusable local issue-to-PR automation runtime
+- `harnesses/`: install notes for Cursor, Codex, Gemini, and Claude
+- `manifests/atlas-tools.v1.json`: inventory used by installer and drift checks
+
+The `.cursor/` directory is kept for compatibility as generated output. Do not edit harness copies directly; update `skills/` or `agents/`, then regenerate.
 
 ## Install
 
-Copy `.cursor/` into the repo where you want to use these tools.
+Generate harness files into a target repository:
+
+```bash
+python3 scripts/install_harness.py --harness cursor --target /path/to/project
+python3 scripts/install_harness.py --harness codex --target /path/to/project
+python3 scripts/install_harness.py --harness gemini --target /path/to/project
+python3 scripts/install_harness.py --harness claude --target /path/to/project
+```
+
+Verify generated files have not drifted:
+
+```bash
+python3 scripts/verify_harness.py --target /path/to/project
+```
+
+## Verify
+
+Run the repository-level release/copy gates before publishing or copying this toolkit:
+
+```bash
+python3 scripts/verify_repo.py
+```
+
+For a raw filesystem copy, either copy from git/tracked files only or first run the strict local-artifact gate:
+
+```bash
+python3 scripts/verify_repo.py --skip-tests --strict-copy
+```
 
 ## Quick Start
 
-1. Run `/plan` with your feature idea (1-5 bullets).
-2. Keep going with the agent until the plan is complete.
-*Note: If context gets compressed, agent may forget the /plan skill and lose SSOT on the plan - just remind it.*
-3. Optional: Rerun with /plan for a more thorough analysis, tell it to focus on certain areas (technical, security), or some problem you know about related to the plan.
-4. Run `/implement` with plan file to execute the approved implementation plan.
-5. Run `/plan-to-issues` when an approved plan should be turned into GitHub-ready issue drafts.
+1. Use `plan` with a feature idea or existing plan file.
+2. Use `implement` with the approved plan.
+3. Use `plan-to-issues` when approved work should be projected into GitHub issues.
+4. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for local automation runtime lifecycle work.
 
-That is the core loop.
+For full planning details, see `skills/plan/README.md`.
 
-## How `/plan` works (simple version)
+## Examples
 
-- `/plan` always works on one plan document (SSOT).
-- If you reference a plan file with `@path`, that file is used.
-- If you do not reference a plan, `/plan` creates a new one.
-- Stages are: Problem -> Feature -> Technical -> Implementation -> Reviews.
-
-For full details, see `.cursor/skills/plan/README.md`.
-
-## Tips and Tricks
-
-- Keep prompts short: goal + constraints is usually enough.
-- When resuming work, reference the plan explicitly with `@path`.
-- If you change scope significantly, run `/plan` again before `/build`.
-- For faster dev-only work, use lighter rigor; for shared/prod work, use fuller reviews.
-- Treat review outputs as stale after material plan edits; refresh them.
-- If stuck, ask for one focused pass (for example: "security/privacy review only").
-
-## Repo Layout
-
-- `.cursor/skills/`: planning and implementation skills (`plan`, `plan-to-issues`, `implement`, `review`, etc.)
-- `.cursor/agents/`: specialist and reviewer agents
-- `templates/local-automation-runtime/`: reusable local issue-to-PR automation runtime
-- `specs/`: framework and skill specs
+- `examples/generic/`: placeholder-safe defaults for new projects
+- `examples/atlasmemory/`: AtlasMemory-specific runtime examples and branch/check/project names
 
 ## Visual
 
-![AtlasMemory Cursor Skills & Agents](./atlasmemory-cursor-skills-agents.png)
+![AtlasMemory Skills & Agents](./atlasmemory-cursor-skills-agents.png)

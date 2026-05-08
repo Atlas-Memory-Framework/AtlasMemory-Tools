@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/critical-ideation/SKILL.md manifest=atlas-tools.v1 checksum=sha256:1c2f8a01bfdde2ce3e4ca3b64f19fcd3fbc24ec26417807a8797ecd90b11f7dd
+# atlas-tools-generated-end
 name: critical-ideation
 description: Stress-test the defined problem with concrete weaknesses, risks, assumptions-to-tests, and alternatives. Use after problem definition and before technical planning.
 ---

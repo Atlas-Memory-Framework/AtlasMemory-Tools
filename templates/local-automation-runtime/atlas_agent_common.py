@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared helpers for the local Atlas Codex automation runtime."""
+"""Shared helpers for the local automation runtime."""
 
 from __future__ import annotations
 
@@ -132,15 +132,15 @@ def read_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, str]:
 def trusted_authors() -> set[str]:
     raw = os.environ.get("AGENT_TRUSTED_AUTHORS") or read_config().get(
         "AGENT_TRUSTED_AUTHORS",
-        "AtlasMemory-Dev,MateuszKordasiewicz",
+        "",
     )
     return {author.strip() for author in raw.split(",") if author.strip()}
 
 
 def git_identity() -> tuple[str, str]:
     cfg = read_config()
-    name = os.environ.get("AGENT_GIT_USER_NAME") or cfg.get("AGENT_GIT_USER_NAME") or "Atlas Local Codex Agent"
-    email = os.environ.get("AGENT_GIT_USER_EMAIL") or cfg.get("AGENT_GIT_USER_EMAIL") or "atlas-local-codex-agent@users.noreply.github.com"
+    name = os.environ.get("AGENT_GIT_USER_NAME") or cfg.get("AGENT_GIT_USER_NAME") or "Local Automation Agent"
+    email = os.environ.get("AGENT_GIT_USER_EMAIL") or cfg.get("AGENT_GIT_USER_EMAIL") or "local-automation-agent@users.noreply.github.com"
     return name, email
 
 
@@ -163,17 +163,21 @@ def env_for_repo(repo: str, base_branch: str | None = None) -> dict[str, str]:
 
 
 def default_base_branch(repo: str) -> str:
-    if repo == "Atlas-Memory-Framework/Atlas-Memory-Azure":
-        return "master"
-    if repo == "Atlas-Memory-Framework/atlas-memory":
-        return "fix/mime-resolution-pins-mainline"
-    if repo in {
-        "Atlas-Memory-Framework/Atlas-Memory-Admin-UI",
-        "Atlas-Memory-Framework/Atlas-Memory-Chainlit",
-    }:
-        return "main"
-    data = gh_json(["repo", "view", repo, "--json", "defaultBranchRef"])
-    return data["defaultBranchRef"]["name"]
+    cfg = read_config()
+    env_key = "AGENT_BASE_BRANCH_" + re.sub(r"[^A-Za-z0-9]+", "_", repo).strip("_").upper()
+    configured = os.environ.get(env_key) or cfg.get(env_key)
+    if configured:
+        return configured
+    data = gh_json_or_none(["repo", "view", repo, "--json", "defaultBranchRef"], retries=2)
+    branch = ((data or {}).get("defaultBranchRef") or {}).get("name")
+    if branch:
+        return str(branch)
+    fallback = os.environ.get("AGENT_BASE_BRANCH") or cfg.get("AGENT_BASE_BRANCH")
+    if fallback:
+        return fallback
+    raise RuntimeError(
+        f"Could not determine default branch for {repo}; set AGENT_BASE_BRANCH or {env_key}."
+    )
 
 
 def repo_dir(repo: str) -> pathlib.Path:

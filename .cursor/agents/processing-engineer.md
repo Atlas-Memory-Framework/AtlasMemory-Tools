@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=agents/processing-engineer.md manifest=atlas-tools.v1 checksum=sha256:838d0ba3c464078e1e6847a15b4d38d22de2cf6495145c49895898f8882ea592
+# atlas-tools-generated-end
 name: processing-engineer
 description: Runtime/concurrency specialist. Use during planning for perf/runtime risks, and optionally during build for validation.
 ---

@@ -9,20 +9,8 @@ fi
 repo="$1"
 issue="$2"
 
-case "$repo" in
-  Atlas-Memory-Framework/Atlas-Memory-Azure)
-    base="master"
-    ;;
-  Atlas-Memory-Framework/atlas-memory)
-    base="fix/mime-resolution-pins-mainline"
-    ;;
-  Atlas-Memory-Framework/Atlas-Memory-Admin-UI|Atlas-Memory-Framework/Atlas-Memory-Chainlit)
-    base="main"
-    ;;
-  *)
-    base="$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name)"
-    ;;
-esac
+base="$(gh repo view "$repo" --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true)"
+base="${base:-${AGENT_BASE_BRANCH:-main}}"
 
 for label_color in \
   "agent:ready 0E8A16" \

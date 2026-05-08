@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local issue orchestrator for the Atlas Codex runtime."""
+"""Local issue orchestrator for the Codex automation runtime."""
 
 from __future__ import annotations
 
@@ -309,8 +309,8 @@ def build_worker_notification(
         "@type": "MessageCard",
         "@context": "https://schema.org/extensions",
         "themeColor": theme,
-        "summary": f"Atlas local agent {status}: {repo}#{number}",
-        "title": f"Atlas local agent {status}: {title}",
+        "summary": f"Local automation agent {status}: {repo}#{number}",
+        "title": f"Local automation agent {status}: {title}",
         "text": "\n\n".join(text_lines),
         "potentialAction": [
             {
@@ -420,14 +420,16 @@ def maybe_dispatch_deploy_candidate(repo: str, issue: dict, args: argparse.Names
     needs_deployed = "needs-deployed-validation" in body or "needs-deployed-validation" in labels
     if not needs_deployed or not args.dispatch_deploy_candidates:
         return
-    if repo != "Atlas-Memory-Framework/Atlas-Memory-Azure":
+    cfg = common.read_config()
+    deploy_repo = cfg.get("AGENT_DEPLOY_CANDIDATE_REPO", repo)
+    if repo != deploy_repo:
         return
     common.run(
         [
             str(common.RUNTIME_DIR / "atlas-agent-workflow"),
             "run",
             repo,
-            "agentic-deploy-candidate.yml",
+            cfg.get("AGENT_DEPLOY_CANDIDATE_WORKFLOW", "agentic-deploy-candidate.yml"),
             "--ref",
             common.default_base_branch(repo),
             "-f",
@@ -596,7 +598,7 @@ def main() -> None:
     parser.add_argument(
         "--dispatch-deploy-candidates",
         action="store_true",
-        help="For Azure issues requiring deployed validation, dispatch deploy candidate dry-runs.",
+        help="For issues requiring deployed validation, dispatch configured deploy candidate dry-runs.",
     )
     parser.add_argument(
         "--triage-needs-human",

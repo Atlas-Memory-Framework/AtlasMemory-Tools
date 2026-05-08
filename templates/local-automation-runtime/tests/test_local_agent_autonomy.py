@@ -26,7 +26,7 @@ def issue(
     *,
     body: str = "",
     labels: list[str] | None = None,
-    author: str = "AtlasMemory-Dev",
+    author: str = "trusted-user",
     title: str = "[WS] Story",
     number: int = 1,
 ) -> dict:
@@ -53,6 +53,8 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         cls.project_reconcile = load_script("atlas_agent_project_reconcile_test", "atlas-agent-project-reconcile")
         cls.semantic_review = load_script("atlas_agent_semantic_review_test", "atlas-agent-semantic-review")
         cls.pr_repair = load_script("atlas_agent_pr_repair_test", "atlas-agent-pr-repair")
+        for module in (cls.triage, cls.orchestrator, cls.reconcile):
+            module.common.trusted_authors = lambda: {"trusted-user"}
 
     def test_triage_approves_review_before_dispatch_with_stale_needs_human(self) -> None:
         record = self.triage.classify_issue(
@@ -421,14 +423,14 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             path = Path(tmp) / "projects.txt"
             path.write_text(
                 "# comments are ignored\n"
-                "Atlas-Memory-Framework/2\n"
+                "OWNER/2\n"
                 "OtherOrg 7\n",
                 encoding="utf-8",
             )
 
             targets = self.project_reconcile.project_targets(str(path), "fallback", 1)
 
-        self.assertEqual(targets, [("Atlas-Memory-Framework", 2), ("OtherOrg", 7)])
+        self.assertEqual(targets, [("OWNER", 2), ("OtherOrg", 7)])
 
     def test_orchestrator_preserves_real_hard_blockers(self) -> None:
         review_reasons = self.orchestrator.hard_non_execution_reasons(
@@ -498,7 +500,7 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             AssertionError("worker should not run")
         )
         self.orchestrator.common.run = lambda args, **_kwargs: calls.append(args)
-        self.orchestrator.common.trusted_authors = lambda: {"AtlasMemory-Dev"}
+        self.orchestrator.common.trusted_authors = lambda: {"trusted-user"}
         args = types.SimpleNamespace(
             triage_needs_human=False,
             repos_file=None,

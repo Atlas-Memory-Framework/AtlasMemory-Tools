@@ -110,7 +110,7 @@ def main() -> None:
     p_run = sub.add_parser("run")
     p_run.add_argument("repo")
     p_run.add_argument("workflow")
-    p_run.add_argument("--ref", default="master")
+    p_run.add_argument("--ref", default="main")
     p_run.add_argument("-f", "--input", action="append", default=[])
     p_run.add_argument("--wait", action="store_true")
     p_run.add_argument("--download-artifacts", action="store_true")

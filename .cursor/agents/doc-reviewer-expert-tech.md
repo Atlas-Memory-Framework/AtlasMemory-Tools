@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=agents/doc-reviewer-expert-tech.md manifest=atlas-tools.v1 checksum=sha256:2e405352f1acea6d6ab71ef5504ad46ed46170715fcd30ebe1f31ec7a15074c0
+# atlas-tools-generated-end
 name: doc-reviewer-expert-tech
 description: Expert technical reviewer for planning docs. Use during /planning-reviews when infra, auth, data contracts, concurrency/perf, compliance, or high-stakes changes are present.
 ---

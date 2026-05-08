@@ -346,18 +346,14 @@ def clean_human_pause_agent_labels(records: list[dict[str, Any]]) -> int:
 def write_summary(records: list[dict[str, Any]], path: Path) -> None:
     blockers = [record for record in records if not record["stale_unblockable"]]
     payload = {
-        "schema_version": "atlas.automation.summary.v1",
+        "schema_version": "local.automation.summary.v1",
         "generated_at": utc_now(),
-        "source": "local-atlas-agent-triage",
+        "source": "local-automation-agent-triage",
         "items": [summary_item(record) for record in blockers],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote blocker summary: {path}")
-
-
-def azure_repo_path() -> Path:
-    return common.repo_dir("Atlas-Memory-Framework/Atlas-Memory-Azure")
 
 
 def operator_action(item: dict[str, Any]) -> str:
@@ -438,8 +434,8 @@ def build_local_teams_payload(items: list[dict[str, Any]], *, max_items: int) ->
             "@type": "MessageCard",
             "@context": "https://schema.org/extensions",
             "themeColor": "D13438",
-            "summary": f"{len(items)} Atlas local agent blocker(s)",
-            "title": f"Atlas agent attention needed: {headline['repo']}#{headline['entity_id']}",
+            "summary": f"{len(items)} local automation blocker(s)",
+            "title": f"Local automation attention needed: {headline['repo']}#{headline['entity_id']}",
             "text": f"{len(items)} blocker(s) are stopping local issue automation. The first {len(selected)} are listed below.",
             "sections": sections,
             "potentialAction": actions,
@@ -455,7 +451,7 @@ def build_teams_preview(summary_path: Path, *, max_items: int) -> Path:
     document = json.loads(summary_path.read_text(encoding="utf-8"))
     payload = build_local_teams_payload(document.get("items") or [], max_items=max_items)
     result.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    lines = [f"# Local Atlas agent blockers ({len(document.get('items') or [])})", ""]
+    lines = [f"# Local automation blockers ({len(document.get('items') or [])})", ""]
     for item in (document.get("items") or [])[:max_items]:
         lines.append(f"- {item['repo']}#{item['entity_id']}: {item.get('summary') or item.get('title')}")
     markdown.write_text("\n".join(lines) + "\n", encoding="utf-8")

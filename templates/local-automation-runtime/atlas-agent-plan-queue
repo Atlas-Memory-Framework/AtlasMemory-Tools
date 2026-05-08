@@ -14,7 +14,9 @@ from pathlib import Path
 
 RUNTIME_DIR = Path(__file__).resolve().parent
 TOOLS_ROOT = RUNTIME_DIR.parents[1]
-PLAN_TO_ISSUES = TOOLS_ROOT / ".cursor" / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
+PLAN_TO_ISSUES = TOOLS_ROOT / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
+if not PLAN_TO_ISSUES.exists():
+    PLAN_TO_ISSUES = TOOLS_ROOT / ".cursor" / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
 
 
 def run_json(args: list[str]) -> dict:

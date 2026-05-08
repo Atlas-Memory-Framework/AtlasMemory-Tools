@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/implementation-planning/SKILL.md manifest=atlas-tools.v1 checksum=sha256:33236a776b0e2e1ef7cb0b72103a154eb1d25caf90a0348ab813126e684559f6
+# atlas-tools-generated-end
 name: implementation-planning
 description: Produce the execution plan in the current plan artifact including file deltas, workstreams, phases, and gates. Use during /plan Implementation stage.
 ---

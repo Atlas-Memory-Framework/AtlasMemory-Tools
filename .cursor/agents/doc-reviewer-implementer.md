@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=agents/doc-reviewer-implementer.md manifest=atlas-tools.v1 checksum=sha256:bf6ceb8599908204a844204431f92c3b19bcbd14bcd105943c76f1941c72e3d4
+# atlas-tools-generated-end
 name: doc-reviewer-implementer
 description: Implementer readiness reviewer for the current plan artifact. Use during /planning-reviews to assess execution clarity.
 ---

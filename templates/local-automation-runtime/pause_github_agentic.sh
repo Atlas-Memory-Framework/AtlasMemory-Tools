@@ -17,6 +17,24 @@ fi
 
 gh auth status >/dev/null
 
+runtime_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$runtime_dir/config.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$runtime_dir/config.env"
+  set +a
+fi
+
+control_repo="${AGENT_CONTROL_REPO:-}"
+control_workflows_csv="${AGENT_CONTROL_WORKFLOWS:-agentic-issue-dispatch.yml,agentic-issue-reconcile.yml,agentic-pr-repair.yml,agentic-automerge.yml}"
+forwarder_repos_csv="${AGENT_FORWARDER_REPOS:-}"
+forwarder_workflow="${AGENT_FORWARDER_WORKFLOW:-agentic-forward-to-control-plane.yml}"
+
+if [[ -z "$control_repo" ]]; then
+  echo "Set AGENT_CONTROL_REPO in config.env before enabling/disabling hosted workflows." >&2
+  exit 2
+fi
+
 set_workflow() {
   local repo="$1"
   local workflow="$2"
@@ -28,31 +46,18 @@ set_workflow() {
   fi
 }
 
-control_repo="Atlas-Memory-Framework/Atlas-Memory-Azure"
-control_workflows=(
-  agentic-issue-dispatch.yml
-  agentic-issue-reconcile.yml
-  agentic-issue-signal.yml
-  agentic-issue-signal-smoke.yml
-  agentic-pr-signal.yml
-  agentic-pr-signal-smoke.yml
-  agentic-pr-repair.yml
-  agentic-project-orchestrator.yml
-  planning-pilot-orchestrator.yml
-  agentic-repair-controller.yml
-  agentic-automerge.yml
-)
-
+IFS=',' read -r -a control_workflows <<< "$control_workflows_csv"
 for workflow in "${control_workflows[@]}"; do
+  workflow="${workflow#"${workflow%%[![:space:]]*}"}"
+  workflow="${workflow%"${workflow##*[![:space:]]}"}"
+  [[ -n "$workflow" ]] || continue
   set_workflow "$control_repo" "$workflow"
 done
 
-forwarder_repos=(
-  Atlas-Memory-Framework/atlas-memory
-  Atlas-Memory-Framework/Atlas-Memory-Admin-UI
-  Atlas-Memory-Framework/Atlas-Memory-Chainlit
-)
-
+IFS=',' read -r -a forwarder_repos <<< "$forwarder_repos_csv"
 for repo in "${forwarder_repos[@]}"; do
-  set_workflow "$repo" agentic-forward-to-control-plane.yml
+  repo="${repo#"${repo%%[![:space:]]*}"}"
+  repo="${repo%"${repo##*[![:space:]]}"}"
+  [[ -n "$repo" ]] || continue
+  set_workflow "$repo" "$forwarder_workflow"
 done

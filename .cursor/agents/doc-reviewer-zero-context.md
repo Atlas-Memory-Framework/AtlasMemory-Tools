@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=agents/doc-reviewer-zero-context.md manifest=atlas-tools.v1 checksum=sha256:cad37ffc879754d55b1496a67c5e04d6b230a24d67e7418fb59023ef84ad66bd
+# atlas-tools-generated-end
 name: doc-reviewer-zero-context
 description: Zero-context planning reviewer. Use during /planning-reviews to evaluate the current plan artifact only.
 ---

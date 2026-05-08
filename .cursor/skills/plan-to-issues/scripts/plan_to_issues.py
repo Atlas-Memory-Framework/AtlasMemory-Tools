@@ -1,3 +1,5 @@
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:fdd926092aed5760059b397a25b0fe3b3369602cfa3bdcb266dbc9c1927dcea8
+# atlas-tools-generated-end
 from __future__ import annotations
 
 import argparse
@@ -69,38 +71,25 @@ FILE_DELTA_RE = re.compile(
     r"^-\s+(?:\[(?P<link_text>[^\]]+)\]\([^)]+\)|`(?P<code_path>[^`]+)`)\s+-\s+[^-]+-\s+(?P<owner>[^-]+?)\s+-",
     re.MULTILINE,
 )
-DEFAULT_GITHUB_OWNER = "Atlas-Memory-Framework"
-ROOT_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/Atlat-Memory-Azure-Implmentation"
-ATLAS_MEMORY_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/atlas-memory"
-ADMIN_UI_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/Atlas-Memory-Admin-UI"
-CHAINLIT_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/Atlas-Memory-Chainlit"
-INFRA_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/Atlas-Memory-Infra"
+DEFAULT_GITHUB_OWNER = "OWNER"
+ROOT_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/service"
+CORE_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/core"
+ADMIN_UI_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/admin-ui"
+APP_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/app"
+INFRA_REPO_SLUG = f"{DEFAULT_GITHUB_OWNER}/infra"
 REPO_SLUG_ALIASES = {
     "root": ROOT_REPO_SLUG,
     "root-repo": ROOT_REPO_SLUG,
-    "atlat-memory-azure-implmentation": ROOT_REPO_SLUG,
-    "atlas-memory-azure": f"{DEFAULT_GITHUB_OWNER}/Atlas-Memory-Azure",
-    "atlas-memory": ATLAS_MEMORY_REPO_SLUG,
-    "mateuszkordasiewicz/atlas-memory": ATLAS_MEMORY_REPO_SLUG,
+    "service": ROOT_REPO_SLUG,
+    "api-service": ROOT_REPO_SLUG,
+    "core": CORE_REPO_SLUG,
+    "core-lib": CORE_REPO_SLUG,
     "admin-ui": ADMIN_UI_REPO_SLUG,
-    "atlas-memory-admin-ui": ADMIN_UI_REPO_SLUG,
-    "chainlit": CHAINLIT_REPO_SLUG,
-    "atlas-memory-chainlit": CHAINLIT_REPO_SLUG,
-    "mateuszkordasiewicz/atlas-memory-chainlit": CHAINLIT_REPO_SLUG,
+    "app": APP_REPO_SLUG,
+    "frontend": APP_REPO_SLUG,
     "infra": INFRA_REPO_SLUG,
-    "atlas-memory-infra": INFRA_REPO_SLUG,
 }
-DEFAULT_BRANCH_HINTS = {
-    ROOT_REPO_SLUG: "master",
-    f"{DEFAULT_GITHUB_OWNER}/Atlas-Memory-Azure": "master",
-    ATLAS_MEMORY_REPO_SLUG: "fix/mime-resolution-pins-mainline",
-    f"{DEFAULT_GITHUB_OWNER}/atlas-memory": "fix/mime-resolution-pins-mainline",
-    ADMIN_UI_REPO_SLUG: "main",
-    CHAINLIT_REPO_SLUG: "main",
-    f"{DEFAULT_GITHUB_OWNER}/Atlas-Memory-Chainlit": "main",
-    INFRA_REPO_SLUG: "main",
-    f"{DEFAULT_GITHUB_OWNER}/infra": "main",
-}
+DEFAULT_BRANCH_HINTS: dict[str, str] = {}
 
 # Frozen join-metadata transport (DR-017 / WS2). Escaped-byte budgets apply to full
 # `<!-- ... -->` segments after JSON serialization of the inner envelope object.
@@ -714,9 +703,9 @@ def load_registry_portfolio(
             legacy_repo = manifest_row.get("legacy_issue_repo")
             legacy_number = manifest_row.get("legacy_issue_number")
             if isinstance(legacy_repo, str) and legacy_repo.strip():
-                story["_atlas_legacy_issue_repo"] = legacy_repo.strip()
+                story["_legacy_issue_repo"] = legacy_repo.strip()
             if isinstance(legacy_number, int):
-                story["_atlas_legacy_issue_number"] = legacy_number
+                story["_legacy_issue_number"] = legacy_number
         _registry_require_execution_repo(story, story_path=path)
         stories.append(story)
         story_paths[sid] = path
@@ -824,8 +813,8 @@ def _story_execution_issue_key(story: dict[str, Any], story_path: Path) -> str:
             if isinstance(repo, str) and isinstance(num, int):
                 slug = normalize_repo_slug(repo) or repo.strip()
                 return f"{slug}#{num}"
-    legacy_repo = story.get("_atlas_legacy_issue_repo")
-    legacy_number = story.get("_atlas_legacy_issue_number")
+    legacy_repo = story.get("_legacy_issue_repo")
+    legacy_number = story.get("_legacy_issue_number")
     if isinstance(legacy_repo, str) and legacy_repo.strip() and isinstance(legacy_number, int):
         slug = normalize_repo_slug(legacy_repo) or legacy_repo.strip()
         return f"{slug}#{legacy_number}"
@@ -1248,8 +1237,8 @@ def build_registry_story_drafts(
                 validation_scope=validation_scope,
                 risk_tags=risk_tags,
                 automation_blockers=automation_blockers,
-                legacy_issue_repo=story.get("_atlas_legacy_issue_repo"),
-                legacy_issue_number=story.get("_atlas_legacy_issue_number"),
+                legacy_issue_repo=story.get("_legacy_issue_repo"),
+                legacy_issue_number=story.get("_legacy_issue_number"),
             )
         )
     return drafts, join_diagnostics
@@ -1392,7 +1381,7 @@ def normalize_repo_slug(repo: str | None) -> str | None:
         return aliased
     if cleaned.count("/") == 1:
         return cleaned
-    return REPO_SLUG_ALIASES.get(cleaned.lower(), f"{DEFAULT_GITHUB_OWNER}/{cleaned}")
+    return REPO_SLUG_ALIASES.get(cleaned.lower())
 
 
 def infer_default_branch(repo_root: Path) -> str:
@@ -1418,7 +1407,7 @@ def build_plan_reference_lines(plan_path: Path, *, include_execution_note: bool 
     if include_execution_note:
         lines.append(
             "- Execution note: if this issue lives outside the source repo, use the exact source "
-            "repo/path above and do not substitute another local `.cursor/plans/*` file."
+            "repo/path above and do not substitute another local harness plan file."
         )
     return lines
 
@@ -1962,7 +1951,7 @@ def infer_validation_scope(
     if any(
         token in joined
         for token in (
-            "atlas_base_url",
+            "hosted_base_url",
             "e2e_api_key",
             "deployed",
             "hosted",
@@ -2272,15 +2261,15 @@ def analyze_blocker_values(values: list[str], *, default_repo: str | None = None
 
 def repo_for_path(path: str) -> str:
     normalized = path.replace("\\", "/")
-    if normalized.startswith("atlas-memory/"):
-        return "atlas-memory"
+    if normalized.startswith("core/"):
+        return "core"
     if normalized.startswith("infra/"):
         return "infra"
-    if normalized.startswith("Atlas-Memory-Admin-UI/"):
-        return "Atlas-Memory-Admin-UI"
-    if normalized.startswith("Atlas-Memory-Chainlit/"):
-        return "Atlas-Memory-Chainlit"
-    return "Atlas-Memory-Azure"
+    if normalized.startswith("admin-ui/"):
+        return "admin-ui"
+    if normalized.startswith("app/"):
+        return "app"
+    return "service"
 
 
 def repo_component_for_issue_repo(repo: str | None) -> str | None:
@@ -2289,13 +2278,14 @@ def repo_component_for_issue_repo(repo: str | None) -> str | None:
         return None
     name = repo_slug.split("/", 1)[-1].strip().lower()
     aliases = {
-        "atlas-memory-azure": "Atlas-Memory-Azure",
-        "atlat-memory-azure-implmentation": "Atlas-Memory-Azure",
-        "atlas-memory": "atlas-memory",
-        "atlas-memory-admin-ui": "Atlas-Memory-Admin-UI",
-        "atlas-memory-chainlit": "Atlas-Memory-Chainlit",
+        "service": "service",
+        "api-service": "service",
+        "core": "core",
+        "core-lib": "core",
+        "admin-ui": "admin-ui",
+        "app": "app",
+        "frontend": "app",
         "infra": "infra",
-        "atlas-memory-infra": "infra",
     }
     return aliases.get(name)
 
@@ -2380,7 +2370,7 @@ def collect_azure_runner_inputs(text: str) -> list[str]:
         if line.startswith("- Deployed runner inputs:"):
             in_section = True
             continue
-        if in_section and line.startswith("- "):
+        if in_section and line.startswith("#"):
             break
         if in_section and line.lstrip().startswith("- "):
             inputs.append(line.strip()[2:].strip())
@@ -2542,8 +2532,8 @@ def infer_ws2_validation_requirements(
     requirements: list[str] = []
     sid = scope_id.upper().replace("–", "-")
     base_local = (
-        "Activate `./.venv/Scripts/Activate.ps1` at repo root; run `G-WS2-*` pytest lanes from "
-        "`atlas-memory/2 - implementations/2.1 - local` per the plan (not from repo root)."
+        "Activate the project virtualenv at repo root; run the plan's `G-WS2-*` pytest lanes "
+        "from the package directory named in the plan."
     )
     base_sec = (
         "Run `G-SEC-*` gates from repo-root `tests/` when this story touches those surfaces; "
@@ -2633,7 +2623,7 @@ def infer_ws4_validation_requirements(
     if hosted_touch:
         requirements.append(
             "This scope touches hosted workflow or security surfaces: run `G-SEC-INTERNAL-AUTH` and `G-SEC-HEADER-PROJECTION` "
-            "when `functions/**`, `atlas_memory_azure/auth/backend_jwt.py`, or relevant `infra/**` changes land in the same branch."
+            "when `functions/**`, backend authentication modules, or relevant `infra/**` changes land in the same branch."
         )
         if azure_runner_inputs:
             requirements.extend(azure_runner_inputs)
@@ -2719,7 +2709,7 @@ def infer_validation_requirements(
 
     if is_azure_scoped:
         requirements.append(
-            "Run `G-DEPLOYED-WORKFLOW-AUTH-PARITY` and `G-DEPLOYED-WORKFLOW-PARITY` against the existing Atlas API deployment."
+            "Run `G-DEPLOYED-WORKFLOW-AUTH-PARITY` and `G-DEPLOYED-WORKFLOW-PARITY` against the configured hosted API deployment."
         )
         requirements.extend(azure_runner_inputs)
         requirements.append(
@@ -2762,16 +2752,16 @@ def infer_labels(
     labels = [f"type:{kind}", f"workstream:{workstream_label_value(workstream_token)}"]
     lowered = f"{section_title}\n{section_body}".lower()
     stem = plan_stem(plan_key) or plan_key.strip().upper()
-    if "atlas-memory-admin-ui" in lowered or "admin ui" in lowered:
+    if "admin-ui" in lowered or "admin ui" in lowered:
         labels.append("area:admin-ui")
-    if "chainlit" in lowered:
-        labels.append("area:chainlit")
+    if "frontend" in lowered or "app" in lowered:
+        labels.append("area:app")
     if "infra" in lowered:
         labels.append("area:infra")
     if "azure" in lowered or "hosted" in lowered or "deployed" in lowered:
         labels.append("area:azure")
-    if "atlas-memory" in lowered or "contracts" in lowered or "workflow" in lowered:
-        labels.append("area:atlas-memory")
+    if "core" in lowered or "contracts" in lowered or "workflow" in lowered:
+        labels.append("area:core")
     if stem in {"WS1", "WS3", "WS4"} or "workflow control plane" in lowered:
         labels.append("area:workflow-control-plane")
     if not any(label.startswith("area:") for label in labels):
@@ -3510,6 +3500,14 @@ def parent_epic_url_from_body(body: str) -> str | None:
     return extract_issue_body_value(ISSUE_PARENT_EPIC_RE, body)
 
 
+def plan_path_matches(issue_plan_path: str | None, relative_plan_path: str) -> bool:
+    if issue_plan_path == relative_plan_path:
+        return True
+    if issue_plan_path and issue_plan_path == Path(relative_plan_path).name:
+        return True
+    return False
+
+
 def managed_label(name: str) -> bool:
     return name.startswith(("type:", "workstream:", "repo:", "tier:", "status:", "area:", "owner:"))
 
@@ -3555,7 +3553,7 @@ def find_matching_issue(
                 continue
         else:
             issue_plan_path = extract_issue_body_value(ISSUE_PLAN_PATH_RE, body)
-            if issue_plan_path != relative_plan_path:
+            if not plan_path_matches(issue_plan_path, relative_plan_path):
                 continue
         if draft.kind == "epic" and desired_epic_id:
             issue_epic_id = extract_issue_body_value(ISSUE_EPIC_ID_RE, body)
@@ -3761,7 +3759,7 @@ def build_sync_preview(
             if registry_root_relative is not None:
                 if extract_issue_body_value(ISSUE_REGISTRY_ROOT_RE, body) != registry_root_relative:
                     continue
-            elif extract_issue_body_value(ISSUE_PLAN_PATH_RE, body) != relative_plan_path:
+            elif not plan_path_matches(extract_issue_body_value(ISSUE_PLAN_PATH_RE, body), relative_plan_path):
                 continue
             unmatched_existing.append(
                 {

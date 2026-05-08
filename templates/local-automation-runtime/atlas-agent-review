@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,7 @@ REVIEW_LABELS = {
     "agent:overlap-queued": "1D76DB",
     "agent:local-validation-required": "FBCA04",
     "agent:semantic-review-required": "5319E7",
+    "agent:human-action-required": "B60205",
 }
 REVIEW_AUX_LABELS = {
     "agent:manual-validation-approved": "0E8A16",
@@ -47,7 +49,17 @@ SEMANTIC_REVIEW_REQUIRED_LABEL = "agent:semantic-review-required"
 SEMANTIC_REVIEW_PASSED_LABEL = "agent:semantic-review-passed"
 SEMANTIC_REVIEW_FAILED_LABEL = "agent:semantic-review-failed"
 SEMANTIC_REVIEW_COMMENT_MARKER = "<!-- atlas-agent-semantic-review -->"
+FAILED_WORKFLOW_COMMENT_MARKER = "<!-- atlas-agent-failed-workflow-review -->"
+HUMAN_ACTION_LABEL = "agent:human-action-required"
 CURRENT_REPO_REPAIR_TYPES = {"code_repair", "semantic_scope_repair", "requested_changes", "merge_repair"}
+REPAIRABLE_CI_CATEGORIES = {"code-repair", "test-repair"}
+NON_REPAIRABLE_CI_CATEGORIES = {
+    "infra/env",
+    "secret/config",
+    "deployed-validation",
+    "human-action",
+    "dependency-blocked",
+}
 
 
 @dataclass
@@ -60,6 +72,7 @@ class ReviewDecision:
     label: str
     reasons: list[str]
     files: list[str]
+    ci_review: dict[str, Any] | None = None
 
 
 def target_repos(path: str | None) -> list[str]:
@@ -176,6 +189,279 @@ def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = N
     if pending:
         return "pending", pending
     return "passed", passed
+
+
+def failed_check_summaries(pr: dict[str, Any]) -> list[str]:
+    failed: list[str] = []
+    for check in pr.get("statusCheckRollup") or []:
+        name = str(check.get("name") or check.get("context") or "unnamed")
+        status = str(check.get("status") or "").upper()
+        conclusion = str(check.get("conclusion") or "").upper()
+        if status and status != "COMPLETED":
+            continue
+        if conclusion and conclusion not in {"SUCCESS", "NEUTRAL", "SKIPPED"}:
+            failed.append(name if not conclusion else f"{name}={conclusion}")
+    return failed
+
+
+def first_string(*values: Any) -> str:
+    for value in values:
+        if value:
+            return str(value)
+    return ""
+
+
+def failed_pr_checks(repo: str, number: int, job_dir: Path) -> list[dict[str, Any]]:
+    proc = common.run(
+        ["gh", "pr", "checks", str(number), "--repo", repo, "--json", "name,state,bucket,link,description,workflow"],
+        check=False,
+    )
+    raw = proc.stdout or "[]"
+    (job_dir / "pr-checks.json").write_text(raw, encoding="utf-8")
+    try:
+        checks = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    failed: list[dict[str, Any]] = []
+    for check in checks if isinstance(checks, list) else []:
+        state = str(check.get("state") or "").upper()
+        bucket = str(check.get("bucket") or "").lower()
+        if bucket == "fail" or state in {"FAILURE", "FAILED", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}:
+            failed.append(check)
+    return failed
+
+
+def failed_runs_for_pr(repo: str, pr: dict[str, Any], job_dir: Path, *, limit: int = 5) -> list[dict[str, Any]]:
+    branch = str(pr.get("headRefName") or "")
+    if not branch:
+        return []
+    runs = common.gh_json_or_none(
+        [
+            "run",
+            "list",
+            "--repo",
+            repo,
+            "--branch",
+            branch,
+            "--limit",
+            str(limit),
+            "--json",
+            "databaseId,status,conclusion,name,displayTitle,url,createdAt,updatedAt,headSha,workflowName",
+        ],
+        retries=2,
+    ) or []
+    common.write_json(job_dir / "failed-workflow-runs.json", runs)
+    head = str(pr.get("headRefOid") or "").strip()
+    failed_conclusions = {"failure", "timed_out", "cancelled", "action_required", "startup_failure"}
+    result: list[dict[str, Any]] = []
+    for run in runs if isinstance(runs, list) else []:
+        if head and str(run.get("headSha") or "") not in {"", head}:
+            continue
+        if str(run.get("conclusion") or "").lower() in failed_conclusions:
+            result.append(run)
+    return result
+
+
+def failed_jobs_for_run(repo: str, run_id: int | str, job_dir: Path) -> list[dict[str, Any]]:
+    payload = common.gh_json_or_none(
+        ["run", "view", str(run_id), "--repo", repo, "--json", "jobs,url,name,conclusion,status,workflowName"],
+        retries=2,
+    ) or {}
+    common.write_json(job_dir / f"run-{run_id}-jobs.json", payload)
+    jobs = payload.get("jobs") or []
+    if not isinstance(jobs, list):
+        return []
+    failed_conclusions = {"failure", "timed_out", "cancelled", "action_required", "startup_failure"}
+    return [
+        job
+        for job in jobs
+        if str(job.get("conclusion") or "").lower() in failed_conclusions
+        or str(job.get("status") or "").lower() == "failure"
+    ]
+
+
+def failed_log_excerpt(repo: str, run_id: int | str, job_dir: Path) -> str:
+    proc = common.run(["gh", "run", "view", str(run_id), "--repo", repo, "--log-failed"], check=False)
+    log = proc.stdout or ""
+    (job_dir / f"run-{run_id}-failed.log").write_text(log, encoding="utf-8", errors="replace")
+    return trim_error_excerpt(log)
+
+
+def trim_error_excerpt(log: str, *, max_lines: int = 28) -> str:
+    if not log.strip():
+        return ""
+    lines = log.splitlines()
+    markers = (
+        "error:",
+        "error ",
+        "failed",
+        "failure",
+        "traceback",
+        "exception",
+        "assertionerror",
+        "pytest",
+        "npm err!",
+        "secret",
+        "environment",
+        "approval",
+        "unauthorized",
+        "forbidden",
+        "timeout",
+    )
+    lowered = [line.lower() for line in lines]
+    indices = [idx for idx, line in enumerate(lowered) if any(marker in line for marker in markers)]
+    if indices:
+        start = max(indices[0] - 6, 0)
+        end = min(start + max_lines, len(lines))
+        return "\n".join(lines[start:end]).strip()
+    return "\n".join(lines[-max_lines:]).strip()
+
+
+def classify_failed_workflow(text: str, failed_checks: list[dict[str, Any]] | None = None) -> tuple[str, str]:
+    lower = text.lower()
+    check_text = " ".join(
+        " ".join(str(check.get(key) or "") for key in ("name", "workflow", "description"))
+        for check in failed_checks or []
+    ).lower()
+    combined = f"{lower}\n{check_text}"
+    if any(token in combined for token in ("environment protection", "waiting for approval", "deployment approval", "review deployments")):
+        return "human-action", "Workflow is blocked on a protected environment or manual deployment approval."
+    if any(token in combined for token in ("secret", "secrets.", "not configured", "no such secret", "credential unavailable")):
+        return "secret/config", "Workflow is blocked by a missing or invalid secret/configuration value."
+    if any(token in combined for token in ("environment variable", "env var", "azure login", "az login", "subscription", "tenant", "resource group", "aadsts")):
+        return "infra/env", "Workflow is blocked by Azure/environment setup rather than a current-branch code change."
+    if any(token in combined for token in ("deployed e2e", "deployed validation", "bootstrap dev tenant", "deploy dev", "functions deploy")):
+        return "deployed-validation", "Workflow is part of deployed validation and should be rerun through the configured validation chain."
+    if any(token in combined for token in ("could not resolve host", "temporary failure", "rate limit", "registry.npmjs.org", "pypi.org", "connection timed out")):
+        return "dependency-blocked", "Workflow is blocked by an external dependency, network, or registry failure."
+    if any(token in combined for token in ("pytest", "assertionerror", "test failed", "tests failed", "expected", "received")):
+        return "test-repair", "Repository tests failed in a way that appears repairable on the current branch."
+    if any(token in combined for token in ("typescript", "tsc", "eslint", "ruff", "mypy", "syntaxerror", "importerror", "modulenotfounderror", "compile")):
+        return "code-repair", "Build, lint, typecheck, or import errors point to current-branch code."
+    return "code-repair", "Failed workflow appears repairable by inspecting the current PR branch."
+
+
+def ci_next_action(category: str, repo: str, number: int) -> str:
+    if category in REPAIRABLE_CI_CATEGORIES:
+        return f"Run `./atlas-agent-pr-repair {repo}#{number}` after this review marks the PR repairable."
+    if category == "deployed-validation":
+        return f"Run `./atlas-agent-deployed-validate {repo}#{number} --apply` or dispatch the configured deployed-validation workflow chain."
+    if category == "secret/config":
+        return "Add or fix the required GitHub/Azure secret or repo environment value, then rerun the failed workflow."
+    if category == "infra/env":
+        return "Fix the Azure/environment prerequisite, then rerun the failed workflow from GitHub Actions."
+    if category == "dependency-blocked":
+        return "Wait for or unblock the external dependency, then rerun the failed workflow from GitHub Actions."
+    return "Complete the required human approval/action in GitHub or Azure, then rerun the failed workflow."
+
+
+def fetch_failed_workflow_review(repo: str, pr: dict[str, Any], job_dir: Path) -> dict[str, Any] | None:
+    if not failed_check_summaries(pr):
+        return None
+    number = int(pr["number"])
+    failed_checks = failed_pr_checks(repo, number, job_dir)
+    runs = failed_runs_for_pr(repo, pr, job_dir)
+    run_reviews: list[dict[str, Any]] = []
+    excerpt_parts: list[str] = []
+    for run in runs[:3]:
+        run_id = run.get("databaseId")
+        if not run_id:
+            continue
+        jobs = failed_jobs_for_run(repo, run_id, job_dir)
+        excerpt = failed_log_excerpt(repo, run_id, job_dir)
+        if excerpt:
+            excerpt_parts.append(excerpt)
+        run_reviews.append(
+            {
+                "id": run_id,
+                "name": first_string(run.get("workflowName"), run.get("name"), run.get("displayTitle")),
+                "url": run.get("url"),
+                "conclusion": run.get("conclusion"),
+                "jobs": jobs[:8],
+            }
+        )
+    evidence_text = "\n".join(excerpt_parts) or json.dumps(failed_checks, indent=2)
+    category, summary = classify_failed_workflow(evidence_text, failed_checks)
+    review = {
+        "head": str(pr.get("headRefOid") or ""),
+        "category": category,
+        "root_cause": summary,
+        "failed_checks": failed_checks[:8],
+        "runs": run_reviews,
+        "excerpt": trim_error_excerpt(evidence_text, max_lines=18),
+        "next_action": ci_next_action(category, repo, number),
+        "artifacts": str(job_dir),
+    }
+    common.write_json(job_dir / "failed-workflow-review.json", review)
+    return review
+
+
+def failed_workflow_comment_body(repo: str, number: int, review: dict[str, Any]) -> str:
+    run_lines: list[str] = []
+    for run in review.get("runs") or []:
+        run_name = str(run.get("name") or f"run {run.get('id')}")
+        run_url = str(run.get("url") or "")
+        run_ref = f"[{run_name}]({run_url})" if run_url.startswith("https://") else run_name
+        jobs = []
+        for job in run.get("jobs") or []:
+            job_name = str(job.get("name") or "failed job")
+            job_url = str(job.get("url") or "")
+            jobs.append(f"[{job_name}]({job_url})" if job_url.startswith("https://") else job_name)
+        run_lines.append(f"- {run_ref}" + (f" jobs: {', '.join(jobs[:4])}" if jobs else ""))
+    if not run_lines:
+        for check in review.get("failed_checks") or []:
+            name = str(check.get("name") or "failed check")
+            link = str(check.get("link") or "")
+            run_lines.append(f"- [{name}]({link})" if link.startswith("https://") else f"- {name}")
+    excerpt = str(review.get("excerpt") or "").strip()
+    excerpt_block = f"\n\nRelevant excerpt:\n```text\n{excerpt[:3000]}\n```" if excerpt else ""
+    return (
+        f"{FAILED_WORKFLOW_COMMENT_MARKER}\n"
+        f"Head: `{review.get('head') or 'unknown'}`\n\n"
+        "## Failed Workflow Review\n\n"
+        "Failed workflow/jobs:\n"
+        + ("\n".join(run_lines) if run_lines else "- Failed workflow details could not be fetched.")
+        + "\n\n"
+        f"Root cause: {review.get('root_cause')}\n\n"
+        f"Classification: `{review.get('category')}`\n\n"
+        f"Next action: {review.get('next_action')}\n\n"
+        f"Artifacts: `{review.get('artifacts')}`"
+        + excerpt_block
+    )
+
+
+def post_failed_workflow_review(repo: str, number: int, review: dict[str, Any]) -> None:
+    body = failed_workflow_comment_body(repo, number, review)
+    payload = common.gh_json_or_none(
+        ["pr", "view", str(number), "--repo", repo, "--json", "comments"],
+        retries=2,
+    ) or {}
+    head = str(review.get("head") or "")
+    for comment in payload.get("comments") or []:
+        existing = str(comment.get("body") or "")
+        if FAILED_WORKFLOW_COMMENT_MARKER not in existing:
+            continue
+        if head and not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head)}`?\s*$", existing):
+            continue
+        comment_id = str(comment.get("id") or "")
+        if not comment_id:
+            return
+        common.run(
+            [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { issueComment { id } } }",
+                "-f",
+                f"id={comment_id}",
+                "-f",
+                f"body={body}",
+            ],
+            check=False,
+        )
+        return
+    common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
 
 
 def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
@@ -325,8 +611,24 @@ def blocker_types_for(label: str, reasons: list[str]) -> list[str]:
         types.add("code_repair")
     if "review changes requested" in reason_text:
         types.add("requested_changes")
-    if "checks failed:" in reason_text:
+    if "checks failed:" in reason_text and "failed workflow classified:" not in reason_text:
         types.add("code_repair")
+    if "failed workflow classified: code-repair" in reason_text:
+        types.add("code_repair")
+    if "failed workflow classified: test-repair" in reason_text:
+        types.add("code_repair")
+    if "failed workflow classified: infra/env" in reason_text:
+        types.add("infra_env")
+    if "failed workflow classified: secret/config" in reason_text:
+        types.add("secret_config")
+    if "failed workflow classified: deployed-validation" in reason_text:
+        types.add("deployed_validation")
+    if "failed workflow classified: human-action" in reason_text:
+        types.add("human_action")
+    if "failed workflow classified: dependency-blocked" in reason_text:
+        types.add("dependency_blocker")
+    if "ci review required" in reason_text:
+        types.add("ci_review")
     if "checks pending:" in reason_text:
         types.add("check_wait")
     if "merge state is" in reason_text or "mergeable is" in reason_text:
@@ -348,11 +650,11 @@ def repair_scope_for(blocker_types: list[str]) -> str:
     blockers = set(blocker_types)
     if "cross_repo_scope" in blockers:
         return "cross-repo"
-    if blockers & {"dependency_blocker", "metadata_blocker"}:
+    if blockers & {"dependency_blocker", "metadata_blocker", "secret_config", "infra_env"}:
         return "metadata"
     if blockers & {"deployed_validation", "local_validation"} and not blockers & CURRENT_REPO_REPAIR_TYPES:
         return "validation"
-    if blockers & {"overlap_wait", "check_wait", "semantic_review", "superseded"}:
+    if blockers & {"overlap_wait", "check_wait", "semantic_review", "superseded", "ci_review"}:
         return "state"
     if blockers & CURRENT_REPO_REPAIR_TYPES:
         return "current-repo"
@@ -368,6 +670,8 @@ def route_for(label: str, reasons: list[str]) -> str:
     blocker_types = blocker_types_for(label, reasons)
     if label == APPROVED_LABEL:
         return "approved"
+    if label == HUMAN_ACTION_LABEL:
+        return "human"
     if label == LOCAL_VALIDATION_REQUIRED_LABEL:
         return "local-validate"
     if label == MANUAL_LABEL:
@@ -382,6 +686,10 @@ def route_for(label: str, reasons: list[str]) -> str:
         return "repair"
     if "cross_repo_scope" in blocker_types:
         return "human"
+    if "human_action" in blocker_types or "secret_config" in blocker_types or "infra_env" in blocker_types:
+        return "human"
+    if "ci_review" in blocker_types:
+        return "needs-ci-review"
     if "deployed_validation" in blocker_types:
         return "deployed-validate"
     if "local_validation" in blocker_types:
@@ -393,6 +701,21 @@ def route_for(label: str, reasons: list[str]) -> str:
 
 def route_for_decision(decision: ReviewDecision) -> str:
     return route_for(decision.label, decision.reasons)
+
+
+def policy_decision_for(decision: ReviewDecision) -> str:
+    route = route_for_decision(decision)
+    if route == "approved":
+        return "approved"
+    if route in {"repair"}:
+        return "needs-repair"
+    if route in {"deployed-validate"}:
+        return "deployed-validate"
+    if route in {"wait", "terminal"}:
+        return "wait"
+    if route in {"needs-ci-review", "local-validate", "semantic-review"}:
+        return "needs-ci-review"
+    return "human"
 
 
 def has_superseded_signal(pr: dict[str, Any], issue: dict[str, Any] | None) -> bool:
@@ -503,6 +826,7 @@ def classify(
     check_dependencies: bool = True,
     allow_no_checks: bool = False,
     require_semantic_review: bool = False,
+    ci_review: dict[str, Any] | None = None,
 ) -> ReviewDecision:
     reasons: list[str] = []
     issue_number = linked_issue_number(pr)
@@ -547,7 +871,21 @@ def classify(
                 reasons.append("local validation pass missing for current head")
             else:
                 reasons.append("no checks reported; local validation required")
-    elif check_state in {"failed", "pending"}:
+    elif check_state == "failed":
+        label = NEEDS_REPAIR_LABEL
+        reasons.append(f"checks {check_state}: {', '.join(check_details[:5])}")
+        if ci_review:
+            category = str(ci_review.get("category") or "code-repair")
+            root_cause = str(ci_review.get("root_cause") or "failed workflow reviewed")
+            reasons.append(f"failed workflow classified: {category}: {root_cause}")
+            if category in NON_REPAIRABLE_CI_CATEGORIES:
+                if category == "deployed-validation":
+                    label = MANUAL_LABEL
+                else:
+                    label = HUMAN_ACTION_LABEL
+        else:
+            reasons.append("ci review required before repair routing")
+    elif check_state == "pending":
         label = NEEDS_REPAIR_LABEL
         reasons.append(f"checks {check_state}: {', '.join(check_details[:5])}")
     if issue and check_dependencies:
@@ -605,6 +943,7 @@ def classify(
         label=label,
         reasons=reasons,
         files=files,
+        ci_review=ci_review,
     )
 
 
@@ -632,10 +971,15 @@ def review_comment_body(decision: ReviewDecision) -> str:
         next_action = "Wait for the earlier overlapping PR named in the reasons to merge or close, then rerun review."
     elif decision.label == SEMANTIC_REVIEW_REQUIRED_LABEL:
         next_action = "Run `atlas-agent-semantic-review OWNER/REPO#PR --apply`, address any findings, then rerun review."
+    elif route_for_decision(decision) == "needs-ci-review":
+        next_action = f"Run `./atlas-agent-review --apply` so failed workflows are reviewed on the PR before repair routing."
+    elif route_for_decision(decision) == "human":
+        next_action = "Follow the blocker-specific instruction in the failed-workflow review, issue, or PR comments, then rerun review."
     return (
         "<!-- atlas-agent-review -->\n"
         f"## Automated Review Decision\n\n"
         f"Classification: `{decision.label}`\n\n"
+        f"Decision: `{policy_decision_for(decision)}`\n"
         f"Route: `{route_for_decision(decision)}`\n"
         f"Repair scope: `{repair_scope_for(blocker_types)}`\n\n"
         "Reasons:\n"
@@ -731,6 +1075,13 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
         for detail, files in details:
             issue_number = linked_issue_number(detail)
             issue = issue_view(repo, issue_number) if issue_number is not None else None
+            ci_review = None
+            if args.review_failed_workflows and failed_check_summaries(detail):
+                job_dir = common.jobs_dir() / f"pr-{int(detail['number'])}-failed-workflow-review-{common.now_id()}"
+                job_dir.mkdir(parents=True, exist_ok=True)
+                ci_review = fetch_failed_workflow_review(repo, detail, job_dir)
+                if ci_review and args.apply and args.comment:
+                    post_failed_workflow_review(repo, int(detail["number"]), ci_review)
             repo_decisions.append(
                 classify(
                     repo,
@@ -742,6 +1093,7 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
                     check_dependencies=args.check_dependencies,
                     allow_no_checks=args.allow_no_checks,
                     require_semantic_review=args.require_semantic_review,
+                    ci_review=ci_review,
                 )
             )
         if args.detect_overlap:
@@ -767,8 +1119,10 @@ def write_summary(path: str, decisions: list[ReviewDecision]) -> None:
                     "blocker_types": blocker_types_for(decision.label, decision.reasons),
                     "repair_scope": repair_scope_for(blocker_types_for(decision.label, decision.reasons)),
                     "repairable": repairable_for(blocker_types_for(decision.label, decision.reasons)),
+                    "decision": policy_decision_for(decision),
                     "reasons": decision.reasons,
                     "files": decision.files,
+                    "ci_review": decision.ci_review,
                 }
                 for decision in decisions
             ],
@@ -785,6 +1139,12 @@ def main() -> None:
     parser.add_argument("--check-dependencies", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--detect-overlap", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--require-semantic-review", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--review-failed-workflows",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Fetch failed workflow runs/jobs/log excerpts and post/update a concise failed-workflow review when applying.",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--comment", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--summary", help="Write structured review decisions to this JSON path.")

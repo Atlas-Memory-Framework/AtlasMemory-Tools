@@ -1,3 +1,5 @@
+<!-- atlas-tools-generated: source=skills/plan-to-issues/reference.md manifest=atlas-tools.v1 checksum=sha256:13f7e464d64aa1498def785e6ddf1946b220700755f7389387961dae0ee50bf0 -->
+<!-- atlas-tools-generated-end -->
 # Plan-To-Issues Reference
 
 ## Goal
@@ -21,7 +23,7 @@ Default to workstream-based issue creation unless the plan is explicitly phase-o
 - `workstream:ws2`
 - `workstream:ws3`
 - `workstream:ws4`
-- `area:atlas-memory`
+- `area:core`
 - `area:admin-ui`
 - `area:chainlit`
 - `area:infra`
@@ -46,7 +48,7 @@ Keep tracking metadata additive and optional.
 ```yaml
 tracking:
   provider: github
-  project: "MateuszKordasiewicz's Workflow readiness"
+  project: "OWNER workflow readiness"
   epic: ""
   mode: draft
 ```

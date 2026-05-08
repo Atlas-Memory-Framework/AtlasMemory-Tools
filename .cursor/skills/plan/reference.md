@@ -1,3 +1,5 @@
+<!-- atlas-tools-generated: source=skills/plan/reference.md manifest=atlas-tools.v1 checksum=sha256:5fc411e1200e23d20f9790c899d6ef9e3d116ce83f89b8de31cbe5add2c502cf -->
+<!-- atlas-tools-generated-end -->
 # Plan Authoring Template (Slim)
 
 Use this file to create a new plan doc when missing. Cursor will autoname it.
@@ -11,7 +13,7 @@ Example optional frontmatter:
 ```yaml
 tracking:
   provider: github
-  project: "MateuszKordasiewicz's Workflow readiness"
+  project: "OWNER workflow readiness"
   epic: ""
   mode: draft
 ```
@@ -142,8 +144,8 @@ Recommended default: <A/B/C> (why)
   - Evidence hook (named gate):
 
 ### Artifact authority snapshot
-- Authoring write surface: `.cursor/plans/<plan>.plan.md`
-- Local planning authority after compile: `.cursor/planning-registry/**`
+- Authoring write surface: selected harness-local plan artifact
+- Local planning authority after compile: selected harness-local planning registry
 - Execution truth: GitHub issues / PRs / checks
 - Execution UI / signal layer: GitHub Projects v2
 - Derived read models / views: runtime mirror, rendered overlays, forecasts

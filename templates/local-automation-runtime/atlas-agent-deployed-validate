@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +63,19 @@ def configured_commands(entry: dict[str, Any]) -> list[str]:
     return [str(command) for command in commands if str(command).strip()]
 
 
+def configured_workflows(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = entry.get("workflows") or entry.get("workflow_chain") or []
+    if not isinstance(raw, list):
+        return []
+    workflows: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            workflows.append({"workflow": item.strip()})
+        elif isinstance(item, dict) and item.get("workflow"):
+            workflows.append(dict(item))
+    return workflows
+
+
 def configured_env(entry: dict[str, Any]) -> dict[str, str]:
     raw = entry.get("env") or {}
     if not isinstance(raw, dict):
@@ -95,6 +110,16 @@ def command_env(repo: str, pr: dict[str, Any], extra_env: dict[str, str]) -> dic
     return env
 
 
+def expand_value(value: Any, env: dict[str, str]) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    for key, replacement in env.items():
+        text = text.replace("${" + key + "}", replacement)
+        text = text.replace("$" + key, replacement)
+    return text
+
+
 def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path, env: dict[str, str]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     with (job_dir / "commands.log").open("w", encoding="utf-8") as log:
@@ -121,10 +146,146 @@ def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path, 
     return results
 
 
-def apply_result(repo: str, number: int, passed: bool, job_dir: Path, head_oid: str) -> None:
+def workflow_run_list(repo: str, workflow: str, ref: str) -> list[dict[str, Any]]:
+    args = [
+        "run",
+        "list",
+        "--repo",
+        repo,
+        "--workflow",
+        workflow,
+        "--limit",
+        "10",
+        "--json",
+        "databaseId,status,conclusion,name,displayTitle,url,createdAt,updatedAt,headSha,workflowName",
+    ]
+    if ref:
+        args.extend(["--branch", ref])
+    return common.gh_json_or_none(args, retries=2) or []
+
+
+def find_dispatched_run(repo: str, workflow: str, ref: str, head_sha: str, after_epoch: float) -> dict[str, Any] | None:
+    for _attempt in range(24):
+        runs = workflow_run_list(repo, workflow, ref)
+        for run in runs:
+            created = str(run.get("createdAt") or "")
+            if head_sha and str(run.get("headSha") or "") not in {"", head_sha}:
+                continue
+            # GitHub timestamps are lexicographically sortable; the sleep loop also protects older runs.
+            if created:
+                try:
+                    if time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S")) + 300 < after_epoch:
+                        continue
+                except ValueError:
+                    pass
+            return run
+        time.sleep(5)
+    return None
+
+
+def workflow_artifacts(repo: str, run_id: int | str, job_dir: Path) -> list[dict[str, Any]]:
+    proc = common.run(["gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts"], check=False)
+    raw = proc.stdout or "{}"
+    (job_dir / f"run-{run_id}-artifacts.json").write_text(raw, encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    artifacts = payload.get("artifacts") or []
+    return artifacts if isinstance(artifacts, list) else []
+
+
+def run_validation_workflows(
+    repo: str,
+    pr: dict[str, Any],
+    workflows: list[dict[str, Any]],
+    job_dir: Path,
+    env: dict[str, str],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    timeout = int(env.get("DEPLOYED_VALIDATION_WORKFLOW_TIMEOUT_SECONDS", "3600"))
+    for item in workflows:
+        workflow = expand_value(item.get("workflow"), env)
+        ref = expand_value(item.get("ref") or env.get("PR_HEAD_BRANCH") or "", env)
+        inputs = item.get("inputs") or {}
+        if not isinstance(inputs, dict):
+            inputs = {}
+        cmd = ["gh", "workflow", "run", workflow, "--repo", repo]
+        if ref:
+            cmd.extend(["--ref", ref])
+        for key, value in inputs.items():
+            expanded = expand_value(value, env)
+            if expanded != "":
+                cmd.extend(["-f", f"{key}={expanded}"])
+        started = time.time()
+        dispatch = common.run(cmd, check=False)
+        result: dict[str, Any] = {
+            "workflow": workflow,
+            "ref": ref,
+            "dispatch_returncode": dispatch.returncode,
+            "dispatch_output": (dispatch.stdout or "")[-2000:],
+            "returncode": dispatch.returncode,
+        }
+        if dispatch.returncode != 0:
+            results.append(result)
+            break
+        run = find_dispatched_run(repo, workflow, ref, str(pr.get("headRefOid") or ""), started)
+        if not run:
+            result.update({"returncode": 1, "error": "dispatched workflow run could not be found"})
+            results.append(result)
+            break
+        run_id = run.get("databaseId")
+        result.update({"run_id": run_id, "run_url": run.get("url"), "run_name": run.get("name") or run.get("workflowName")})
+        deadline = time.time() + timeout
+        current = run
+        while time.time() < deadline:
+            current = common.gh_json_or_none(
+                ["run", "view", str(run_id), "--repo", repo, "--json", "databaseId,status,conclusion,url,name,workflowName"],
+                retries=2,
+            ) or current
+            if str(current.get("status") or "").lower() == "completed":
+                break
+            time.sleep(15)
+        conclusion = str(current.get("conclusion") or "").lower()
+        result.update(
+            {
+                "status": current.get("status"),
+                "conclusion": current.get("conclusion"),
+                "artifacts": [
+                    {"name": artifact.get("name"), "url": artifact.get("archive_download_url")}
+                    for artifact in workflow_artifacts(repo, run_id, job_dir)
+                ],
+                "returncode": 0 if conclusion in {"success", "neutral", "skipped"} else 1,
+            }
+        )
+        results.append(result)
+        if result["returncode"] != 0:
+            break
+    return results
+
+
+def result_evidence_lines(results: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for result in results:
+        if "workflow" in result:
+            label = str(result.get("workflow") or "workflow")
+            url = str(result.get("run_url") or "")
+            ref = f"[{label}]({url})" if url.startswith("https://") else label
+            conclusion = result.get("conclusion") or ("dispatch failed" if result.get("dispatch_returncode") else "unknown")
+            lines.append(f"- Workflow {ref}: {conclusion}")
+            artifacts = [str(item.get("name") or "") for item in result.get("artifacts") or [] if item.get("name")]
+            if artifacts:
+                lines.append(f"  Artifacts: {', '.join(artifacts[:8])}")
+        else:
+            lines.append(f"- Command `{result.get('command')}`: exit {result.get('returncode')}")
+    return lines
+
+
+def apply_result(repo: str, number: int, passed: bool, job_dir: Path, head_oid: str, results: list[dict[str, Any]]) -> None:
     ensure_labels(repo)
     if passed:
         common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:deployed-validation-failed"], check=False)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:manual-validation-required"], check=False)
         common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:deployed-validation-passed"], retries=3)
         common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:manual-validation-approved"], retries=3)
         result = "passed"
@@ -132,15 +293,42 @@ def apply_result(repo: str, number: int, passed: bool, job_dir: Path, head_oid: 
         common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:manual-validation-approved"], check=False)
         common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--remove-label", "agent:deployed-validation-passed"], check=False)
         common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:deployed-validation-failed"], retries=3)
-        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:needs-repair"], retries=3)
+        common.run(["gh", "issue", "edit", str(number), "--repo", repo, "--add-label", "agent:manual-validation-required"], retries=3)
         result = "failed"
+    evidence = "\n".join(result_evidence_lines(results)) or "- no workflow or command evidence recorded"
     body = (
         f"{COMMENT_MARKER}\n"
         f"Deployed/manual validation {result} for PR #{number}.\n\n"
         f"Head: `{head_oid}`\n"
         f"Result: {result}\n"
-        f"Artifacts: `{job_dir}`"
+        f"Artifacts: `{job_dir}`\n\n"
+        "Evidence:\n"
+        f"{evidence}"
     )
+    payload = common.gh_json_or_none(["pr", "view", str(number), "--repo", repo, "--json", "comments"], retries=2) or {}
+    for comment in payload.get("comments") or []:
+        existing = str(comment.get("body") or "")
+        if COMMENT_MARKER not in existing:
+            continue
+        if not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head_oid)}`?\s*$", existing):
+            continue
+        comment_id = str(comment.get("id") or "")
+        if comment_id:
+            common.run(
+                [
+                    "gh",
+                    "api",
+                    "graphql",
+                    "-f",
+                    "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { issueComment { id } } }",
+                    "-f",
+                    f"id={comment_id}",
+                    "-f",
+                    f"body={body}",
+                ],
+                check=False,
+            )
+        return
     common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
 
 
@@ -149,20 +337,26 @@ def validate(args: argparse.Namespace) -> int:
     pr = pr_json(repo, number)
     entry = config_entry(repo, args.commands_file)
     commands = configured_commands(entry)
+    workflows = configured_workflows(entry)
     job_dir = common.jobs_dir() / f"pr-{number}-deployed-validate-{common.now_id()}"
     job_dir.mkdir(parents=True, exist_ok=True)
     common.write_json(job_dir / "pr.json", pr)
     common.write_json(job_dir / "validation-config.json", entry)
-    if not commands:
-        common.write_json(job_dir / "validation.json", {"passed": False, "error": "no deployed validation commands configured"})
-        print(f"No deployed validation commands configured. Artifacts: {job_dir}")
+    if not commands and not workflows:
+        common.write_json(job_dir / "validation.json", {"passed": False, "error": "no deployed validation commands or workflows configured"})
+        print(f"No deployed validation commands or workflows configured. Artifacts: {job_dir}")
         return 1
-    worktree = clean_worktree(repo, pr, job_dir)
-    results = run_validation_commands(worktree, commands, job_dir, command_env(repo, pr, configured_env(entry)))
+    env = command_env(repo, pr, configured_env(entry))
+    results: list[dict[str, Any]] = []
+    if workflows:
+        results.extend(run_validation_workflows(repo, pr, workflows, job_dir, env))
+    if commands and (not results or all(result["returncode"] == 0 for result in results)):
+        worktree = clean_worktree(repo, pr, job_dir)
+        results.extend(run_validation_commands(worktree, commands, job_dir, env))
     passed = bool(results) and all(result["returncode"] == 0 for result in results)
     common.write_json(job_dir / "validation.json", {"passed": passed, "results": results})
     if args.apply:
-        apply_result(repo, number, passed, job_dir, str(pr.get("headRefOid") or "unknown"))
+        apply_result(repo, number, passed, job_dir, str(pr.get("headRefOid") or "unknown"), results)
     print(f"Deployed/manual validation {'passed' if passed else 'failed'}. Artifacts: {job_dir}")
     return 0 if passed else 1
 

@@ -1,6 +1,6 @@
 # Local Automation Runtime Template
 
-This template is the host-side local Codex automation lane for AtlasMemory-style projects.
+This template is the host-side local Codex automation lane for GitHub issue-to-PR automation.
 
 It provides:
 

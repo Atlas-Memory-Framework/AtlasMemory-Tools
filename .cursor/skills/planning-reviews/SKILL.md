@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:1b3511247d64aeb7c4b251424abc46c2e51c479d498b194d673aabad6394c1e9
+# atlas-tools-generated-end
 name: planning-reviews
 description: Run required planning-phase reviews and log dispositions in the current plan artifact. Use after Implementation stage before plan approval.
 ---
@@ -31,11 +33,11 @@ Planning security reviewers are plan-only by default, so they can miss repo fact
 ### Scope (keep it fast + deterministic)
 - Read this allowlist of “hot” files and extract security-relevant facts:
   - `functions/triggers/internal.py` (internal endpoints auth + any logging of API keys)
-  - `atlas_memory_azure/auth/backend_jwt.py` (APIM→Functions backend JWT defaults and fail-closed behavior)
-  - `infra/1 - bicep/modules/3 - compute/functions-workers.bicep` (deployment wiring for `ATLAS_BACKEND_JWT_REQUIRED` and signing key)
+  - backend JWT/auth modules (gateway-to-functions defaults and fail-closed behavior)
+  - infrastructure deployment modules (deployment wiring for backend JWT requirement and signing key)
   - `infra/1 - bicep/modules/2 - gateway/apim-policies.bicep` (APIM policy fragments: backend-jwt-proof, header projection, routing/bypass)
 - Optional follow-ons only if the first pass finds risk:
-  - `atlas_memory_azure/auth/api_key_provider.py`
+  - backend API key provider modules
   - `functions/shared/error_handler.py`
 
 ### Output shape (must be copy/pasteable into the plan)

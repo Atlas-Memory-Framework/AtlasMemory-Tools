@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:8c26fa78f17cff19a1d081257e377efb99f6f4edeb6046e72afdc7ff297b4270
+# atlas-tools-generated-end
 name: plan-to-issues
 description: Sync or materialize GitHub issues and optional project tracking from the current plan artifact. Use when the user asks to create or update issues from a plan, wants a dry-run issue breakdown, or wants to project workstreams into a GitHub Project without replacing planning authority.
 ---
@@ -72,7 +74,7 @@ Use the plan's existing identifiers wherever possible:
 4. In `registry-first`, prefer compiled registry metadata for stable ids, execution repo, and routing; use markdown only as the amendment record and narrative context.
 5. Decide whether the issue strategy is workstreams or phases.
 6. Run the parser script in dry-run first:
-   - `python .cursor/skills/plan-to-issues/scripts/plan_to_issues.py --plan "<path>" --repo "<owner/repo>" --dry-run`
+   - `python skills/plan-to-issues/scripts/plan_to_issues.py --plan "<path>" --repo "<owner/repo>" --dry-run`
    - If the user provides a GitHub Project URL, prefer `--project-url "<https://github.com/orgs/<owner>/projects/<number>>"` over manually splitting owner and number.
 7. Review the preview:
    - epic title/body
@@ -82,7 +84,7 @@ Use the plan's existing identifiers wherever possible:
    - dependencies
    - blockers, merge points, named gates, repo-boundary hints, and Azure validation requirements
 8. If the user explicitly approves apply mode, run:
-   - `python .cursor/skills/plan-to-issues/scripts/plan_to_issues.py --plan "<path>" --repo "<owner/repo>" --apply`
+   - `python skills/plan-to-issues/scripts/plan_to_issues.py --plan "<path>" --repo "<owner/repo>" --apply`
 9. For the local Codex automation lane, prefer the template bridge:
    - `templates/local-automation-runtime/atlas-agent-plan-queue --plan "<path>" --repo "<owner/repo>" --apply --queue`
    - Add `--publish` only when eligible queued issues should immediately run local workers and publish draft PRs.

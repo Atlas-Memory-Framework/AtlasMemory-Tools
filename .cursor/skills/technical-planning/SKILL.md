@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/technical-planning/SKILL.md manifest=atlas-tools.v1 checksum=sha256:8f2a322cfb1eba8baf62287f4f301405fe501266504753995bae8b00b584b646
+# atlas-tools-generated-end
 name: technical-planning
 description: Convert feature intent into a coherent technical approach tied to the codebase. Use during /plan Technical stage.
 ---

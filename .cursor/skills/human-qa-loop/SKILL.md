@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/human-qa-loop/SKILL.md manifest=atlas-tools.v1 checksum=sha256:0fbbc60908dd3388f65eb87f2195b432a99e7809a89a3922b3dc27d1d76938b2
+# atlas-tools-generated-end
 name: human-qa-loop
 description: Enforce completion of a target planning output by iterating with the user until explicit success criteria are met. Use to wrap problem definition, challenge loops, technical planning, and reviews.
 ---

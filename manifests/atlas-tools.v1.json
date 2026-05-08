@@ -1,0 +1,132 @@
+{
+  "schema_version": "atlas-tools.manifest.v1",
+  "version": "atlas-tools.v1",
+  "description": "Canonical inventory for AtlasMemory Tools skills, agents, templates, aliases, and harness adapter targets.",
+  "skills": [
+    {
+      "name": "critical-ideation",
+      "path": "skills/critical-ideation"
+    },
+    {
+      "name": "human-qa-loop",
+      "path": "skills/human-qa-loop"
+    },
+    {
+      "name": "implement",
+      "path": "skills/implement"
+    },
+    {
+      "name": "implementation-planning",
+      "path": "skills/implementation-planning"
+    },
+    {
+      "name": "local-automation-runtime-operate",
+      "path": "skills/local-automation-runtime-operate"
+    },
+    {
+      "name": "local-automation-runtime-setup",
+      "path": "skills/local-automation-runtime-setup"
+    },
+    {
+      "name": "local-automation-runtime-upgrade",
+      "path": "skills/local-automation-runtime-upgrade"
+    },
+    {
+      "name": "plan",
+      "path": "skills/plan"
+    },
+    {
+      "name": "plan-to-issues",
+      "path": "skills/plan-to-issues"
+    },
+    {
+      "name": "planning-reviews",
+      "path": "skills/planning-reviews"
+    },
+    {
+      "name": "problem-definition",
+      "path": "skills/problem-definition"
+    },
+    {
+      "name": "review",
+      "path": "skills/review"
+    },
+    {
+      "name": "technical-planning",
+      "path": "skills/technical-planning"
+    }
+  ],
+  "agents": [
+    {
+      "name": "code-reviewer",
+      "path": "agents/code-reviewer.md"
+    },
+    {
+      "name": "data-contracts",
+      "path": "agents/data-contracts.md"
+    },
+    {
+      "name": "doc-reviewer-expert-tech",
+      "path": "agents/doc-reviewer-expert-tech.md"
+    },
+    {
+      "name": "doc-reviewer-implementer",
+      "path": "agents/doc-reviewer-implementer.md"
+    },
+    {
+      "name": "doc-reviewer-zero-context",
+      "path": "agents/doc-reviewer-zero-context.md"
+    },
+    {
+      "name": "infra-engineer",
+      "path": "agents/infra-engineer.md"
+    },
+    {
+      "name": "processing-engineer",
+      "path": "agents/processing-engineer.md"
+    },
+    {
+      "name": "test-engineer",
+      "path": "agents/test-engineer.md"
+    }
+  ],
+  "templates": [
+    {
+      "name": "local-automation-runtime",
+      "path": "templates/local-automation-runtime"
+    }
+  ],
+  "aliases": {
+    "plan-to-issues": [
+      "issues-from-plan",
+      "github-issue-projection"
+    ],
+    "local-automation-runtime-setup": [
+      "runtime-setup"
+    ],
+    "local-automation-runtime-operate": [
+      "runtime-operate"
+    ],
+    "local-automation-runtime-upgrade": [
+      "runtime-upgrade"
+    ]
+  },
+  "adapters": {
+    "cursor": {
+      "skills_path": ".cursor/skills",
+      "agents_path": ".cursor/agents"
+    },
+    "codex": {
+      "skills_path": ".codex/skills",
+      "agents_path": ".codex/agents"
+    },
+    "gemini": {
+      "skills_path": ".gemini/skills",
+      "agents_path": ".gemini/agents"
+    },
+    "claude": {
+      "skills_path": ".claude/skills",
+      "agents_path": ".claude/agents"
+    }
+  }
+}

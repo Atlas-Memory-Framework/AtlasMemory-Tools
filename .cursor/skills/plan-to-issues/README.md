@@ -1,3 +1,5 @@
+<!-- atlas-tools-generated: source=skills/plan-to-issues/README.md manifest=atlas-tools.v1 checksum=sha256:c98ba1b2a1d90fa3cfb97ee3a52f45d14c28884ec792fc7de506adf6308282af -->
+<!-- atlas-tools-generated-end -->
 # /plan-to-issues skill
 
 This skill helps project one plan artifact into GitHub issues and an optional GitHub Project without making those downstream tracking surfaces the new planning authority.
@@ -7,7 +9,7 @@ This skill helps project one plan artifact into GitHub issues and an optional Gi
 1. Reference the plan explicitly:
 
 ```text
-@Atlat-Memory-Azure-Implmentation/.cursor/plans/ws4_workflow_surfaces_43e9f790.plan.md
+@project/plans/workflow-surfaces.plan.md
 ```
 
 2. Ask for a preview first:

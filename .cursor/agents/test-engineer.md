@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=agents/test-engineer.md manifest=atlas-tools.v1 checksum=sha256:459b0436a33c99136a35cc8d1f034f7ccb23d59f4102cfc4a526334f3ec34689
+# atlas-tools-generated-end
 name: test-engineer
 description: Build-phase test gate owner. Plan and run the highest-value tests listed in the current plan artifact. Use after review fixes in /build.
 ---

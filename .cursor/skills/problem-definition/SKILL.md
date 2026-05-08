@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/problem-definition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:b57adb25f74a35958d3a9e09dd233b2d49f3f4d1aff694233719185e0ae3f4e2
+# atlas-tools-generated-end
 name: problem-definition
 description: Define a clear problem statement with measurable success criteria and explicit scope boundaries. Use at the start of /plan or when the user asks to define the problem.
 ---

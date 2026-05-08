@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=skills/implement/SKILL.md manifest=atlas-tools.v1 checksum=sha256:14e84c5f354f056eff8653aaaa2153875bb330a674afdb352474cda2169ed6c9
+# atlas-tools-generated-end
 name: build
 description: Execute the current plan artifact with strict sub-agent orchestration, plan-execution discipline, and build-time gates. Use when the user runs /build, /implement, or requests implementation from an approved plan.
 ---

@@ -1,4 +1,6 @@
 ---
+# atlas-tools-generated: source=agents/infra-engineer.md manifest=atlas-tools.v1 checksum=sha256:b1b0c7130a92333ea949dcc2886c409cb4d00d745b1884e9153955b5e7fdbb55
+# atlas-tools-generated-end
 name: infra-engineer
 description: Infra/deploy specialist. Use during planning for infra/rollout risks, and optionally during build to validate deployment steps.
 ---
