@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import harnesslib  # noqa: E402
+import enforce_local_ssot  # noqa: E402
 
 
 class ManifestAndHarnessTests(unittest.TestCase):
@@ -105,6 +106,43 @@ class ManifestAndHarnessTests(unittest.TestCase):
             self.assertTrue((target / ".claude" / "skills" / "plan" / "SKILL.md").exists())
 
 
+class LocalSsotEnforcementTests(unittest.TestCase):
+    def test_registry_check_and_repair_generated_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "project"
+            target.mkdir()
+            harnesslib.install_harness("codex", target)
+            registry = Path(tmp) / "ssot.json"
+            registry.write_text(
+                json.dumps({"projects": [{"path": str(target), "harnesses": ["codex"]}]}),
+                encoding="utf-8",
+            )
+            generated = target / ".codex" / "skills" / "plan" / "SKILL.md"
+            generated.write_text(generated.read_text(encoding="utf-8") + "\ndrift\n", encoding="utf-8")
+
+            projects = enforce_local_ssot.load_registry(registry)
+            self.assertEqual(len(projects), 1)
+            self.assertTrue(enforce_local_ssot.check_project(projects[0]))
+
+            changed = enforce_local_ssot.repair_project(projects[0])
+
+            self.assertIn(generated, changed)
+            self.assertEqual(enforce_local_ssot.check_project(projects[0]), [])
+
+    def test_hook_install_preserves_existing_hook_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = Path(tmp) / "pre-commit"
+            hook.write_text("#!/usr/bin/env sh\necho existing\n", encoding="utf-8")
+
+            enforce_local_ssot.install_hook(hook, "echo managed")
+
+            text = hook.read_text(encoding="utf-8")
+            self.assertIn("echo existing", text)
+            self.assertIn(enforce_local_ssot.HOOK_BEGIN, text)
+            self.assertIn("echo managed", text)
+            self.assertTrue(hook.stat().st_mode & 0o111)
+
+
 class PortabilityTests(unittest.TestCase):
     FORBIDDEN = (
         "Atlas-" "Memory-Framework",
@@ -116,7 +154,7 @@ class PortabilityTests(unittest.TestCase):
 
     def test_no_atlas_specific_defaults_outside_examples(self) -> None:
         offenders: list[str] = []
-        for base in ("skills", "agents", "templates", "harnesses", "scripts", "tests", "manifests"):
+        for base in ("skills", "agents", "templates", "scripts", "tests", "manifests"):
             for path in (ROOT / base).rglob("*"):
                 if not path.is_file():
                     continue

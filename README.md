@@ -7,8 +7,7 @@ Canonical source lives at the repository root:
 - `skills/`: reusable skills for planning, implementation, review, issue projection, and runtime operation
 - `agents/`: shared role documents for implementers and reviewers
 - `templates/local-automation-runtime/`: reusable local issue-to-PR automation runtime
-- `harnesses/`: install notes for Cursor, Codex, Gemini, and Claude
-- `manifests/atlas-tools.v1.json`: inventory used by installer and drift checks
+- `manifests/atlas-tools.v1.json`: inventory of supported harness adapters, skills, agents, and templates
 
 The `.cursor/` directory is kept for compatibility as generated output. Do not edit harness copies directly; update `skills/` or `agents/`, then regenerate.
 
@@ -28,6 +27,16 @@ Verify generated files have not drifted:
 ```bash
 python3 scripts/verify_harness.py --target /path/to/project
 ```
+
+Enforce the local source-of-truth relationship across registered project copies:
+
+```bash
+cp ssot-projects.example.json ssot-projects.local.json
+python3 scripts/enforce_local_ssot.py --registry ssot-projects.local.json --install-hooks
+python3 scripts/enforce_local_ssot.py --registry ssot-projects.local.json --repair
+```
+
+See `docs/source-of-truth.md` for the install, update, contribution, and local hook workflow.
 
 ## Verify
 

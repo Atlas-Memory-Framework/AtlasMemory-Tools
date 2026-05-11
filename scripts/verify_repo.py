@@ -29,10 +29,10 @@ FORBIDDEN_NEUTRAL_COPY = (
 
 SCAN_PATHS = (
     "README.md",
+    "docs",
     "skills",
     "agents",
     "templates",
-    "harnesses",
     "scripts",
     "tests",
     "manifests",
@@ -44,9 +44,10 @@ REQUIRED_COPY_PATHS = (
     "skills",
     "agents",
     "templates/local-automation-runtime",
-    "harnesses",
+    "docs/source-of-truth.md",
     "manifests/atlas-tools.v1.json",
     "scripts/install_harness.py",
+    "scripts/enforce_local_ssot.py",
     "scripts/verify_harness.py",
     "scripts/verify_repo.py",
     "tests/test_manifest_and_harness.py",
@@ -58,6 +59,7 @@ REQUIRED_COPY_PATHS = (
 
 JSON_FILES = (
     "manifests/atlas-tools.v1.json",
+    "ssot-projects.example.json",
     "templates/local-automation-runtime/required-checks.json",
     "templates/local-automation-runtime/config/required-checks.example.json",
     "templates/local-automation-runtime/config/local-validation.example.json",
@@ -66,6 +68,7 @@ JSON_FILES = (
 
 PY_COMPILE_FILES = (
     "scripts/harnesslib.py",
+    "scripts/enforce_local_ssot.py",
     "scripts/install_harness.py",
     "scripts/verify_harness.py",
     "scripts/verify_repo.py",
@@ -245,7 +248,12 @@ def check_executable_helpers() -> None:
     for path in (ROOT / "templates" / "local-automation-runtime").glob("atlas-agent-*"):
         if path.is_file() and not os.access(path, os.X_OK):
             failures.append(rel(path))
-    for relative in ("scripts/install_harness.py", "scripts/verify_harness.py", "scripts/verify_repo.py"):
+    for relative in (
+        "scripts/enforce_local_ssot.py",
+        "scripts/install_harness.py",
+        "scripts/verify_harness.py",
+        "scripts/verify_repo.py",
+    ):
         path = ROOT / relative
         if not os.access(path, os.X_OK):
             failures.append(relative)
@@ -263,17 +271,20 @@ def check_temp_harness_cli() -> None:
 def run_test_suite() -> None:
     env = python_env()
     run([sys.executable, "-m", "unittest", "discover", "tests"], env=env)
-    run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-p",
-            "no:cacheprovider",
-            "skills/plan-to-issues/scripts/test_plan_to_issues.py",
-        ],
-        env=env,
-    )
+    if shutil.which("pytest"):
+        run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-p",
+                "no:cacheprovider",
+                "skills/plan-to-issues/scripts/test_plan_to_issues.py",
+            ],
+            env=env,
+        )
+    else:
+        run([sys.executable, "skills/plan-to-issues/scripts/test_plan_to_issues.py"], env=env)
     run([sys.executable, "-m", "unittest", "discover", "templates/local-automation-runtime/tests"], env=env)
 
 

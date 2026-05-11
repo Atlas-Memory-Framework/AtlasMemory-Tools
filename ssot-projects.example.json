@@ -1,0 +1,8 @@
+{
+  "projects": [
+    {
+      "path": "/absolute/path/to/project",
+      "harnesses": ["codex"]
+    }
+  ]
+}
