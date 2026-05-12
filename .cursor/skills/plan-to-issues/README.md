@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan-to-issues/README.md manifest=atlas-tools.v1 checksum=sha256:c98ba1b2a1d90fa3cfb97ee3a52f45d14c28884ec792fc7de506adf6308282af -->
+<!-- atlas-tools-generated: source=skills/plan-to-issues/README.md manifest=atlas-tools.v1 checksum=sha256:1479be005a1dfe207e602b882ce22b363113ea3da0654458c15e0f7f82838c11 -->
 <!-- atlas-tools-generated-end -->
 # /plan-to-issues skill
 
@@ -18,7 +18,13 @@ This skill helps project one plan artifact into GitHub issues and an optional Gi
 Use plan-to-issues in dry-run mode for this plan and show me the proposed epic and child issues.
 ```
 
-3. After review, ask for apply mode:
+3. If no GitHub Project exists, create the standard board first:
+
+```text
+Use github-project to create the execution Project for this plan.
+```
+
+4. After review, ask for apply mode:
 
 ```text
 Create the issues in the root repo and add them to the workflow readiness project.

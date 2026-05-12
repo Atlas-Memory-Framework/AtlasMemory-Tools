@@ -1,6 +1,6 @@
 ---
 name: local-automation-runtime-operate
-description: Operate the local automation runtime: queue issues, run bounded or unattended cycles, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup.
+description: "Operate the local automation runtime: queue issues, run bounded or unattended cycles, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup."
 ---
 
 # Local Automation Runtime Operate
@@ -8,6 +8,7 @@ description: Operate the local automation runtime: queue issues, run bounded or 
 ## Purpose
 
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
+Use `repos.txt` to add target repos; use another runtime only for isolation, secrets separation, or intentional concurrent lanes.
 
 ## Operator Roles
 

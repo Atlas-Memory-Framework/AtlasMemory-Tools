@@ -19,6 +19,9 @@
    cp projects.example.txt projects.txt
    ```
 
+   `repos.txt` is the repo inventory for this runtime. Multiple product repos can share one runtime; create a
+   separate runtime only for separate secrets/auth, host/container isolation, or independent concurrent lanes.
+
 3. Prepare Codex auth under `codex-home/` for the worker container.
 
 4. Build the local Codex image:

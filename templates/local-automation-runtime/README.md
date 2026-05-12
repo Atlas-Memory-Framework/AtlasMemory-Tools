@@ -25,6 +25,12 @@ cp projects.example.txt projects.txt
 python3 -m unittest tests.test_local_agent_autonomy
 ```
 
+Edit `repos.txt` with one `OWNER/REPO` target per line. The runtime clones or fetches those repos under
+`AGENT_REPOS`, defaulting to `./repos`.
+
+Add another target repo to `repos.txt`; create another runtime only when you need separate secrets/auth, host
+isolation, or intentional concurrent lanes.
+
 Project an approved plan into issues and preview queue eligibility:
 
 ```bash

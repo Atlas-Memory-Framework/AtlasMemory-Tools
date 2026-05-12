@@ -16,7 +16,13 @@ This skill helps project one plan artifact into GitHub issues and an optional Gi
 Use plan-to-issues in dry-run mode for this plan and show me the proposed epic and child issues.
 ```
 
-3. After review, ask for apply mode:
+3. If no GitHub Project exists, create the standard board first:
+
+```text
+Use github-project to create the execution Project for this plan.
+```
+
+4. After review, ask for apply mode:
 
 ```text
 Create the issues in the root repo and add them to the workflow readiness project.

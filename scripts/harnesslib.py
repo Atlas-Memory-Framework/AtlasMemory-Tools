@@ -189,20 +189,27 @@ def verify_generated_file(path: Path) -> list[str]:
     return errors
 
 
-def verify_harness_target(target: Path) -> list[str]:
+def verify_harness_target(target: Path, harnesses: tuple[str, ...] | list[str] | None = None) -> list[str]:
     errors: list[str] = []
     manifest = load_manifest()
-    installed_harnesses: list[str] = []
+    selected_harnesses: list[str] = []
     roots: list[Path] = []
     planned_targets: set[Path] = set()
-    for harness, adapter in (manifest.get("adapters") or {}).items():
-        skills_root = target / adapter["skills_path"]
-        agents_root = target / adapter["agents_path"]
-        if skills_root.exists() or agents_root.exists():
-            installed_harnesses.append(harness)
+
+    if harnesses is None:
+        for harness, adapter in (manifest.get("adapters") or {}).items():
+            skills_root = target / adapter["skills_path"]
+            agents_root = target / adapter["agents_path"]
+            if skills_root.exists() or agents_root.exists():
+                selected_harnesses.append(harness)
+                roots.extend([skills_root, agents_root])
+    else:
+        for harness in harnesses:
+            skills_root, agents_root = target_roots_for(harness, target, manifest)
+            selected_harnesses.append(harness)
             roots.extend([skills_root, agents_root])
 
-    for harness in installed_harnesses:
+    for harness in selected_harnesses:
         for item in planned_files(harness, target, manifest):
             planned_targets.add(item.target)
             if not item.target.exists():

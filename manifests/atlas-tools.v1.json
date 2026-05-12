@@ -8,6 +8,10 @@
       "path": "skills/critical-ideation"
     },
     {
+      "name": "github-project",
+      "path": "skills/github-project"
+    },
+    {
       "name": "human-qa-loop",
       "path": "skills/human-qa-loop"
     },
@@ -97,6 +101,11 @@
     }
   ],
   "aliases": {
+    "github-project": [
+      "projecting",
+      "create-github-project",
+      "planning-project"
+    ],
     "plan-to-issues": [
       "issues-from-plan",
       "github-issue-projection"

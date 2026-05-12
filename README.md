@@ -9,6 +9,12 @@ Canonical source lives at the repository root:
 - `templates/local-automation-runtime/`: reusable local issue-to-PR automation runtime
 - `manifests/atlas-tools.v1.json`: inventory of supported harness adapters, skills, agents, and templates
 
+Mental model:
+
+- This repository is the control surface and source of truth for harnesses, skills, agents, scripts, and runtime templates.
+- An installed local automation runtime is the machine room: local config, auth, logs, jobs, and managed checkouts.
+- Target repositories are listed in the runtime's `repos.txt`; adding a target repo does not require creating another runtime.
+
 The `.cursor/` directory is kept for compatibility as generated output. Do not edit harness copies directly; update `skills/` or `agents/`, then regenerate.
 
 ## Install
@@ -56,8 +62,9 @@ python3 scripts/verify_repo.py --skip-tests --strict-copy
 
 1. Use `plan` with a feature idea or existing plan file.
 2. Use `implement` with the approved plan.
-3. Use `plan-to-issues` when approved work should be projected into GitHub issues.
-4. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for local automation runtime lifecycle work.
+3. Use `github-project` when the work needs a new GitHub Project board for issue projection.
+4. Use `plan-to-issues` when approved work should be projected into GitHub issues.
+5. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for local automation runtime lifecycle work.
 
 For full planning details, see `skills/plan/README.md`.
 

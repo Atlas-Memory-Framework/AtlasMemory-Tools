@@ -1,8 +1,8 @@
 ---
-# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:69a18771b3b81e0a1390440c0c7434669e987bfca1175e82c0f51208290d4296
+# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:0cc73446aea20171a5ea326618d09eddae0c5458573a76d9ed5b87664565ff9e
 # atlas-tools-generated-end
 name: local-automation-runtime-operate
-description: Operate the local automation runtime: queue issues, run bounded or unattended cycles, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup.
+description: "Operate the local automation runtime: queue issues, run bounded or unattended cycles, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup."
 ---
 
 # Local Automation Runtime Operate
@@ -10,6 +10,7 @@ description: Operate the local automation runtime: queue issues, run bounded or 
 ## Purpose
 
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
+Use `repos.txt` to add target repos; use another runtime only for isolation, secrets separation, or intentional concurrent lanes.
 
 ## Operator Roles
 

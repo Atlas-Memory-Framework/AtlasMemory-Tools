@@ -122,8 +122,12 @@ treated as drift unless they are promoted into this repository.
 ## Local Automation Runtime Template
 
 The runtime template under `templates/local-automation-runtime/` is also source material, but installed runtime
-directories have local configuration and state. Preserve local-only files such as `config.env`, `repos/`, `jobs/`,
-`logs/`, `state/`, and `codex-home/`.
+directories have local configuration and state. An installed runtime directory is not a target source repository;
+it is the local host that stores config, auth, logs, jobs, and managed checkouts.
+
+The installed runtime's `repos.txt` is the inventory of repositories the runtime operates on. Runtime-managed
+clones live under `repos/`, using names such as `OWNER__REPO`. Preserve local-only files and directories such as
+`config.env`, `repos.txt`, `repos/`, `jobs/`, `logs/`, `state/`, and `codex-home/`.
 
 Use the runtime setup and upgrade skills for operational changes:
 

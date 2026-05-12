@@ -38,6 +38,8 @@ Collect or infer these inputs before proceeding:
 - strategy: `workstreams` or `phases`
 - mode: `dry-run` or `apply`
 
+If the user wants Project tracking but has no existing Project URL, use `github-project` first to create or verify one, then pass its output as `--project-url`.
+
 If the plan is still unstable, prefer `dry-run` and keep tracking metadata in `draft` mode.
 
 Recommended plan metadata for stable projection:

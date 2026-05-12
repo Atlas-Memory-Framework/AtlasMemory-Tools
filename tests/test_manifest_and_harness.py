@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -107,6 +109,18 @@ class ManifestAndHarnessTests(unittest.TestCase):
 
 
 class LocalSsotEnforcementTests(unittest.TestCase):
+    def run_git(self, cwd: Path, *args: str) -> None:
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
     def test_registry_check_and_repair_generated_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "project"
@@ -129,6 +143,19 @@ class LocalSsotEnforcementTests(unittest.TestCase):
             self.assertIn(generated, changed)
             self.assertEqual(enforce_local_ssot.check_project(projects[0]), [])
 
+    def test_registry_harnesses_scope_check_and_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "project"
+            target.mkdir()
+            harnesslib.install_harness("codex", target)
+            harnesslib.install_harness("claude", target)
+            project = enforce_local_ssot.Project(target, ("codex",))
+            generated = target / ".claude" / "skills" / "plan" / "SKILL.md"
+            generated.write_text(generated.read_text(encoding="utf-8") + "\ndrift\n", encoding="utf-8")
+
+            self.assertEqual(enforce_local_ssot.check_project(project), [])
+            self.assertTrue(harnesslib.verify_harness_target(target))
+
     def test_hook_install_preserves_existing_hook_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             hook = Path(tmp) / "pre-commit"
@@ -141,6 +168,39 @@ class LocalSsotEnforcementTests(unittest.TestCase):
             self.assertIn(enforce_local_ssot.HOOK_BEGIN, text)
             self.assertIn("echo managed", text)
             self.assertTrue(hook.stat().st_mode & 0o111)
+
+    def test_hook_install_runs_managed_block_before_existing_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hook = Path(tmp) / "pre-commit"
+            hook.write_text("#!/usr/bin/env sh\nset -eu\nexit 0\necho existing\n", encoding="utf-8")
+
+            enforce_local_ssot.install_hook(hook, "echo managed")
+
+            text = hook.read_text(encoding="utf-8")
+            self.assertLess(text.index("echo managed"), text.index("exit 0"))
+            self.assertIn("echo existing", text)
+
+    def test_project_hook_installs_into_git_worktree_hook_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            worktree = root / "worktree"
+            repo.mkdir()
+            self.run_git(repo, "init")
+            self.run_git(repo, "config", "user.email", "test@example.invalid")
+            self.run_git(repo, "config", "user.name", "Test User")
+            (repo / "README.md").write_text("test\n", encoding="utf-8")
+            self.run_git(repo, "add", "README.md")
+            self.run_git(repo, "commit", "-m", "init")
+            self.run_git(repo, "worktree", "add", "-b", "worktree-test", str(worktree))
+
+            project = enforce_local_ssot.Project(worktree, ("codex",))
+            hook_path = enforce_local_ssot.hook_path_for_repo(worktree)
+            self.assertIsNotNone(hook_path)
+            enforce_local_ssot.install_project_hook(project)
+
+            self.assertTrue(hook_path.exists())
+            self.assertIn("--harness codex", hook_path.read_text(encoding="utf-8"))
 
 
 class PortabilityTests(unittest.TestCase):

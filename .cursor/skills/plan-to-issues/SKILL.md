@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:8c26fa78f17cff19a1d081257e377efb99f6f4edeb6046e72afdc7ff297b4270
+# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:ef26a768a11caf9919e7baf81faf4d5344ba22b6f179de948603d265d873bb17
 # atlas-tools-generated-end
 name: plan-to-issues
 description: Sync or materialize GitHub issues and optional project tracking from the current plan artifact. Use when the user asks to create or update issues from a plan, wants a dry-run issue breakdown, or wants to project workstreams into a GitHub Project without replacing planning authority.
@@ -39,6 +39,8 @@ Collect or infer these inputs before proceeding:
 - optional GitHub Project name or identifier
 - strategy: `workstreams` or `phases`
 - mode: `dry-run` or `apply`
+
+If the user wants Project tracking but has no existing Project URL, use `github-project` first to create or verify one, then pass its output as `--project-url`.
 
 If the plan is still unstable, prefer `dry-run` and keep tracking metadata in `draft` mode.
 

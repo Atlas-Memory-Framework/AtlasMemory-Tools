@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,7 +100,7 @@ def detect_harnesses(target: Path, manifest: dict) -> list[str]:
 def check_project(project: Project) -> list[str]:
     if not project.path.exists():
         return [f"{project.path}: target does not exist"]
-    return harnesslib.verify_harness_target(project.path)
+    return harnesslib.verify_harness_target(project.path, project.harnesses)
 
 
 def repair_project(project: Project) -> list[Path]:
@@ -117,15 +119,36 @@ def managed_block(command: str) -> str:
     )
 
 
-def replace_or_append_managed_block(existing: str, block: str) -> str:
+def strip_managed_block(existing: str) -> str:
     if HOOK_BEGIN in existing and HOOK_END in existing:
         before, rest = existing.split(HOOK_BEGIN, 1)
         _, after = rest.split(HOOK_END, 1)
-        return before.rstrip() + "\n" + block + after.lstrip()
-    prefix = existing.rstrip()
-    if prefix:
-        return prefix + "\n\n" + block
-    return "#!/usr/bin/env sh\nset -eu\n\n" + block
+        return before.rstrip() + "\n" + after.lstrip()
+    return existing
+
+
+def hook_insert_index(lines: list[str]) -> int:
+    index = 0
+    if lines and lines[0].startswith("#!"):
+        index = 1
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not stripped or stripped.startswith("set "):
+            index += 1
+            continue
+        break
+    return index
+
+
+def replace_or_append_managed_block(existing: str, block: str) -> str:
+    if not existing:
+        return "#!/usr/bin/env sh\nset -eu\n\n" + block
+
+    cleaned = strip_managed_block(existing).rstrip() + "\n"
+    lines = cleaned.splitlines(keepends=True)
+    index = hook_insert_index(lines)
+    rendered = "".join(lines[:index]).rstrip() + "\n\n" + block + "\n" + "".join(lines[index:]).lstrip()
+    return rendered.rstrip() + "\n"
 
 
 def install_hook(path: Path, command: str) -> None:
@@ -137,23 +160,45 @@ def install_hook(path: Path, command: str) -> None:
     path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def install_project_hook(project: Project) -> None:
-    git_dir = project.path / ".git"
-    if not git_dir.exists():
-        raise EnforcementFailure(f"{project.path}: cannot install hook because .git does not exist")
+def hook_path_for_repo(repo: Path, *, required: bool = True) -> Path | None:
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--git-path", "hooks/pre-commit"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        if not required:
+            return None
+        message = (proc.stderr or proc.stdout or "not a git repository").strip()
+        raise EnforcementFailure(f"{repo}: cannot resolve git hook path: {message}")
+    hook_path = Path(proc.stdout.strip())
+    if not hook_path.is_absolute():
+        hook_path = repo / hook_path
+    return hook_path.resolve()
+
+
+def install_project_hook(project: Project) -> bool:
+    hook_path = hook_path_for_repo(project.path, required=False)
+    if hook_path is None:
+        return False
+    harness_args = " ".join(f"--harness {shlex.quote(harness)}" for harness in project.harnesses)
     command = (
         'repo_root="$(git rev-parse --show-toplevel)"\n'
-        f'"{sys.executable}" "{ROOT / "scripts" / "verify_harness.py"}" --target "$repo_root"'
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(ROOT / 'scripts' / 'verify_harness.py'))} "
+        f'--target "$repo_root" {harness_args}'
     )
-    install_hook(git_dir / "hooks" / "pre-commit", command)
+    install_hook(hook_path, command)
+    return True
 
 
 def install_canonical_hook() -> None:
-    git_dir = ROOT / ".git"
-    if not git_dir.exists():
-        raise EnforcementFailure(f"{ROOT}: cannot install canonical hook because .git does not exist")
-    command = f'"{sys.executable}" "{ROOT / "scripts" / "verify_repo.py"}"'
-    install_hook(git_dir / "hooks" / "pre-commit", command)
+    command = f"{shlex.quote(sys.executable)} {shlex.quote(str(ROOT / 'scripts' / 'verify_repo.py'))}"
+    hook_path = hook_path_for_repo(ROOT)
+    if hook_path is None:
+        raise EnforcementFailure(f"{ROOT}: cannot resolve git hook path")
+    install_hook(hook_path, command)
 
 
 def print_project_header(project: Project) -> None:
@@ -187,8 +232,10 @@ def main() -> int:
                 changed = repair_project(project)
                 print(f"rewrote {len(changed)} generated file(s)")
             if args.install_hooks:
-                install_project_hook(project)
-                print("installed downstream pre-commit hook")
+                if install_project_hook(project):
+                    print("installed downstream pre-commit hook")
+                else:
+                    print("skipped downstream pre-commit hook: target is not a git repository")
             errors = check_project(project)
             if errors:
                 failed = True
