@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Classify and decompose oversized GitHub issues before local-agent dispatch."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+ONE_POINT_LABEL = "agent:one-point"
+DECOMPOSITION_REQUIRED_LABEL = "agent:decomposition-required"
+DECOMPOSED_LABEL = "agent:decomposed"
+POINT_LABEL_RE = re.compile(r"^points:(\d+)$")
+POINT_FIELD_RE = re.compile(
+    r"(?im)^\s*(?:-\s*)?(?:suggested\s+points|story\s+points|points):\s*`?(\d+)`?\s*$"
+)
+
+
+def target_repos(path: str | None) -> list[str]:
+    repo_file = Path(path) if path else common.RUNTIME_DIR / "repos.txt"
+    repos: list[str] = []
+    for raw in repo_file.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            repos.append(line)
+    return repos
+
+
+def issue_points(issue: dict[str, Any]) -> int | None:
+    labels = common.label_names(issue)
+    for label in labels:
+        match = POINT_LABEL_RE.match(label)
+        if match:
+            return int(match.group(1))
+    match = POINT_FIELD_RE.search(issue.get("body") or "")
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def candidate_issues(repo: str, label: str, limit: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--label",
+            label,
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,body,labels,author,url",
+        ],
+        retries=2,
+    ) or []
+
+
+def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
+    labels = common.label_names(issue)
+    points = issue_points(issue)
+    action = "needs-points"
+    if DECOMPOSED_LABEL in labels:
+        action = "already-decomposed"
+    elif ONE_POINT_LABEL in labels or points == 1:
+        action = "mark-one-point"
+    elif points and points > 1:
+        action = "decompose"
+    return {
+        "repo": repo,
+        "number": issue.get("number"),
+        "title": issue.get("title"),
+        "url": issue.get("url"),
+        "points": points,
+        "action": action,
+    }
+
+
+def ensure_labels(repo: str) -> None:
+    for label, color in (
+        (ONE_POINT_LABEL, "0E8A16"),
+        (DECOMPOSITION_REQUIRED_LABEL, "B60205"),
+        (DECOMPOSED_LABEL, "5319E7"),
+        ("points:1", "0E8A16"),
+    ):
+        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+
+
+def mark_one_point(repo: str, number: int) -> None:
+    common.run(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(number),
+            "--repo",
+            repo,
+            "--add-label",
+            ONE_POINT_LABEL,
+            "--add-label",
+            "points:1",
+        ],
+        retries=3,
+    )
+
+
+def mark_decomposition_required(repo: str, number: int, candidate_label: str) -> None:
+    common.run(
+        [
+            "gh",
+            "issue",
+            "edit",
+            str(number),
+            "--repo",
+            repo,
+            "--add-label",
+            DECOMPOSITION_REQUIRED_LABEL,
+            "--remove-label",
+            "agent:ready",
+            "--remove-label",
+            candidate_label,
+        ],
+        check=False,
+    )
+
+
+def planning_prompt(issue: dict[str, Any], max_children: int) -> str:
+    return f"""Use the planning skill to decompose this GitHub issue into one-point child issues.
+
+Rules:
+- Return JSON only.
+- Each child must be independently implementable in one PR.
+- Each child must include `points:1`, `status:ready`, and `{ONE_POINT_LABEL}` labels.
+- Keep each child surgically scoped with explicit acceptance criteria and validation.
+- If the issue is not decomposable from the available context, return an empty `children` list and explain why.
+
+Schema:
+{{"children":[{{"title":"...","body":"...","labels":["points:1","status:ready","{ONE_POINT_LABEL}"]}}],"notes":["..."]}}
+
+Max children: {max_children}
+
+Parent issue:
+Title: {issue.get("title") or ""}
+Number: {issue.get("number") or ""}
+URL: {issue.get("url") or ""}
+
+Body:
+{issue.get("body") or ""}
+"""
+
+
+def extract_json_object(text: str) -> dict[str, Any]:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end < start:
+        return {"children": [], "notes": ["planner did not return JSON"]}
+    try:
+        payload = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        return {"children": [], "notes": [f"planner returned invalid JSON: {exc}"]}
+    if not isinstance(payload, dict):
+        return {"children": [], "notes": ["planner JSON root was not an object"]}
+    return payload
+
+
+def run_planning_codex(issue: dict[str, Any], job_dir: Path, max_children: int) -> dict[str, Any]:
+    job_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = job_dir / "decompose-prompt.md"
+    prompt_path.write_text(planning_prompt(issue, max_children), encoding="utf-8")
+    run_home = common.codex_home_copy(job_dir)
+    profile_args = common.codex_profile_shell_args("planning")
+    profile_segment = f"{profile_args} " if profile_args else ""
+    cmd = [
+        *common.podman_cmd(),
+        "run",
+        "--rm",
+        "--userns=keep-id",
+        "--network=slirp4netns",
+        "-v",
+        f"{run_home}:/home/agent/.codex:Z",
+        "-v",
+        f"{job_dir}:/job:Z",
+        common.codex_image(),
+        "bash",
+        "-lc",
+        f"cd /job && codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < decompose-prompt.md",
+    ]
+    proc = common.run(cmd, check=False)
+    shutil.rmtree(run_home, ignore_errors=True)
+    raw = proc.stdout or ""
+    (job_dir / "codex.log").write_text(raw, encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        return {"children": [], "notes": [f"planning codex exited {proc.returncode}"]}
+    return extract_json_object(raw)
+
+
+def create_child_issue(repo: str, parent: dict[str, Any], child: dict[str, Any]) -> str:
+    labels = sorted(
+        {
+            "points:1",
+            "status:ready",
+            ONE_POINT_LABEL,
+            *[str(label) for label in child.get("labels") or [] if str(label).strip()],
+        }
+    )
+    body = str(child.get("body") or "").rstrip()
+    body = "\n".join(
+        [
+            body,
+            "",
+            "## Parent Issue",
+            str(parent.get("url") or f"{repo}#{parent.get('number')}"),
+            "",
+            "## Suggested Draft Metadata",
+            "- Suggested points: `1`",
+        ]
+    )
+    tmp = common.jobs_dir() / f"decompose-child-{repo.replace('/', '__')}-{parent.get('number')}.md"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(body, encoding="utf-8")
+    try:
+        cmd = ["gh", "issue", "create", "--repo", repo, "--title", str(child.get("title") or "One-point child issue"), "--body-file", str(tmp)]
+        for label in labels:
+            cmd.extend(["--label", label])
+        proc = common.run(cmd)
+        return (proc.stdout or "").strip()
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    ensure_labels(repo)
+    number = int(issue["number"])
+    if record["action"] == "mark-one-point":
+        mark_one_point(repo, number)
+        record["applied"] = "marked-one-point"
+        return record
+    if record["action"] != "decompose":
+        record["applied"] = "none"
+        return record
+    if not args.create_subissues:
+        mark_decomposition_required(repo, number, args.candidate_label)
+        record["applied"] = "marked-decomposition-required"
+        return record
+
+    job_dir = common.jobs_dir() / f"issue-{number}-decompose-{common.now_id()}"
+    plan = run_planning_codex(issue, job_dir, args.max_children)
+    children = [child for child in plan.get("children") or [] if isinstance(child, dict)]
+    created: list[str] = []
+    for child in children[: args.max_children]:
+        created.append(create_child_issue(repo, issue, child))
+    if created:
+        common.run(
+            [
+                "gh",
+                "issue",
+                "edit",
+                str(number),
+                "--repo",
+                repo,
+                "--add-label",
+                DECOMPOSED_LABEL,
+                "--remove-label",
+                "agent:ready",
+                "--remove-label",
+                args.candidate_label,
+            ],
+            check=False,
+        )
+        record["applied"] = "created-subissues"
+        record["children"] = created
+    else:
+        mark_decomposition_required(repo, number, args.candidate_label)
+        record["applied"] = "marked-decomposition-required"
+        record["notes"] = plan.get("notes") or []
+    return record
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    remaining = args.max
+    for repo in target_repos(args.repos_file):
+        if remaining <= 0:
+            break
+        for issue in candidate_issues(repo, args.candidate_label, remaining):
+            record = classify_issue(repo, issue)
+            if args.apply:
+                record = apply_issue_action(repo, issue, record, args)
+            records.append(record)
+            remaining -= 1
+            if remaining <= 0:
+                break
+    counts: dict[str, int] = {}
+    for record in records:
+        action = str(record.get("action") or "unknown")
+        counts[action] = counts.get(action, 0) + 1
+    return {"records": records, "counts": counts}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
+    parser.add_argument("--candidate-label", default="status:ready")
+    parser.add_argument("--max", type=int, default=10)
+    parser.add_argument("--max-children", type=int, default=8)
+    parser.add_argument("--summary", default=str(common.RUNTIME_DIR / "jobs" / "decompose-summary.json"))
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--create-subissues",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use the planning Codex profile to create one-point child issues for oversized parents.",
+    )
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.max < 0:
+        raise SystemExit("--max must be >= 0")
+    if args.max_children < 1:
+        raise SystemExit("--max-children must be >= 1")
+    payload = run(args)
+    common.write_json(Path(args.summary), payload)
+    print(json.dumps(payload, indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    main()

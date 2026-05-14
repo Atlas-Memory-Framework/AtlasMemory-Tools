@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan/reference.md manifest=atlas-tools.v1 checksum=sha256:5fc411e1200e23d20f9790c899d6ef9e3d116ce83f89b8de31cbe5add2c502cf -->
+<!-- atlas-tools-generated: source=skills/plan/reference.md manifest=atlas-tools.v1 checksum=sha256:9948879e8f3006db30da7a9e4eaae34f64becea419619cbfd3ac403c562b70f7 -->
 <!-- atlas-tools-generated-end -->
 # Plan Authoring Template (Slim)
 
@@ -25,8 +25,9 @@ tracking:
 PlanFormatVersion: 2
 PlanId: <auto or short unique id>
 Status: Draft | ProblemDefined | FeatureChallenged | TechnicalChallenged | Planned | Approved | InBuild | Shipped
-CurrentStage: Problem | Feature | Technical | Implementation | Reviews | Build
+CurrentStage: Problem | Feature | Technical | Implementation | Automation | Reviews | Build
 PlanTier: Lite | Full
+AutomationTarget: none | manifest-only | issue-projection | unattended-prs
 DeliveryMode: DevOnly | SharedDev | Staging | Prod
 ContextMode: UserProvided | RepoInferred | Greenfield
 LastUpdated: <YYYY-MM-DD>
@@ -48,6 +49,7 @@ ProblemDefinitionComplete: Pass | Fail | N/A
 FeatureClarity: Pass | Fail | N/A
 TechnicalClarity: Pass | Fail | N/A
 PlanReadiness: Pass | Fail | N/A
+AutomationReadiness: Pass | Fail | N/A
 PlanningReviewsComplete: Pass | Fail | N/A
 
 ## Decision Log
@@ -256,6 +258,69 @@ Recommended default: <A/B/C> (why)
 - Rollback trigger:
 - Rollback steps:
 
+## Automation Issue Manifest
+<!-- owner: automation-decomposition -->
+Applies when `AutomationTarget` is not `none`.
+
+### Dispatch policy
+- Automation target: none | manifest-only | issue-projection | unattended-prs
+- Dispatch strategy: sequential | parallel-bounded | fanout
+- Max concurrent work items:
+- Required labels:
+- Default reviewer / reviewer pool:
+- Branch policy:
+- PR policy: draft | ready-for-review
+- Merge policy: manual | auto-merge-after-gates
+- Rebase/update policy:
+- Failure policy:
+- Human approval required before dispatch: yes | no
+
+### Containers
+- WS1:
+  - Type: epic | workstream | phase | merge-point
+  - Parent:
+  - Dispatch: tracking-only
+  - Source plan sections:
+    - ...
+
+### Leaf issues
+- WS1-LEAF-ID: <title>
+  - Type: spike | story | task | validation | integration | release
+  - Parent: WS1
+  - Owner:
+  - Agent type: generalPurpose | test-engineer | code-reviewer | explore
+  - Dispatch: agent-ready | manual-review | blocked | tracking-only
+  - Depends on:
+    - WS1-OTHER-LEAF
+  - External blockers:
+    - <owner/status/blocker or none>
+  - Manual blockers:
+    - <owner/status/blocker or none>
+  - Files in scope:
+    - path/to/file.ext
+  - Files out of scope:
+    - path/to/other.ext
+  - Required gates:
+    - G-...
+  - Validation:
+    - <command or evidence artifact>
+  - Acceptance criteria:
+    - ...
+  - One PR contract: yes | no
+  - Risk / dispatch notes:
+  - Source plan sections:
+    - Implementation Plan / WS...
+
+### Manifest validation summary
+- Dependency graph acyclic: Pass | Fail
+- Dependencies resolvable: Pass | Fail
+- Gate coverage complete: Pass | Fail
+- File-scope conflicts resolved: Pass | Fail
+- Acceptance criteria executable: Pass | Fail
+- Required metadata complete: Pass | Fail
+- Notes / waivers (must cite DR-xxx):
+  - ...
+
 ## Planning Reviews
 <!-- owner: planning-reviews -->
 ### Zero-Context Review (required)
@@ -304,6 +369,19 @@ Recommended default: <A/B/C> (why)
 - Findings:
   - Top 5 gotchas:
   - Evidence needed to prevent each gotcha:
+  - Pass/fail readiness statement:
+- Disposition:
+  - Accept: <finding-id> -> DR-xxx
+  - Reject: <finding-id> -> rationale
+  - Defer: <finding-id> -> DR-xxx + trigger
+
+### Automation Readiness Review (required when AutomationTarget != none)
+- Reviewer: automation-readiness
+- Refreshed: <YYYY-MM-DD>
+- Findings:
+  - Manifest gaps:
+  - Dependency/gate/file-scope risks:
+  - Dispatch policy risks:
   - Pass/fail readiness statement:
 - Disposition:
   - Accept: <finding-id> -> DR-xxx

@@ -56,6 +56,7 @@ Authority reminders:
 
 - The parser accepts workstreams written either as `### WS...` headings or as bullet items under `### Workstreams + merge points`.
 - If you already have a GitHub Project URL, pass it as `--project-url "https://github.com/orgs/<owner>/projects/<number>"` instead of splitting owner and number by hand.
-- Dry-run output now includes suggested labels, suggested points, dependencies, blockers, merge points, named gates, repo-boundary hints, Azure validation requirements, and a plan stability summary.
-- For stable multi-repo projection, prefer adding `tracking.epicRepo` in frontmatter and per-workstream metadata such as `Issue ready`, `Target repo`, `Blocked by`, `Highest tier`, and `Azure closeout only`.
+- Dry-run output now includes suggested labels, suggested points, dependencies, blockers, merge points, named gates, repo-boundary hints, deployed/manual validation requirements, and a plan stability summary.
+- For stable multi-repo projection, prefer adding `tracking.epicRepo` in frontmatter and per-workstream metadata such as `Issue ready`, `Target repo`, `Blocked by`, `Points`, `Highest tier`, and `Deployed closeout only`.
+- For unattended local automation, prefer `--strategy leaf-issues` and one-point Automation Issue Manifest leaves (`Points: 1`).
 - To keep cloud agents off the wrong PR base, add `tracking.baseBranch` in frontmatter or `Base branch:` on a workstream when a repo should merge somewhere other than its GitHub default. The generated issues now emit `Execution repo` and `Base branch` instructions so agents do not fall back to `main`.

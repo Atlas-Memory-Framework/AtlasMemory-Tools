@@ -10,6 +10,8 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import atlas_agent_common as common
+
 
 def run(cmd, cwd=None, check=True, capture=True, env=None):
     print(f"+ {cmd}", flush=True)
@@ -405,6 +407,8 @@ def process_issue(issue, publish):
         base_sha = run("git rev-parse HEAD", cwd=worktree_dir).strip()
         run(f"git checkout -B {shlex.quote(branch)}", cwd=worktree_dir)
 
+        profile_args = common.codex_profile_shell_args("implementation")
+        profile_segment = f"{profile_args} " if profile_args else ""
         codex_cmd = (
             f"{podman_command()} run --rm "
             "--userns=keep-id "
@@ -416,7 +420,7 @@ def process_issue(issue, publish):
             "bash -lc "
             + shlex.quote(
                 "cd /work && "
-                "codex exec --ephemeral --skip-git-repo-check "
+                f"codex exec {profile_segment}--ephemeral --skip-git-repo-check "
                 "--dangerously-bypass-approvals-and-sandbox - < /job/prompt.md"
             )
         )

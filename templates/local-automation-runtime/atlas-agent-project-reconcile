@@ -261,7 +261,7 @@ def write_summary(path: str, decisions: list[ProjectDecision]) -> None:
     )
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--owner", default=DEFAULT_OWNER)
     parser.add_argument("--project-number", type=int, default=DEFAULT_PROJECT_NUMBER)
@@ -271,7 +271,17 @@ def main() -> None:
     )
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview project status changes. This is the default unless --apply is passed.",
+    )
     parser.add_argument("--summary")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     configs: dict[tuple[str, int], ProjectConfig] = {}

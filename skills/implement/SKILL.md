@@ -61,6 +61,14 @@ Implement the current plan artifact exactly, honoring phases, tasks, owners, and
 - Launch sub-agents in parallel when workstreams are independent.
 - Do not launch more than 4 sub-agents at once.
 
+## Surgical edit policy
+- Inspect before editing; name any ambiguity that would change scope, interface, infra, data handling, or rollout.
+- Make the smallest coherent diff that satisfies the assigned task and plan gates.
+- Every changed line should trace to the issue, plan task, failing test, or directly necessary cleanup created by this change.
+- Preserve nearby behavior, formatting, and abstractions unless the plan explicitly assigns that refactor.
+- Do not broaden implementation scope, pick an undecided provider, or rewrite surrounding code to make a task easier.
+- Define success as executable evidence: tests, lint/build output, review gate, or documented manual evidence.
+
 ## Sub-agent selection rules
 - `explore`: quick context gathering for broad codebase discovery.
 - `generalPurpose`: implementation tasks (code edits, refactors, bug fixes).

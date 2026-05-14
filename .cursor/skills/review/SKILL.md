@@ -1,8 +1,8 @@
 ---
-# atlas-tools-generated: source=skills/review/SKILL.md manifest=atlas-tools.v1 checksum=sha256:ac08cb1427251bfff79795107713de3599dc6e5a1904e16e7b693eb1f458b702
+# atlas-tools-generated: source=skills/review/SKILL.md manifest=atlas-tools.v1 checksum=sha256:d75492ef13eb95e3fa29d574f11617609e92bdb2f8b4b90eb1fe41e4a92dbf37
 # atlas-tools-generated-end
 name: review
-description: Perform planning-phase document reviews for the current plan artifact. Use when running /review with mode=zero-context, mode=expert-tech, or mode=implementer-readiness.
+description: Perform planning-phase document reviews for the current plan artifact. Use when running /review with mode=zero-context, mode=expert-tech, mode=implementer-readiness, or mode=automation-readiness.
 ---
 
 # /review
@@ -66,6 +66,28 @@ Return findings using this exact schema (with stable ids):
   - F-002: ...
 - Pass/fail readiness statement:
   - F-003: ...
+
+### mode=automation-readiness
+Use when `AutomationTarget != none`. Review whether the plan can be projected into bounded issues or consumed by unattended issue-to-PR automation.
+
+Fail the review for:
+- missing `## Automation Issue Manifest`
+- no explicit leaf issues separate from workstream/phase containers
+- dependencies that are prose, gate ids, merge point ids, decisions, risks, or assumptions instead of resolvable leaf ids or structured blockers
+- gates that are referenced by leaf issues but not defined with where/entrypoint/green means
+- `agent-ready` issues without bounded file scope, validation command/evidence, one-PR contract, or dispatch mode
+- risky areas without spike-first, manual-review, blocked, or DR-backed waiver policy
+
+Return findings using this exact schema (with stable ids):
+
+- Manifest gaps:
+  - F-001: ...
+- Dependency/gate/file-scope risks:
+  - F-002: ...
+- Dispatch policy risks:
+  - F-003: ...
+- Pass/fail readiness statement:
+  - F-004: ...
 
 ## Output format
 Return findings (and optional patch suggestions pointing to plan sections), without applying edits automatically.

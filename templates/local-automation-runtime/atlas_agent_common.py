@@ -213,11 +213,35 @@ def required_checks_config(path: pathlib.Path | str | None = None) -> dict[str, 
     for repo, checks in data.items():
         if isinstance(checks, list):
             result[str(repo)] = [str(check).strip() for check in checks if str(check).strip()]
+        elif isinstance(checks, dict):
+            required = checks.get("required") or checks.get("checks") or []
+            if isinstance(required, list):
+                result[str(repo)] = [str(check).strip() for check in required if str(check).strip()]
     return result
 
 
 def required_checks_for_repo(repo: str, path: pathlib.Path | str | None = None) -> list[str]:
     return required_checks_config(path).get(repo, [])
+
+
+def required_checks_entry(repo: str, path: pathlib.Path | str | None = None) -> dict[str, Any]:
+    configured = os.environ.get("AGENT_REQUIRED_CHECKS_FILE") or read_config().get("AGENT_REQUIRED_CHECKS_FILE")
+    config_path = pathlib.Path(path or configured or RUNTIME_DIR / "required-checks.json")
+    if not config_path.exists():
+        return {}
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    raw = data.get(repo) or data.get("*") or {}
+    if isinstance(raw, list):
+        return {"required": raw}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def no_checks_policy_for_repo(repo: str, path: pathlib.Path | str | None = None) -> dict[str, Any]:
+    entry = required_checks_entry(repo, path)
+    raw = entry.get("no_checks") or entry.get("no_checks_expected") or {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def dependency_refs_from_body(repo: str, body: str) -> list[tuple[str, int, str]]:
@@ -347,6 +371,35 @@ def podman_cmd() -> list[str]:
 
 def codex_image() -> str:
     return read_config().get("AGENT_CODEX_IMAGE", "localhost/codex-agent:latest")
+
+
+def codex_profile_args(kind: str) -> list[str]:
+    cfg = read_config()
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", kind).strip("_").upper()
+    args: list[str] = []
+    profile = os.environ.get(f"AGENT_CODEX_{normalized}_PROFILE") or cfg.get(
+        f"AGENT_CODEX_{normalized}_PROFILE",
+        "",
+    )
+    model = os.environ.get(f"AGENT_CODEX_{normalized}_MODEL") or cfg.get(
+        f"AGENT_CODEX_{normalized}_MODEL",
+        "",
+    )
+    extra = os.environ.get(f"AGENT_CODEX_{normalized}_EXTRA_ARGS") or cfg.get(
+        f"AGENT_CODEX_{normalized}_EXTRA_ARGS",
+        "",
+    )
+    if profile:
+        args.extend(["--profile", profile])
+    if model:
+        args.extend(["--model", model])
+    if extra:
+        args.extend(shlex.split(extra))
+    return args
+
+
+def codex_profile_shell_args(kind: str) -> str:
+    return " ".join(shlex.quote(arg) for arg in codex_profile_args(kind))
 
 
 def codex_home_copy(job_dir: pathlib.Path) -> pathlib.Path:

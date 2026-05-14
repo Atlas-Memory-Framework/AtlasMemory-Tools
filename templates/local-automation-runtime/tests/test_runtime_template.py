@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -30,6 +31,7 @@ class RuntimeTemplateTests(unittest.TestCase):
         cls.finalize = load_script("template_finalize", "atlas-agent-finalize")
         cls.cycle = load_script("template_cycle_summary", "atlas-agent-cycle-summary")
         cls.bridge = load_script("template_plan_queue", "atlas-agent-plan-queue")
+        cls.deployed_validate = load_script("template_deployed_validate", "atlas-agent-deployed-validate")
 
     def test_finalizer_summary_serializes_decisions(self) -> None:
         decision = self.finalize.FinalizeDecision(
@@ -167,9 +169,28 @@ class RuntimeTemplateTests(unittest.TestCase):
 
         self.assertEqual(self.bridge.child_blockers(child), [])
 
+    def test_plan_queue_supports_leaf_issue_strategy(self) -> None:
+        args = types.SimpleNamespace(
+            plan="plan.md",
+            registry_root=None,
+            registry_project_id=None,
+            registry_epic_id=None,
+            registry_story_id=[],
+            repo="owner/repo",
+            strategy="leaf-issues",
+            project_url=None,
+            project_owner=None,
+            project_number=None,
+        )
+
+        cmd = self.bridge.projection_args(args, "--dry-run")
+
+        self.assertIn("leaf-issues", cmd)
+
     def test_durable_template_contains_unattended_validation_runtime(self) -> None:
         for relative in (
             "atlas-agent-unattended",
+            "atlas-agent-issue-decompose",
             "atlas-agent-reconcile",
             "atlas-agent-project-reconcile",
             "atlas-agent-review",
@@ -204,6 +225,17 @@ class RuntimeTemplateTests(unittest.TestCase):
             source.read_text(encoding="utf-8"),
             (TEMPLATE_ROOT / "config" / "deployed-validation.example.json").read_text(encoding="utf-8"),
         )
+
+    def test_deployed_validation_example_uses_workflows_schema(self) -> None:
+        entry = self.deployed_validate.config_entry(
+            "OWNER/REPO",
+            str(ROOT / "config" / "deployed-validation.example.json"),
+        )
+
+        self.assertEqual(self.deployed_validate.configured_commands(entry), [])
+        workflows = self.deployed_validate.configured_workflows(entry)
+        self.assertEqual(len(workflows), 1)
+        self.assertEqual(workflows[0]["workflow"], "deployed-validation.yml")
 
 
 if __name__ == "__main__":

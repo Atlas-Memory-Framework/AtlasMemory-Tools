@@ -165,6 +165,88 @@ name: ws1 workflow control plane
     assert "Project owner mismatch" in result.stderr
 
 
+def test_frontmatter_supports_multiline_overview_summary_alias_and_nested_tracking(tmp_path: Path) -> None:
+    plan_path = tmp_path / "instablinds.plan.md"
+    plan_path.write_text(
+        """---
+name: instablinds rollout
+overview: |
+  Installable blinds checkout automation.
+  Keep hosting undecided.
+tracking:
+  epicRepo: owner/instablinds
+  baseBranch: feature/plan-source
+---
+
+# Instablinds Automation
+
+## Implementation Plan
+
+### Workstreams + merge points
+- WS1A: One-point setup
+  - Points: 1
+  - Issue ready: true
+  - Target repo: owner/instablinds
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli("--plan", str(plan_path), "--strategy", "workstreams", "--dry-run")
+
+    assert payload["repo"] == "owner/instablinds"
+    assert "Installable blinds checkout automation." in payload["epic"]["body"]
+    assert "Keep hosting undecided." in payload["epic"]["body"]
+    assert payload["children"][0]["base_branch"] == "feature/plan-source"
+    assert payload["children"][0]["suggested_points"] == 1
+    assert "points:1" in payload["children"][0]["labels"]
+
+
+def test_summary_frontmatter_alias_populates_epic_summary(tmp_path: Path) -> None:
+    plan_path = tmp_path / "summary_alias.plan.md"
+    plan_path.write_text(
+        """---
+name: summary alias
+summary: 'Use summary when overview is absent.'
+---
+
+# Summary Alias
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli("--plan", str(plan_path), "--repo", "owner/repo", "--dry-run")
+
+    assert "Use summary when overview is absent." in payload["epic"]["body"]
+    assert "No overview found in frontmatter." not in payload["epic"]["body"]
+
+
+def test_canonical_plan_url_uses_current_source_branch(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:owner/instablinds.git"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "-b", "issue/instablinds-plan"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    plan_path = tmp_path / "docs" / "instablinds.plan.md"
+    plan_path.parent.mkdir()
+    plan_path.write_text(
+        """---
+name: instablinds
+overview: Plan URL should use issue branch.
+---
+
+# Instablinds
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli("--plan", str(plan_path), "--repo", "owner/instablinds", "--dry-run")
+
+    assert "https://github.com/owner/instablinds/blob/issue/instablinds-plan/docs/instablinds.plan.md" in payload["epic"]["body"]
+    assert "/blob/main/docs/instablinds.plan.md" not in payload["epic"]["body"]
+
+
 def test_ws2_gates_and_validation_do_not_use_ws1_deployed_heuristics(tmp_path: Path) -> None:
     plan_path = tmp_path / "ws2_example.plan.md"
     plan_path.write_text(
@@ -299,7 +381,7 @@ overview: "Drafting workflow MVP."
     assert "G-DEPLOYED-WORKFLOW" not in joined
     assert "WS3-MP3" in joined or "G-MVP-DEPLOYED-DRAFTING-PARITY" in joined
     assert "tier:" not in " ".join(epic["labels"])
-    assert "Validation / closeout requirements" in epic["body"]
+    assert "Deployed / Manual Validation Requirements" in epic["body"]
     assert epic["execution_repo"] == "OWNER/core"
     assert epic["base_branch"] is None
     child_joined = "\n".join(payload["children"][0]["validation_requirements"])
@@ -386,14 +468,14 @@ overview: "Admin-first workflow operator surfaces."
     assert "G-MVP-DEPLOYED-DRAFTING-PARITY" in joined_epic
     assert "PARITY-1" in joined_epic
     assert "G-DEPLOYED-WORKFLOW-AUTH-PARITY" not in joined_epic
-    assert "Validation / closeout requirements" in epic["body"]
+    assert "Deployed / Manual Validation Requirements" in epic["body"]
     assert epic["execution_repo"] == "OWNER/admin-ui"
     assert epic["base_branch"] is None
 
     by_id = {c["source_id"]: c for c in payload["children"]}
     assert by_id["WS4-A"]["gates"] == ["G-WS4-CONTRACT", "G-WS4-DOCS"]
     assert set(by_id["WS4-B"]["gates"]) == {"G-ADMIN-UI-BUILD", "G-WS4-UI-CONTRACT"}
-    assert "## Validation requirements" in by_id["WS4-A"]["body"]
+    assert "## Deployed / Manual Validation Requirements" in by_id["WS4-A"]["body"]
     child_a_req = "\n".join(by_id["WS4-A"]["validation_requirements"])
     assert "local/ci-first" in child_a_req.lower()
     assert "HOSTED_BASE_URL" not in child_a_req
@@ -1554,3 +1636,134 @@ tracking:
     assert create_calls[2] == (root, "story")
     assert "## Parent Epic" in children[0].body
     assert epic_url in children[0].body
+
+
+def test_leaf_issues_strategy_prefers_automation_issue_manifest(tmp_path: Path) -> None:
+    plan_path = tmp_path / "automation_manifest.plan.md"
+    plan_path.write_text(
+        """---
+name: automation manifest lane
+tracking:
+  epicRepo: OWNER/service
+  baseBranch: main
+---
+
+# Feature: Automation manifest lane
+
+## Implementation Plan
+
+### Workstreams + merge points
+- WS1: Legacy planning bucket
+  - Target repo: service
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: Parser support for manifest leaves
+  - Dispatch: agent-ready
+  - Points: 1
+  - Target repo: service
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+    - `skills/plan-to-issues/scripts/test_plan_to_issues.py`
+  - Validation:
+    - `pytest skills/plan-to-issues/scripts/test_plan_to_issues.py`
+  - Required gates: `G-ISSUE-Dry-Run`
+- LEAF-002: Document manifest projection
+  - Dispatch: manual-review
+  - Suggested points: 2
+  - Depends on: `LEAF-001`, OWNER/service#42
+  - Files in scope:
+    - `skills/plan-to-issues/SKILL.md`
+    - `skills/plan-to-issues/reference.md`
+  - Validation:
+    - `pytest skills/plan-to-issues/scripts/test_plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    assert payload["strategy"] == "leaf-issues"
+    assert [child["source_id"] for child in payload["children"]] == ["LEAF-001", "LEAF-002"]
+    assert payload["children"][0]["title"] == "[LEAF-001] Parser support for manifest leaves"
+    assert payload["children"][0]["dispatch_mode"] == "agent-ready"
+    assert payload["children"][0]["dispatch_recommendation"] == "auto-dispatch"
+    assert payload["children"][0]["suggested_points"] == 1
+    assert "points:1" in payload["children"][0]["labels"]
+    assert payload["children"][0]["write_scope"] == [
+        "skills/plan-to-issues/scripts/plan_to_issues.py",
+        "skills/plan-to-issues/scripts/test_plan_to_issues.py",
+    ]
+    assert payload["children"][0]["validation_commands"] == [
+        "pytest skills/plan-to-issues/scripts/test_plan_to_issues.py"
+    ]
+    assert payload["children"][0]["validation_requirements"] == [
+        "pytest skills/plan-to-issues/scripts/test_plan_to_issues.py"
+    ]
+    assert payload["children"][0]["gates"] == ["G-ISSUE-DRY-RUN"]
+    assert payload["children"][0]["execution_repo"] == "OWNER/service"
+    assert payload["children"][0]["base_branch"] == "main"
+    assert payload["children"][1]["dependencies"] == ["LEAF-001", "OWNER/service#42"]
+    assert payload["children"][1]["dependency_issue_refs"] == ["OWNER/service#42"]
+    assert payload["children"][1]["dispatch_mode"] == "manual-review"
+    assert payload["children"][1]["dispatch_recommendation"] == "review-before-dispatch"
+    assert payload["children"][1]["suggested_points"] == 2
+    assert "points:2" in payload["children"][1]["labels"]
+    assert len(payload["children"]) == 2
+
+
+def test_leaf_issues_strategy_blocks_opaque_and_unsupported_dependencies(tmp_path: Path) -> None:
+    plan_path = tmp_path / "automation_manifest_blocked.plan.md"
+    plan_path.write_text(
+        """---
+name: automation manifest blocked lane
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Automation manifest blocked lane
+
+## Implementation Plan
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-010: Blocked leaf
+  - Dispatch: agent-ready
+  - Target repo: service
+  - Depends on:
+    - `WS1-MP2`
+    - upstream planning sync
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+  - Validation:
+    - `pytest skills/plan-to-issues/scripts/test_plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "OWNER/service",
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    child = payload["children"][0]
+    assert child["dependencies"] == ["WS1-MP2", "upstream planning sync"]
+    assert child["dispatch_recommendation"] == "tracking-only"
+    assert child["status_label"] == "status:blocked"
+    assert child["automation_blockers"] == [
+        "Convert dependency token `WS1-MP2` into an explicit issue ref or Automation Issue Manifest leaf id before auto-dispatch.",
+        "Resolve opaque dependency `upstream planning sync` into an explicit issue ref or Automation Issue Manifest leaf id before auto-dispatch.",
+    ]
+    assert "## Dispatch Guardrails" in child["body"]
+    assert "Convert dependency token `WS1-MP2`" in child["body"]

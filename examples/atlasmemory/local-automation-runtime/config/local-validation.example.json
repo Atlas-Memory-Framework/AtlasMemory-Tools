@@ -1,16 +1,24 @@
 {
+  "Atlas-Memory-Framework/atlas-memory": [
+    "python3 -m compileall -q atlas_memory src tests",
+    "python3 -m pytest tests -q -m 'not heavy'",
+    "python3 -m pytest tests -q -k 'summary_v1 or case_summary_draft_v1 or workflow or retrieval_trust or drafting'"
+  ],
   "Atlas-Memory-Framework/Atlas-Memory-Azure": [
-    "python3 -m compileall -q functions scripts tests"
+    "python3 -m compileall -q functions scripts tests",
+    "python3 -m pytest tests -q -k 'workflow_contract or runtime_hardening or registry or deployed_e2e or drafting_parity'"
   ],
   "Atlas-Memory-Framework/Atlas-Memory-Admin-UI": [
     "npm ci",
     "npm run typecheck",
-    "npm test"
+    "npm test",
+    "npm run test:e2e -- --reporter=line"
   ],
   "Atlas-Memory-Framework/Atlas-Memory-Chainlit": [
     "python3 -m venv .validation-venv",
     ".validation-venv/bin/python -m pip install -q -r requirements.txt pytest",
     "python3 -m compileall -q src tests",
-    ".validation-venv/bin/python -m pytest tests"
+    ".validation-venv/bin/python -m pytest tests -q",
+    ".validation-venv/bin/python -m pytest tests -q -k 'workflow or summary_v1 or case_summary_draft_v1'"
   ]
 }

@@ -95,6 +95,7 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("dispatch", names)
         self.assertIn("reconcile", names)
         self.assertIn("project-reconcile", names)
+        self.assertIn("decompose", names)
         self.assertIn("repair", names)
         self.assertIn("local-validate", names)
         self.assertIn("deployed-validate", names)
@@ -103,10 +104,37 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("finalize", names)
         self.assertLess(names.index("reconcile"), names.index("dispatch"))
         self.assertLess(names.index("project-reconcile"), names.index("dispatch"))
+        self.assertLess(names.index("decompose"), names.index("dispatch"))
         self.assertLess(names.index("review"), names.index("local-validate"))
         self.assertLess(names.index("review"), names.index("semantic-review"))
         self.assertLess(names.index("local-validate"), names.index("deployed-validate"))
         self.assertLess(names.index("review"), names.index("repair"))
+
+    def test_dry_run_flag_is_accepted_as_explicit_preview(self) -> None:
+        args = self.loop.build_parser().parse_args(["--dry-run"])
+
+        self.assertTrue(args.dry_run)
+        self.assertFalse(args.apply)
+        self.assertFalse(args.publish)
+        self.assertFalse(args.merge)
+        self.assertFalse(args.close_issues)
+
+    def test_build_decompose_command_uses_candidate_label_and_summary(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            ["--dry-run", "--repos-file", "repos.txt", "--auto-queue-label", "status:ready"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_decompose_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("atlas-agent-issue-decompose", command.args[0])
+        self.assertIn("--repos-file", command.args)
+        self.assertIn("repos.txt", command.args)
+        self.assertIn("--candidate-label", command.args)
+        self.assertIn("status:ready", command.args)
+        self.assertIn("--dry-run", command.args)
+        self.assertIsNotNone(command.summary_file)
+        assert command.summary_file is not None
+        self.assertEqual(command.summary_file.name, "decompose-cycle-1.json")
 
     def test_chain_continues_to_summary_when_no_pr_is_approved(self) -> None:
         if hasattr(self.loop, "should_continue_to_summary"):

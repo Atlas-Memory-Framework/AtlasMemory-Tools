@@ -233,6 +233,24 @@ class PortabilityTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8", errors="ignore")
             self.assertIn("OWNER", text, path)
 
+    def test_atlas_deployed_validation_example_includes_mvp_evidence_lanes(self) -> None:
+        path = ROOT / "examples" / "atlasmemory" / "local-automation-runtime" / "config" / "deployed-validation.example.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        org = "Atlas-" "Memory-Framework"
+
+        azure = data[f"{org}/Atlas-Memory-Azure"]
+        azure_workflows = [item["workflow"] for item in azure["workflows"]]
+        self.assertIn("deploy-candidate.yml", azure_workflows)
+        self.assertIn("deploy-dev-sequence.yml", azure_workflows)
+        self.assertIn("deployed-e2e.yml", azure_workflows)
+        self.assertIn("include_drafting_parity", json.dumps(azure))
+        self.assertIn("include_operator_walkthrough", json.dumps(azure))
+
+        admin = json.dumps(data[f"{org}/Atlas-Memory-Admin-UI"]).lower()
+        chainlit = json.dumps(data[f"{org}/Atlas-Memory-Chainlit"]).lower()
+        self.assertIn("playwright", admin)
+        self.assertIn("playwright", chainlit)
+
 
 if __name__ == "__main__":
     unittest.main()

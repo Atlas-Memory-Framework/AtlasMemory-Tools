@@ -15,6 +15,13 @@ Mental model:
 - An installed local automation runtime is the machine room: local config, auth, logs, jobs, and managed checkouts.
 - Target repositories are listed in the runtime's `repos.txt`; adding a target repo does not require creating another runtime.
 
+Instruction surface model:
+
+- `skills/` define workflows, authority contracts, gates, and orchestration behavior.
+- `agents/` define focused role rubrics for specialist review or implementation.
+- Generated harness docs such as downstream `AGENTS.md`, `.codex/**`, `.cursor/**`, `.claude/**`, and `.gemini/**` are installed copies, not canonical policy.
+- Runtime templates automate issue-to-PR execution; they do not choose product scope, hosting provider, or infra policy unless the plan or repo config says so.
+
 The `.cursor/` directory is kept for compatibility as generated output. Do not edit harness copies directly; update `skills/` or `agents/`, then regenerate.
 
 ## Install

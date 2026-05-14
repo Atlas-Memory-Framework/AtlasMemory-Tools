@@ -138,6 +138,29 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         self.assertEqual(self.worker.requested_issue_number(["atlas-agent-worker", "--once", "--issue", "17"]), 17)
         self.assertIsNone(self.worker.requested_issue_number(["atlas-agent-worker", "--once"]))
 
+    def test_codex_profile_args_read_role_specific_configuration(self) -> None:
+        original_env = os.environ.copy()
+        os.environ["AGENT_CODEX_IMPLEMENTATION_PROFILE"] = "impl-low"
+        os.environ["AGENT_CODEX_IMPLEMENTATION_MODEL"] = "gpt-5.5-low"
+        os.environ["AGENT_CODEX_IMPLEMENTATION_EXTRA_ARGS"] = '--config model_reasoning_effort="low"'
+        try:
+            args = self.worker.common.codex_profile_args("implementation")
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+        self.assertEqual(
+            args,
+            [
+                "--profile",
+                "impl-low",
+                "--model",
+                "gpt-5.5-low",
+                "--config",
+                "model_reasoning_effort=low",
+            ],
+        )
+
     def test_orchestrator_treats_approved_review_wait_as_recoverable(self) -> None:
         reasons = self.orchestrator.hard_non_execution_reasons(
             issue(
@@ -147,6 +170,30 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         )
 
         self.assertEqual(reasons, [])
+
+    def test_orchestrator_blocks_oversized_issue_when_one_point_required(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(labels=["status:ready", "points:5"], body="Points: 5"),
+            require_one_point=True,
+        )
+
+        self.assertIn("points:5 requires decomposition before dispatch", reasons)
+
+    def test_orchestrator_allows_one_point_issue_when_required(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(labels=["status:ready", "points:1"], body="Points: 1"),
+            require_one_point=True,
+        )
+
+        self.assertEqual(reasons, [])
+
+    def test_orchestrator_blocks_missing_points_when_one_point_required(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(labels=["status:ready"], body="Implement this."),
+            require_one_point=True,
+        )
+
+        self.assertIn("missing one-point metadata", reasons)
 
     def test_worker_marks_published_issue_as_pr_open_not_done(self) -> None:
         calls: list[str] = []
@@ -431,6 +478,12 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             targets = self.project_reconcile.project_targets(str(path), "fallback", 1)
 
         self.assertEqual(targets, [("OWNER", 2), ("OtherOrg", 7)])
+
+    def test_project_reconcile_dry_run_flag_is_accepted_as_explicit_preview(self) -> None:
+        args = self.project_reconcile.build_parser().parse_args(["--dry-run"])
+
+        self.assertTrue(args.dry_run)
+        self.assertFalse(args.apply)
 
     def test_orchestrator_preserves_real_hard_blockers(self) -> None:
         review_reasons = self.orchestrator.hard_non_execution_reasons(

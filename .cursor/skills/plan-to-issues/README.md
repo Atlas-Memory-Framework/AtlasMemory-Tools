@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan-to-issues/README.md manifest=atlas-tools.v1 checksum=sha256:1479be005a1dfe207e602b882ce22b363113ea3da0654458c15e0f7f82838c11 -->
+<!-- atlas-tools-generated: source=skills/plan-to-issues/README.md manifest=atlas-tools.v1 checksum=sha256:22cf7a6fb6b2513e1e1c92dd20e195ac0f2c6caea80841696468cd17c5ffbe87 -->
 <!-- atlas-tools-generated-end -->
 # /plan-to-issues skill
 
@@ -58,6 +58,7 @@ Authority reminders:
 
 - The parser accepts workstreams written either as `### WS...` headings or as bullet items under `### Workstreams + merge points`.
 - If you already have a GitHub Project URL, pass it as `--project-url "https://github.com/orgs/<owner>/projects/<number>"` instead of splitting owner and number by hand.
-- Dry-run output now includes suggested labels, suggested points, dependencies, blockers, merge points, named gates, repo-boundary hints, Azure validation requirements, and a plan stability summary.
-- For stable multi-repo projection, prefer adding `tracking.epicRepo` in frontmatter and per-workstream metadata such as `Issue ready`, `Target repo`, `Blocked by`, `Highest tier`, and `Azure closeout only`.
+- Dry-run output now includes suggested labels, suggested points, dependencies, blockers, merge points, named gates, repo-boundary hints, deployed/manual validation requirements, and a plan stability summary.
+- For stable multi-repo projection, prefer adding `tracking.epicRepo` in frontmatter and per-workstream metadata such as `Issue ready`, `Target repo`, `Blocked by`, `Points`, `Highest tier`, and `Deployed closeout only`.
+- For unattended local automation, prefer `--strategy leaf-issues` and one-point Automation Issue Manifest leaves (`Points: 1`).
 - To keep cloud agents off the wrong PR base, add `tracking.baseBranch` in frontmatter or `Base branch:` on a workstream when a repo should merge somewhere other than its GitHub default. The generated issues now emit `Execution repo` and `Base branch` instructions so agents do not fall back to `main`.

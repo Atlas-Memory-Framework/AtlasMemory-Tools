@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -13,7 +14,23 @@ from pathlib import Path
 
 
 RUNTIME_DIR = Path(__file__).resolve().parent
-TOOLS_ROOT = RUNTIME_DIR.parents[1]
+
+
+def find_tools_root() -> Path:
+    configured = os.environ.get("ATLAS_TOOLS_ROOT")
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.extend(RUNTIME_DIR.parents)
+    for candidate in candidates:
+        if (candidate / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py").exists():
+            return candidate
+        if (candidate / ".cursor" / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py").exists():
+            return candidate
+    raise SystemExit("Could not find AtlasMemory-Tools root; set ATLAS_TOOLS_ROOT in config.env.")
+
+
+TOOLS_ROOT = find_tools_root()
 PLAN_TO_ISSUES = TOOLS_ROOT / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
 if not PLAN_TO_ISSUES.exists():
     PLAN_TO_ISSUES = TOOLS_ROOT / ".cursor" / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
@@ -167,7 +184,7 @@ def main() -> int:
     parser.add_argument("--registry-epic-id")
     parser.add_argument("--registry-story-id", action="append")
     parser.add_argument("--repo")
-    parser.add_argument("--strategy", choices=("workstreams", "phases"), default="workstreams")
+    parser.add_argument("--strategy", choices=("leaf-issues", "workstreams", "phases"), default="leaf-issues")
     parser.add_argument("--project-url")
     parser.add_argument("--project-owner")
     parser.add_argument("--project-number", type=int)

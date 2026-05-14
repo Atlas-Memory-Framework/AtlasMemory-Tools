@@ -31,6 +31,7 @@ REVIEW_LABELS = {
 }
 REVIEW_AUX_LABELS = {
     "agent:manual-validation-approved": "0E8A16",
+    "agent:no-checks-expected": "C5DEF5",
     "agent:semantic-review-passed": "0E8A16",
     "agent:semantic-review-failed": "D93F0B",
 }
@@ -329,7 +330,7 @@ def classify_failed_workflow(text: str, failed_checks: list[dict[str, Any]] | No
     if any(token in combined for token in ("secret", "secrets.", "not configured", "no such secret", "credential unavailable")):
         return "secret/config", "Workflow is blocked by a missing or invalid secret/configuration value."
     if any(token in combined for token in ("environment variable", "env var", "azure login", "az login", "subscription", "tenant", "resource group", "aadsts")):
-        return "infra/env", "Workflow is blocked by Azure/environment setup rather than a current-branch code change."
+        return "infra/env", "Workflow is blocked by provider/environment setup rather than a current-branch code change."
     if any(token in combined for token in ("deployed e2e", "deployed validation", "bootstrap dev tenant", "deploy dev", "functions deploy")):
         return "deployed-validation", "Workflow is part of deployed validation and should be rerun through the configured validation chain."
     if any(token in combined for token in ("could not resolve host", "temporary failure", "rate limit", "registry.npmjs.org", "pypi.org", "connection timed out")):
@@ -347,12 +348,12 @@ def ci_next_action(category: str, repo: str, number: int) -> str:
     if category == "deployed-validation":
         return f"Run `./atlas-agent-deployed-validate {repo}#{number} --apply` or dispatch the configured deployed-validation workflow chain."
     if category == "secret/config":
-        return "Add or fix the required GitHub/Azure secret or repo environment value, then rerun the failed workflow."
+        return "Add or fix the required GitHub/provider secret or repo environment value, then rerun the failed workflow."
     if category == "infra/env":
-        return "Fix the Azure/environment prerequisite, then rerun the failed workflow from GitHub Actions."
+        return "Fix the provider/environment prerequisite, then rerun the failed workflow from GitHub Actions."
     if category == "dependency-blocked":
         return "Wait for or unblock the external dependency, then rerun the failed workflow from GitHub Actions."
-    return "Complete the required human approval/action in GitHub or Azure, then rerun the failed workflow."
+    return "Complete the required human approval/action in GitHub or the configured provider, then rerun the failed workflow."
 
 
 def fetch_failed_workflow_review(repo: str, pr: dict[str, Any], job_dir: Path) -> dict[str, Any] | None:
@@ -854,9 +855,7 @@ def classify(
         reasons.append(f"mergeable is {mergeable}")
     check_state, check_details = check_rollup_state(pr, required_checks)
     if check_state == "none":
-        if local_validation_passed_for_head(pr):
-            reasons.append("local validation passed with no GitHub checks")
-        elif manual_validation:
+        if manual_validation:
             if manual_approved:
                 reasons.append("manual or deployed validation approved with no GitHub checks")
             else:
@@ -864,7 +863,9 @@ def classify(
                 reasons.append("manual or deployed validation required")
         elif required_checks:
             label = LOCAL_VALIDATION_REQUIRED_LABEL
-            reasons.append("no checks reported; local validation required")
+            reasons.append("no GitHub checks reported; required checks missing")
+        elif local_validation_passed_for_head(pr):
+            reasons.append("local validation passed with no GitHub checks")
         else:
             label = LOCAL_VALIDATION_REQUIRED_LABEL
             if LOCAL_VALIDATION_PASSED_LABEL in labels:

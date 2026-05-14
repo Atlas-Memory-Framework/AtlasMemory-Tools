@@ -1,5 +1,15 @@
 {
-  "Atlas-Memory-Framework/Atlas-Memory-Admin-UI": [],
+  "Atlas-Memory-Framework/Atlas-Memory-Admin-UI": {
+    "required": [],
+    "no_checks": {
+      "require_label": "agent:no-checks-expected",
+      "allow_if_paths": [
+        "docs/**",
+        "*.md"
+      ],
+      "allow_merge": true
+    }
+  },
   "Atlas-Memory-Framework/Atlas-Memory-Azure": [
     "G-CI-RegistrySchema",
     "G-CI-AutomationPolicySchema",
@@ -10,7 +20,17 @@
     "WS2 planning registry (G-CI-ProjectionParity + friends)",
     "G-COORD-SharedPlanningCIContract"
   ],
-  "Atlas-Memory-Framework/Atlas-Memory-Chainlit": [],
+  "Atlas-Memory-Framework/Atlas-Memory-Chainlit": {
+    "required": [],
+    "no_checks": {
+      "require_label": "agent:no-checks-expected",
+      "allow_if_paths": [
+        "docs/**",
+        "*.md"
+      ],
+      "allow_merge": true
+    }
+  },
   "Atlas-Memory-Framework/atlas-memory": [
     "reliability-tests",
     "processing-heavy-tests"

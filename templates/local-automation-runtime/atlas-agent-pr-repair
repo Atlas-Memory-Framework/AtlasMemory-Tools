@@ -179,6 +179,8 @@ def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> st
     prompt_path = job_dir / "prompt.md"
     prompt_path.write_text(prompt, encoding="utf-8")
     run_home = common.codex_home_copy(job_dir)
+    profile_args = common.codex_profile_shell_args("repair")
+    profile_segment = f"{profile_args} " if profile_args else ""
     cmd = [
         *common.podman_cmd(),
         "run",
@@ -194,7 +196,7 @@ def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> st
         common.codex_image(),
         "bash",
         "-lc",
-        "cd /work && codex exec --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < /job/prompt.md",
+        f"cd /work && codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < /job/prompt.md",
     ]
     proc = common.run(cmd, cwd=repo_path, check=False)
     shutil.rmtree(run_home, ignore_errors=True)

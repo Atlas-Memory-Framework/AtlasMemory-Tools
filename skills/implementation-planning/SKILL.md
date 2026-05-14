@@ -19,6 +19,7 @@ Create the Implementation Plan section for build execution. Run as a sub-agent a
 - Test Plan including at least a minimal test matrix (risk -> test type -> where it runs).
 - Rollout/Deployment steps (even minimal) and an explicit rollback trigger + rollback steps.
  - Draft section content for `## Implementation Plan`
+- If `AutomationTarget != none`, include enough stable ids, file ownership, gate definitions, and task boundaries for `/automation-decomposition` to derive one-PR leaf issues without inventing scope.
 
 ## Anti-placeholder rule (hard rule)
 - Do not use placeholder language like “run smoke tests” or “add gates” without naming:
@@ -42,6 +43,12 @@ Create the Implementation Plan section for build execution. Run as a sub-agent a
   - Ensure the draft includes an explicit **agent roster** (names/handles) and assigns ownership for each workstream and file-delta cluster.
   - If the roster is missing, ask a single focused question to obtain it (do not guess).
   - The orchestrator should mirror this roster into `## Context Snapshot` (call this out explicitly in `Notes` if needed).
+
+## Automation handoff rule
+- Workstreams and phases are planning containers, not automatically executable issues.
+- Do not rely on prose dependencies such as “after contract work” or gate ids as dependencies. Use stable workstream/task identifiers that `/automation-decomposition` can map into leaf issue ids.
+- Risky areas (secrets/auth/payments/live commerce/webhooks/migrations/infra/deploy/public APIs/data deletion/compliance) must include spike-first, manual-review, or blocked sequencing guidance so automation policy can be generated safely.
+- Every gate that might control a leaf issue must be named and defined with where/entrypoint/green means.
 
 ## Sub-agent output contract
 Return a single block in this shape:

@@ -28,6 +28,13 @@ Do not edit generated downstream copies as the normal workflow:
 Generated skill and agent files contain an `atlas-tools-generated` header with the canonical source path,
 manifest version, and source checksum. `scripts/verify_harness.py` uses that header to detect drift.
 
+## Instruction Surface Model
+
+- `skills/**` are canonical workflow instructions: planning stages, authority contracts, dispatch rules, and validation gates.
+- `agents/**` are canonical role instructions: reusable specialist rubrics for review, implementation, testing, data, infra, and processing work.
+- Generated harness files and downstream `AGENTS.md`-style docs are install artifacts. Update canonical source here, then regenerate.
+- Runtime templates operate the local automation loop. They should consume plan/repo metadata and must not infer a product's hosting provider or infrastructure policy when the plan leaves it undecided.
+
 ## Install Into A Project
 
 From this repository:

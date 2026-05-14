@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import re
 import subprocess
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ import atlas_agent_common as common
 
 PR_VIEW_FIELDS = (
     "number,title,state,isDraft,url,body,headRefName,baseRefName,"
-    "headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,labels,comments"
+    "headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,labels,comments,files"
 )
 LOCAL_VALIDATION_PASSED_LABEL = "agent:local-validation-passed"
 LOCAL_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-local-validation -->"
@@ -238,6 +239,42 @@ def required_checks(repo: str, config_path: str | None) -> list[str]:
     return common.required_checks_for_repo(repo, Path(config_path) if config_path else None)
 
 
+def changed_paths(pr: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for item in pr.get("files") or []:
+        if isinstance(item, dict):
+            path = item.get("path")
+        else:
+            path = item
+        if path:
+            paths.append(str(path))
+    return paths
+
+
+def no_checks_expected_for_pr(repo: str, pr: dict[str, Any], config_path: str | None) -> tuple[bool, str]:
+    policy = common.no_checks_policy_for_repo(repo, Path(config_path) if config_path else None)
+    if not policy:
+        return False, "no no-checks policy configured"
+    required_label = str(policy.get("require_label") or "").strip()
+    if required_label and required_label not in label_names(pr):
+        return False, f"no-checks policy label missing: {required_label}"
+    allowed = [str(pattern).strip() for pattern in policy.get("allow_if_paths") or [] if str(pattern).strip()]
+    if not allowed:
+        return False, "no-checks policy has no allowed paths"
+    paths = changed_paths(pr)
+    if not paths:
+        return False, "no changed files reported for no-checks policy"
+    unmatched = [path for path in paths if not any(fnmatch.fnmatch(path, pattern) for pattern in allowed)]
+    if unmatched:
+        return False, f"changed files outside no-checks policy: {', '.join(unmatched[:5])}"
+    return True, "no checks expected by path policy"
+
+
+def no_checks_policy_allows_merge(repo: str, config_path: str | None) -> bool:
+    policy = common.no_checks_policy_for_repo(repo, Path(config_path) if config_path else None)
+    return bool(policy.get("allow_merge", True))
+
+
 def decide(
     repo: str,
     pr: dict[str, Any],
@@ -245,6 +282,7 @@ def decide(
     allow_no_checks: bool,
     merge: bool,
     required_check_names: list[str] | None = None,
+    required_checks_file: str | None = None,
     check_dependencies: bool = False,
     require_review_label: str | None = None,
 ) -> FinalizeDecision:
@@ -253,6 +291,7 @@ def decide(
     labels = label_names(pr)
     no_check_local_validated = False
     no_check_deployed_validated = False
+    no_check_expected = False
     if not issue_number:
         reasons.append("missing linked issue")
     if require_review_label and require_review_label not in labels:
@@ -267,8 +306,12 @@ def decide(
         reasons.append(f"mergeable is {mergeable}")
     check_state, check_details = check_rollup_state(pr, required_check_names)
     if check_state == "none":
-        if deployed_validation_passed_for_head(pr):
+        if required_check_names:
+            reasons.append("no checks reported")
+        elif deployed_validation_passed_for_head(pr):
             no_check_deployed_validated = True
+        elif not required_check_names and no_checks_expected_for_pr(repo, pr, required_checks_file)[0]:
+            no_check_expected = True
         elif not required_check_names and local_validation_passed_for_head(pr):
             no_check_local_validated = True
         elif allow_no_checks and not merge:
@@ -285,6 +328,13 @@ def decide(
         action = "blocked"
     elif no_check_deployed_validated and merge:
         action = "ready_then_merge" if pr.get("isDraft") else "merge"
+    elif no_check_expected:
+        if pr.get("isDraft"):
+            action = "ready" if not merge else "ready_then_merge"
+        elif merge and no_checks_policy_allows_merge(repo, required_checks_file):
+            action = "merge"
+        else:
+            action = "ready"
     elif no_check_local_validated and merge:
         if pr.get("isDraft"):
             action = "ready"
@@ -331,6 +381,7 @@ def revalidated_merge_decision(
     *,
     allow_no_checks: bool,
     required_check_names: list[str],
+    required_checks_file: str | None,
     check_dependencies: bool,
     require_review_label: str | None = None,
 ) -> FinalizeDecision | None:
@@ -344,6 +395,7 @@ def revalidated_merge_decision(
         allow_no_checks=allow_no_checks,
         merge=True,
         required_check_names=required_check_names,
+        required_checks_file=required_checks_file,
         check_dependencies=check_dependencies,
         require_review_label=require_review_label,
     )
@@ -366,6 +418,7 @@ def finalize_decision(
     close_issues: bool,
     allow_no_checks: bool,
     required_check_names: list[str],
+    required_checks_file: str | None,
     check_dependencies: bool,
     require_review_label: str | None = None,
 ) -> None:
@@ -383,6 +436,7 @@ def finalize_decision(
             decision,
             allow_no_checks=allow_no_checks,
             required_check_names=required_check_names,
+            required_checks_file=required_checks_file,
             check_dependencies=check_dependencies,
             require_review_label=require_review_label,
         )
@@ -422,6 +476,7 @@ def scan(args: argparse.Namespace) -> list[FinalizeDecision]:
                     allow_no_checks=args.allow_no_checks,
                     merge=args.merge,
                     required_check_names=required_checks(repo, getattr(args, "required_checks_file", None)),
+                    required_checks_file=getattr(args, "required_checks_file", None),
                     check_dependencies=getattr(args, "check_dependencies", False),
                     require_review_label=getattr(args, "require_review_label", None),
                 )
@@ -495,6 +550,7 @@ def main() -> None:
             close_issues=args.close_issues,
             allow_no_checks=args.allow_no_checks,
             required_check_names=required_checks(decision.repo, args.required_checks_file),
+            required_checks_file=args.required_checks_file,
             check_dependencies=args.check_dependencies,
             require_review_label=args.require_review_label,
         )

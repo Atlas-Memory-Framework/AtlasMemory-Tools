@@ -33,6 +33,7 @@ def green_pr(*, labels: list[str] | None = None, **overrides) -> dict:
         "isDraft": False,
         "labels": [{"name": label} for label in (labels or [])],
         "comments": [],
+        "files": [{"path": "src/app.py"}],
         "statusCheckRollup": [
             {
                 "name": "test",
@@ -78,6 +79,7 @@ class FinalizerReviewGateTests(unittest.TestCase):
 
     def test_pr_view_fields_include_labels(self) -> None:
         self.assertIn("labels", self.finalize.PR_VIEW_FIELDS.split(","))
+        self.assertIn("files", self.finalize.PR_VIEW_FIELDS.split(","))
 
     def test_local_validation_passed_no_check_draft_is_readied_not_merged(self) -> None:
         decision = self.finalize.decide(
@@ -134,6 +136,46 @@ class FinalizerReviewGateTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "blocked")
         self.assertIn("no checks reported", decision.reasons)
+
+    def test_deployed_validation_does_not_override_required_github_checks(self) -> None:
+        decision = self.finalize.decide(
+            "owner/repo",
+            green_pr(
+                labels=["reviewed", "agent:deployed-validation-passed"],
+                statusCheckRollup=[],
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-deployed-validation -->\nHead: `abc123`\nResult: passed",
+                    }
+                ],
+            ),
+            allow_no_checks=False,
+            merge=True,
+            required_check_names=["ci"],
+            check_dependencies=False,
+            require_review_label="reviewed",
+        )
+
+        self.assertEqual(decision.action, "blocked")
+        self.assertIn("no checks reported", decision.reasons)
+
+    def test_no_checks_path_policy_can_merge_docs_only_pr(self) -> None:
+        decision = self.finalize.decide(
+            "OWNER/REPO",
+            green_pr(
+                labels=["reviewed", "agent:no-checks-expected"],
+                statusCheckRollup=[],
+                files=[{"path": "docs/readme.md"}],
+            ),
+            allow_no_checks=False,
+            merge=True,
+            required_check_names=[],
+            required_checks_file=str(ROOT / "config" / "required-checks.example.json"),
+            check_dependencies=False,
+            require_review_label="reviewed",
+        )
+
+        self.assertEqual(decision.action, "merge")
 
 
 if __name__ == "__main__":

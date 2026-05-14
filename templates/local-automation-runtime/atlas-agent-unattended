@@ -23,6 +23,7 @@ SEMANTIC_REVIEW_REQUIRED_LABEL = "agent:semantic-review-required"
 DEFAULT_STAGES = (
     "reconcile",
     "project-reconcile",
+    "decompose",
     "dispatch",
     "review",
     "semantic-review",
@@ -88,6 +89,7 @@ def parse_stages(raw: str | None) -> list[str]:
     allowed = {
         "reconcile",
         "project-reconcile",
+        "decompose",
         "dispatch",
         "review",
         "semantic-review",
@@ -132,6 +134,8 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
                 "--repos-file",
                 str(shard_file),
             ]
+            if args.require_one_point:
+                cmd.append("--require-one-point")
             if args.publish:
                 cmd.insert(2, "--publish")
             if args.post_triage_teams_per_repo:
@@ -203,6 +207,40 @@ def build_project_reconcile_command(args: argparse.Namespace, chain_dir: Path, c
         name="project-reconcile",
         args=cmd,
         log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-project-reconcile-cycle-{cycle}.log",
+        summary_file=summary_file,
+    )
+
+
+def decompose_apply_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "decompose_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "apply", False) or getattr(args, "review_apply", False))
+
+
+def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    summary_file = chain_dir / f"decompose-cycle-{cycle}.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-issue-decompose"),
+        "--repos-file",
+        str(args.repos_file),
+        "--candidate-label",
+        args.auto_queue_label,
+        "--max",
+        str(args.decompose_max),
+        "--summary",
+        str(summary_file),
+    ]
+    if decompose_apply_enabled(args):
+        cmd.append("--apply")
+    else:
+        cmd.append("--dry-run")
+    if args.decompose_create_subissues:
+        cmd.append("--create-subissues")
+    return CommandSpec(
+        name="decompose",
+        args=cmd,
+        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-decompose-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -846,6 +884,12 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
             results = [run_command(command)]
             print_stage_report(stage, results)
             print_decision_counts(stage, command.summary_file, "action")
+        elif stage == "decompose":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: decompose ===", flush=True)
+            command = build_decompose_command(args, chain_dir, chain_id, cycle)
+            results = [run_command(command)]
+            print_stage_report(stage, results)
+            print_decision_counts(stage, command.summary_file, "action")
         elif stage == "dispatch":
             print(f"=== unattended cycle {cycle}/{args.cycles}: dispatch ===", flush=True)
             results = run_parallel("dispatch", build_dispatch_commands(args, chain_dir, chain_id, cycle))
@@ -935,6 +979,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--max-per-repo", type=int, default=1)
     parser.add_argument("--auto-queue-label", default="status:ready")
+    parser.add_argument("--decompose-max", type=int, default=10)
+    parser.add_argument(
+        "--decompose-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply one-point labels and decomposition-required labels. Defaults to enabled when --review-apply or --apply is used.",
+    )
+    parser.add_argument(
+        "--decompose-create-subissues",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use the planning Codex profile to create one-point child issues for oversized parents.",
+    )
+    parser.add_argument(
+        "--require-one-point",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require one-point issue metadata before dispatch.",
+    )
     parser.add_argument("--repair-max", type=int, default=4)
     parser.add_argument("--repair-cooldown-hours", type=float, default=24.0)
     parser.add_argument("--local-validate-max", type=int, default=4)
@@ -983,6 +1046,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project-item-limit", type=int, default=100)
     parser.add_argument("--publish", action="store_true", help="Let dispatch workers publish draft PRs.")
     parser.add_argument("--apply", action="store_true", help="Apply repair/finalize actions. Repairs dry-run without this.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run an explicit non-mutating preview. This is the default unless mutating flags are passed.",
+    )
     parser.add_argument("--merge", action="store_true")
     parser.add_argument("--close-issues", action="store_true")
     parser.add_argument("--allow-no-checks", action="store_true")
@@ -1003,6 +1071,8 @@ def main() -> None:
         raise SystemExit("--cycles must be >= 1")
     if args.max_per_repo < 1:
         raise SystemExit("--max-per-repo must be >= 1")
+    if args.decompose_max < 0:
+        raise SystemExit("--decompose-max must be >= 0")
     if args.repair_max < 0:
         raise SystemExit("--repair-max must be >= 0")
 

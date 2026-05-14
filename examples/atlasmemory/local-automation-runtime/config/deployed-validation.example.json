@@ -1,5 +1,77 @@
 {
-  "Atlas-Memory-Framework/Atlas-Memory-Chainlit": [
-    "gh pr checks \"$PR_NUMBER\" --repo \"$REPO\""
-  ]
+  "Atlas-Memory-Framework/atlas-memory": {
+    "workflows": [
+      {
+        "workflow": "runtime-hardening.yml",
+        "ref": "$PR_HEAD_BRANCH",
+        "inputs": {
+          "pr_number": "$PR_NUMBER"
+        }
+      },
+      {
+        "workflow": "workflow-contracts-ci.yml",
+        "ref": "$PR_HEAD_BRANCH",
+        "inputs": {
+          "workflow_ids": "summary.v1,case_summary_draft.v1",
+          "pr_number": "$PR_NUMBER"
+        }
+      }
+    ]
+  },
+  "Atlas-Memory-Framework/Atlas-Memory-Azure": {
+    "workflows": [
+      {
+        "workflow": "deploy-candidate.yml",
+        "ref": "$PR_HEAD_BRANCH",
+        "inputs": {
+          "dry_run": "true",
+          "pr_number": "$PR_NUMBER"
+        }
+      },
+      {
+        "workflow": "deploy-dev-sequence.yml",
+        "ref": "$PR_HEAD_BRANCH",
+        "inputs": {
+          "pr_number": "$PR_NUMBER"
+        }
+      },
+      {
+        "workflow": "deployed-e2e.yml",
+        "ref": "$PR_HEAD_BRANCH",
+        "inputs": {
+          "workflow_ids": "summary.v1,case_summary_draft.v1",
+          "include_drafting_parity": "true",
+          "include_operator_walkthrough": "true",
+          "pr_number": "$PR_NUMBER"
+        }
+      }
+    ],
+    "commands": [
+      "test -n \"$ATLAS_ADMIN_UI_URL\"",
+      "test -n \"$ATLAS_CHAINLIT_URL\""
+    ]
+  },
+  "Atlas-Memory-Framework/Atlas-Memory-Admin-UI": {
+    "commands": [
+      "test -n \"$ATLAS_ADMIN_UI_URL\"",
+      "npm ci",
+      "npx playwright install --with-deps chromium",
+      "npx playwright test --reporter=line"
+    ],
+    "env": {
+      "PLAYWRIGHT_BASE_URL": "$ATLAS_ADMIN_UI_URL"
+    }
+  },
+  "Atlas-Memory-Framework/Atlas-Memory-Chainlit": {
+    "commands": [
+      "test -n \"$ATLAS_CHAINLIT_URL\"",
+      "python3 -m venv .validation-venv",
+      ".validation-venv/bin/python -m pip install -q -r requirements.txt pytest playwright",
+      ".validation-venv/bin/python -m playwright install chromium",
+      ".validation-venv/bin/python -m pytest tests -q -k 'deployed or browser or workflow'"
+    ],
+    "env": {
+      "CHAINLIT_BASE_URL": "$ATLAS_CHAINLIT_URL"
+    }
+  }
 }

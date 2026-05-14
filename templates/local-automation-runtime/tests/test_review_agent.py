@@ -235,7 +235,7 @@ class ReviewAgentTests(unittest.TestCase):
         )
 
         self.assertEqual(decision.label, "agent:local-validation-required")
-        self.assertIn("no checks reported; local validation required", decision.reasons)
+        self.assertIn("no GitHub checks reported; required checks missing", decision.reasons)
 
     def test_review_requires_local_validation_for_no_check_pr_without_required_checks(self) -> None:
         decision = self.review.classify(
@@ -286,8 +286,28 @@ class ReviewAgentTests(unittest.TestCase):
             required_checks=["ci"],
         )
 
-        self.assertEqual(decision.label, "agent:review-approved")
-        self.assertIn("local validation passed with no GitHub checks", decision.reasons)
+        self.assertEqual(decision.label, "agent:local-validation-required")
+        self.assertIn("no GitHub checks reported; required checks missing", decision.reasons)
+
+    def test_review_does_not_approve_local_validation_when_required_checks_are_absent(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                statusCheckRollup=[],
+                labels=[{"name": "agent:local-validation-passed"}],
+                comments=[
+                    {
+                        "body": "<!-- atlas-agent-local-validation -->\nHead: `abc123`\nResult: passed",
+                    }
+                ],
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["ci"],
+        )
+
+        self.assertEqual(decision.label, "agent:local-validation-required")
+        self.assertIn("no GitHub checks reported; required checks missing", decision.reasons)
 
     def test_review_rejects_stale_local_validation_passed_label(self) -> None:
         decision = self.review.classify(

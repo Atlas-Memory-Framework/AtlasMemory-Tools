@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:1b3511247d64aeb7c4b251424abc46c2e51c479d498b194d673aabad6394c1e9
+# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:4cd807c5103997c6d7fab1b4adff7ab41fbee5d2db83af950db9cdd9e7931813
 # atlas-tools-generated-end
 name: planning-reviews
 description: Run required planning-phase reviews and log dispositions in the current plan artifact. Use after Implementation stage before plan approval.
@@ -31,14 +31,9 @@ Run planning-phase review passes and update the Planning Reviews section with fi
 Planning security reviewers are plan-only by default, so they can miss repo facts unless the plan records them. Before running the Security/Privacy review, perform a lightweight repo-anchored spot-check and write a short summary into the plan (recommended location: `## Context Snapshot`).
 
 ### Scope (keep it fast + deterministic)
-- Read this allowlist of “hot” files and extract security-relevant facts:
-  - `functions/triggers/internal.py` (internal endpoints auth + any logging of API keys)
-  - backend JWT/auth modules (gateway-to-functions defaults and fail-closed behavior)
-  - infrastructure deployment modules (deployment wiring for backend JWT requirement and signing key)
-  - `infra/1 - bicep/modules/2 - gateway/apim-policies.bicep` (APIM policy fragments: backend-jwt-proof, header projection, routing/bypass)
-- Optional follow-ons only if the first pass finds risk:
-  - backend API key provider modules
-  - `functions/shared/error_handler.py`
+- Read the plan's declared auth, secrets, public route, webhook, data deletion, deployment, and infrastructure files from `## Context Snapshot`, `## Technical Plan`, and `## Implementation Plan`.
+- If the plan leaves infrastructure or hosting undecided, record that explicitly and do not require provider-specific gates such as Azure/APIM/Bicep validation.
+- Optional follow-ons only if the first pass finds risk: auth providers, error handling/logging, secret loading, webhook handlers, migration/delete paths, and deployment workflow files named by the repo.
 
 ### Output shape (must be copy/pasteable into the plan)
 Return a block like this (do not include secrets):
@@ -53,9 +48,10 @@ Return a block like this (do not include secrets):
   - Observed auth enforcement points:
   - Observed sensitive logging risks (if any):
   - Evidence hook (named gate):
-- APIM header projection / bypass paths:
-  - Observed projection/overrides:
-  - Bypass risk summary:
+- Public/deployed route boundary:
+  - Observed provider or hosting decision:
+  - Observed projection/overrides/bypass paths:
+  - Provider-specific validation needed (yes/no, why):
   - Evidence hook (named gate):
 ```
 
@@ -145,6 +141,16 @@ This skill is typically invoked by `/plan` during the Reviews stage. Users can r
 - Pass/fail readiness statement:
   - F-003: ...
 
+### Automation readiness review schema
+- Manifest gaps:
+  - F-001: ...
+- Dependency/gate/file-scope risks:
+  - F-002: ...
+- Dispatch policy risks:
+  - F-003: ...
+- Pass/fail readiness statement:
+  - F-004: ...
+
 ### Disposition schema (required for each review)
 - Disposition:
   - Accept: F-001 -> DR-xxx
@@ -156,6 +162,7 @@ This skill is typically invoked by `/plan` during the Reviews stage. Users can r
 - Implementer readiness review (doc-reviewer-implementer)
 - Expert technical review if triggered (doc-reviewer-expert-tech) or mark N/A with rationale
 - Security/privacy review (required)
+- Automation readiness review when `AutomationTarget != none`
 
 ## Sub-agent routing
 - The orchestrator should spawn each review as a separate sub-agent so each pass is independent and repeatable.
@@ -167,8 +174,26 @@ Unless the user explicitly requests otherwise, run **one sub-agent per review ty
 - Implementer readiness review: run a reviewer using `/review mode=implementer-readiness`
 - Expert technical review: run a reviewer using `/review mode=expert-tech` when triggered; otherwise record `N/A` with rationale
 - Security/privacy review: run as a dedicated pass (security/privacy rubric below). If using a reviewer agent, treat it as expert-tech strictness but security/privacy scope.
+- Automation readiness review: run `/review mode=automation-readiness` when `AutomationTarget != none`.
 
 Then merge outputs into the plan’s `## Planning Reviews` section, preserving stable `F-xxx` ids per review block and recording `Refreshed: YYYY-MM-DD` for each required review.
+
+### Automation readiness review (conditional)
+- Focus on whether issue projection and unattended execution can be derived from explicit manifest data, not prose inference.
+- Fail if workstreams/phases are the only executable projection source.
+- Fail if any leaf issue uses a gate, merge point, DR, risk, assumption, or opaque phrase as a dependency.
+- Fail if any gate referenced by a leaf issue lacks where/entrypoint/green means in the implementation plan.
+- Fail if `agent-ready` issues lack bounded file scope, validation command/evidence, one-PR contract, or dispatch policy.
+- Fail if risky areas (secrets/auth/payments/live commerce/webhooks/migrations/infra/deploy/public APIs/data deletion/compliance) are not converted into `manual-review`, `blocked`, spike-first sequencing, or a DR-backed waiver.
+- Use this schema:
+  - Manifest gaps:
+    - F-001: ...
+  - Dependency/gate/file-scope risks:
+    - F-002: ...
+  - Dispatch policy risks:
+    - F-003: ...
+  - Pass/fail readiness statement:
+    - F-004: ...
 
 ### Security/privacy review (required)
 - Focus on auth boundaries, data handling, privacy/compliance, and sensitive data paths.

@@ -1,12 +1,14 @@
 {
-  "OWNER/REPO": [
-    {
-      "workflow": "deployed-validation.yml",
-      "ref": "$PR_HEAD_BRANCH",
-      "inputs": {
-        "dry_run": "true",
-        "pr_number": "$PR_NUMBER"
+  "OWNER/REPO": {
+    "workflows": [
+      {
+        "workflow": "deployed-validation.yml",
+        "ref": "$PR_HEAD_BRANCH",
+        "inputs": {
+          "dry_run": "true",
+          "pr_number": "$PR_NUMBER"
+        }
       }
-    }
-  ]
+    ]
+  }
 }

@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/implement/SKILL.md manifest=atlas-tools.v1 checksum=sha256:14e84c5f354f056eff8653aaaa2153875bb330a674afdb352474cda2169ed6c9
+# atlas-tools-generated: source=skills/implement/SKILL.md manifest=atlas-tools.v1 checksum=sha256:1f54425b3958de27d86a1293d4d4e1a75f5f0e7328fc1a9df07e50c6b89a2ce9
 # atlas-tools-generated-end
 name: build
 description: Execute the current plan artifact with strict sub-agent orchestration, plan-execution discipline, and build-time gates. Use when the user runs /build, /implement, or requests implementation from an approved plan.
@@ -62,6 +62,14 @@ Implement the current plan artifact exactly, honoring phases, tasks, owners, and
 - Delegate each independent workstream to a sub-agent.
 - Launch sub-agents in parallel when workstreams are independent.
 - Do not launch more than 4 sub-agents at once.
+
+## Surgical edit policy
+- Inspect before editing; name any ambiguity that would change scope, interface, infra, data handling, or rollout.
+- Make the smallest coherent diff that satisfies the assigned task and plan gates.
+- Every changed line should trace to the issue, plan task, failing test, or directly necessary cleanup created by this change.
+- Preserve nearby behavior, formatting, and abstractions unless the plan explicitly assigns that refactor.
+- Do not broaden implementation scope, pick an undecided provider, or rewrite surrounding code to make a task easier.
+- Define success as executable evidence: tests, lint/build output, review gate, or documented manual evidence.
 
 ## Sub-agent selection rules
 - `explore`: quick context gathering for broad codebase discovery.

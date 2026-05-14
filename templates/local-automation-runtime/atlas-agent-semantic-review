@@ -187,6 +187,8 @@ def run_codex_review(job_dir: Path, prompt: str) -> str:
     prompt_path.write_text(prompt, encoding="utf-8")
     run_home = common.codex_home_copy(job_dir)
     image = common.codex_image()
+    profile_args = common.codex_profile_shell_args("review")
+    profile_segment = f"{profile_args} " if profile_args else ""
     cmd = [
         *common.podman_cmd(),
         "run",
@@ -200,7 +202,7 @@ def run_codex_review(job_dir: Path, prompt: str) -> str:
         image,
         "bash",
         "-lc",
-        "cd /job && codex exec --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < semantic-review-prompt.md",
+        f"cd /job && codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < semantic-review-prompt.md",
     ]
     proc = common.run(cmd, check=False)
     shutil.rmtree(run_home, ignore_errors=True)

@@ -1,3 +1,13 @@
 {
-  "OWNER/REPO": []
+  "OWNER/REPO": {
+    "required": [],
+    "no_checks": {
+      "require_label": "agent:no-checks-expected",
+      "allow_if_paths": [
+        "docs/**",
+        "*.md"
+      ],
+      "allow_merge": true
+    }
+  }
 }

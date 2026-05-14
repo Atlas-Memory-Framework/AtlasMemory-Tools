@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:8af5bff0bf4ab999bb668fe7eeec45f8ef31c753b79544dc90697edd24976e4a
+# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:6a04b9e61c0f982d6138a5f95554db4d8b2c5e235a488d48ae4dd2c8ef6acabb
 # atlas-tools-generated-end
 name: plan
 description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by Cursor) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
@@ -8,7 +8,7 @@ description: Orchestrate the /plan workflow to create or update the current plan
 # /plan Orchestrator
 
 ## Purpose
-Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, and Reviews with deterministic validators and decision logging. The markdown artifact is the authoring write surface; in `registry-first`, a successful compile later hands planning authority to compiled registry YAML. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
+Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators and decision logging. The markdown artifact is the authoring write surface; in `registry-first`, a successful compile later hands planning authority to compiled registry YAML. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
 
 ## Core rules
 - The current markdown plan artifact is the planning write surface; do not assume a fixed filename.
@@ -29,7 +29,7 @@ Create or update the current markdown plan artifact and move it through Problem,
 - **Authoring artifact echo (required)**: after the selection is made, print `AuthoringArtifact = <path>` in chat before doing any `/plan` work.
 - **No-new-plan invariant**: if an authoring artifact is already selected, do NOT create a new plan artifact unless the user explicitly requests “new plan”.
 - If no explicit in-conversation plan artifact is provided, create a new plan doc from `reference.md` and immediately echo it as the selected authoring artifact.
-- Workflow order is fixed: Problem -> Feature -> Technical -> Implementation -> Reviews.
+- Workflow order is fixed: Problem -> Feature -> Technical -> Implementation -> Automation (when `AutomationTarget != none`) -> Reviews.
 - Hard rule: `/problem-definition` and `/critical-ideation` are Q/A gated before advancing; run the Q/A loop inline with the user and only when the checklist fails or `Questions` is non-empty.
 - **No gate flips without evidence**: before changing any of `Status`, `CurrentStage`, or any Gate Results, include a short checklist in chat stating:
   - which section(s) changed, and
@@ -60,12 +60,13 @@ Create or update the current markdown plan artifact and move it through Problem,
 12) Advance stage only when its gate passes.
 13) Update `Status`, `CurrentStage`, and any Gate Results only after providing the “no gate flips without evidence” checklist in chat.
     - Do not set `Status: Approved` unless `PlanStateSanity` passes.
-14) Reviews stage only: run planning reviews, then auto-remediate findings that are purely clarity/structure improvements and do not change decisions.
+14) If `AutomationTarget != none`, run `/automation-decomposition` after PlanReadiness passes and before Reviews; do not dispatch work here.
+15) Reviews stage only: run planning reviews, then auto-remediate findings that are purely clarity/structure improvements and do not change decisions.
     - **No paper reviews**: after any remediation or other material plan edits, regenerate reviews (or re-run the same review agents) so `PlanningReviewsComplete` reflects the updated document.
     - If reviews are stale (plan changed since last review run), `PlanningReviewsComplete` MUST be `Fail` until re-run.
-15) Repeat the review -> remediation loop until findings are resolved, deduped as ignorable/non-relevant, or no new findings appear.
-16) Only surface findings to the user when they require human agency (policy/compliance/cost/trust boundaries, decision boundaries, external source approval, contradictions with explicit assumptions or authority contracts, or remediation target is `Unknown`). Ask for A/R/D only for this reduced set.
-17) Hard rule: do not set `Status: Approved` or `PlanningReviewsComplete: Pass` if any human-agency items remain unresolved. Stop and request dispositions first.
+16) Repeat the review -> remediation loop until findings are resolved, deduped as ignorable/non-relevant, or no new findings appear.
+17) Only surface findings to the user when they require human agency (policy/compliance/cost/trust boundaries, decision boundaries, external source approval, contradictions with explicit assumptions or authority contracts, or remediation target is `Unknown`). Ask for A/R/D only for this reduced set.
+18) Hard rule: do not set `Status: Approved` or `PlanningReviewsComplete: Pass` if any human-agency items remain unresolved. Stop and request dispositions first.
 
 ## Validators (deterministic)
 - ProblemDefinitionComplete: problem statement, measurable success criteria, constraints, scope/anti-scope, decision boundaries. Must be Q/A gated; inline loop only when needed.
@@ -98,6 +99,25 @@ Create or update the current markdown plan artifact and move it through Problem,
       - cutover criteria (when fallback is removed)
       - cache staleness policy (TTL default/max; invalidation yes/no)
       - Tier C onboarding readiness (provisioning/active status & 503 behavior)
+- AutomationReadiness (required when `AutomationTarget != none`; otherwise N/A):
+  - `AutomationTarget` is one of:
+    - `none`: no automation manifest required.
+    - `manifest-only`: plan includes a valid manifest for human review, but projection/dispatch can remain blocked.
+    - `issue-projection`: manifest can be projected into tracker issues without additional decomposition.
+    - `unattended-prs`: `agent-ready` leaf issues can be consumed by local issue-to-PR automation after human dispatch approval.
+  - `## Automation Issue Manifest` exists and includes:
+    - dispatch policy with strategy, concurrency, labels, branch/PR/merge/update/failure policies, and human-approval setting
+    - containers for epics/workstreams/phases/merge points marked `tracking-only`
+    - leaf issues with stable id, title, type, parent, owner, agent type, dispatch mode, dependencies, file scope, required gates, validation, acceptance criteria, source sections, and one-PR contract
+    - dependency graph is acyclic and does not contradict workstream/phase dependencies
+    - every dependency resolves to a leaf issue id, a structured external blocker, or a structured manual blocker
+    - no gate, merge point, risk, assumption, or decision token is used as a dependency
+    - every required gate is defined in `## Implementation Plan` with where/entrypoint/green means and attached to at least one leaf issue
+    - file scopes do not conflict across simultaneously dispatchable items unless an explicit merge/dependency boundary serializes them
+    - acceptance criteria are executable and map to named gates or concrete evidence
+    - `issue-projection` and `unattended-prs` have no open dispatch-policy placeholders
+    - `unattended-prs` has bounded concurrency, failure policy, branch policy, PR policy, and human approval before dispatch
+    - risky work (secrets/auth/payments/live commerce/webhooks/migrations/infra/deploy/public API/data deletion/compliance) is converted into `manual-review`, `blocked`, or spike-first dispatch policy unless waived by DR
 - PlanStateSanity (blocks false “Approved/Execution”):
   - Do NOT allow `Status: Approved` or `CurrentStage: Build/Execution` if:
     - any gate is not `Pass`, OR
@@ -118,6 +138,7 @@ Create or update the current markdown plan artifact and move it through Problem,
 - FeatureClarity -> `/critical-ideation`
 - TechnicalClarity -> `/technical-planning`
 - PlanReadiness -> `/implementation-planning`
+- AutomationReadiness -> `/automation-decomposition` when `AutomationTarget != none`
 - PlanningReviewsComplete -> `/planning-reviews`
 
 ## Gate -> Q/A loop mode map (inline)
@@ -125,6 +146,7 @@ Create or update the current markdown plan artifact and move it through Problem,
 - FeatureClarity -> `qa-loop mode=default`
 - TechnicalClarity -> `qa-loop mode=comprehension` (must run at least once per /plan invocation when moving into/through this gate)
 - PlanReadiness -> `qa-loop mode=comprehension` (must run at least once per /plan invocation when moving into/through this gate)
+- AutomationReadiness -> `qa-loop mode=comprehension` when dispatch policy or automation scope needs user confirmation
 - PlanningReviewsComplete -> `qa-loop mode=disposition`
 
 ## Review auto-remediation routing
@@ -132,6 +154,7 @@ Create or update the current markdown plan artifact and move it through Problem,
 - Feature -> `/critical-ideation`
 - Technical -> `/technical-planning`
 - Implementation -> `/implementation-planning`
+- Automation Issue Manifest -> `/automation-decomposition`
 - Context Snapshot -> `/implementation-planning`
 - Decision Log -> orchestrator updates decision boundary options; if unclear, ask the user.
 
@@ -168,6 +191,7 @@ Human-agency items MUST be explicitly decided by the user (use structured questi
 ## Context handling
 - Each sub-agent is responsible for collecting minimal necessary context for its section.
 - The Implementation Planning sub-agent owns the `## Context Snapshot` section and should fill any missing context required for execution, including the agent roster and a delegation-ready workstream matrix if not already captured.
+- The Automation Decomposition sub-agent owns only `## Automation Issue Manifest`; it derives items from the accepted implementation plan and must not mutate issues, projects, branches, or runtime state.
 - Only hard-block when missing context makes a gate unsafe to pass.
 
 ## Sub-skills used (run as sub-agents unless noted)
@@ -175,6 +199,7 @@ Human-agency items MUST be explicitly decided by the user (use structured questi
 - `/critical-ideation` -> sub-agent, Q/A gated (inline loop when needed)
 - `/technical-planning` -> sub-agent, Q/A gated (inline loop when needed)
 - `/implementation-planning` -> sub-agent, Q/A gated (inline loop when needed)
+- `/automation-decomposition` -> sub-agent when `AutomationTarget != none`, Q/A gated when dispatch policy or scope is ambiguous
 - `/planning-reviews` -> inline or sub-agent, Q/A gated (inline loop when needed)
 
 ## Output

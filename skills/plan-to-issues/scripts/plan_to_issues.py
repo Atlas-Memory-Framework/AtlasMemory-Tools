@@ -22,7 +22,18 @@ WORKSTREAM_BULLET_RE = re.compile(
 )
 # Canonical bullet block for workstreams (prefer this over ### headings when present).
 WORKSTREAMS_SECTION_HEADING = "### Workstreams + merge points"
+AUTOMATION_MANIFEST_SECTION_TITLE = "Automation Issue Manifest"
+AUTOMATION_MANIFEST_SECTION_HEADING = f"### {AUTOMATION_MANIFEST_SECTION_TITLE}"
+MANIFEST_LEAF_SECTION_HEADING = "### Leaf issues"
 PHASE_HEADING_RE = re.compile(r"^####\s+(Phase\s+\d+:\s+.+)$")
+MANIFEST_LEAF_ID_PATTERN = r"(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|[A-Z]+[0-9]+)"
+MANIFEST_LEAF_BULLET_RE = re.compile(
+    rf"^-\s+`?({MANIFEST_LEAF_ID_PATTERN})`?:\s+(.+)$", re.IGNORECASE
+)
+MANIFEST_LEAF_TOKEN_RE = re.compile(
+    rf"(?<![A-Za-z0-9-])({MANIFEST_LEAF_ID_PATTERN})(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 PLAN_ID_RE = re.compile(r"\b(WS\d+)\b", re.IGNORECASE)
 PROJECT_URL_RE = re.compile(
     r"^https://github\.com/(?:orgs|users)/(?P<owner>[^/]+)/projects/(?P<number>\d+)/?$",
@@ -88,6 +99,7 @@ REPO_SLUG_ALIASES = {
     "infra": INFRA_REPO_SLUG,
 }
 DEFAULT_BRANCH_HINTS: dict[str, str] = {}
+ALLOWED_POINT_VALUES = {1, 2, 3, 5, 8, 13}
 
 # Frozen join-metadata transport (DR-017 / WS2). Escaped-byte budgets apply to full
 # `<!-- ... -->` segments after JSON serialization of the inner envelope object.
@@ -375,6 +387,9 @@ class IssueDraft:
     azure_closeout_only: bool = False
     status_label: str = "status:draft"
     dispatch_recommendation: str = "tracking-only"
+    dispatch_mode: str | None = None
+    write_scope: list[str] = field(default_factory=list)
+    validation_commands: list[str] = field(default_factory=list)
     validation_scope: str = "local"
     risk_tags: list[str] = field(default_factory=list)
     dependency_issue_refs: list[str] = field(default_factory=list)
@@ -751,8 +766,8 @@ def registry_slice_anchor_context(registry_root: Path) -> tuple[str | None, str,
         source_slug = remote_repo_slug(origin_remote)
         normalized_remote = normalize_github_remote(origin_remote)
         if normalized_remote:
-            default_branch = infer_default_branch(repo_root)
-            canonical_url = f"{normalized_remote}/blob/{default_branch}/{relative}"
+            source_ref = infer_source_ref(repo_root)
+            canonical_url = f"{normalized_remote}/blob/{source_ref}/{relative}"
     return source_slug, relative, canonical_url
 
 
@@ -1160,6 +1175,7 @@ def build_registry_story_drafts(
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
         )
+        points = suggest_points(title, repo_targets, gates)
         labels = infer_labels(
             title,
             title,
@@ -1168,6 +1184,7 @@ def build_registry_story_drafts(
             repo_targets=repo_targets,
             highest_tier=infer_highest_tier(gates),
             status_label=status_label,
+            points=points,
         )
         meta_suffix, diag = build_registry_join_metadata_block(
             story,
@@ -1182,7 +1199,7 @@ def build_registry_story_drafts(
             f"- Source section: `{sid}`",
             "",
             "## Suggested Draft Metadata",
-            f"- Suggested points: `{suggest_points(title, repo_targets, gates)}`",
+            f"- Suggested points: `{points}`",
             f"- Issue ready: `{'true' if issue_ready else 'false'}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
@@ -1222,7 +1239,7 @@ def build_registry_story_drafts(
                 source_id=sid,
                 execution_repo=execution_repo,
                 base_branch=base_branch,
-                suggested_points=suggest_points(title, repo_targets, gates),
+                suggested_points=points,
                 merge_points=[],
                 gates=gates,
                 highest_tier=infer_highest_tier(gates),
@@ -1273,7 +1290,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--strategy",
-        choices=("workstreams", "phases"),
+        choices=("workstreams", "phases", "leaf-issues"),
         default="workstreams",
         help="How to project the plan into child issues.",
     )
@@ -1389,6 +1406,17 @@ def infer_default_branch(repo_root: Path) -> str:
     return "main"
 
 
+def infer_source_ref(repo_root: Path) -> str:
+    """Prefer the checked-out authoring ref for source links, falling back to commit/default."""
+    branch = run_git(["branch", "--show-current"], cwd=repo_root)
+    if branch:
+        return branch
+    commit = run_git(["rev-parse", "HEAD"], cwd=repo_root)
+    if commit:
+        return commit
+    return infer_default_branch(repo_root)
+
+
 def build_plan_reference_lines(plan_path: Path, *, include_execution_note: bool = False) -> list[str]:
     _, relative_plan_path, canonical_plan_url = plan_reference_context(plan_path)
     repo_root = resolve_repo_root(plan_path)
@@ -1425,8 +1453,8 @@ def plan_reference_context(plan_path: Path) -> tuple[str | None, str, str | None
         source_repo_slug = remote_repo_slug(origin_remote)
         normalized_remote = normalize_github_remote(origin_remote)
         if normalized_remote:
-            default_branch = infer_default_branch(repo_root)
-            canonical_plan_url = f"{normalized_remote}/blob/{default_branch}/{relative_plan_path}"
+            source_ref = infer_source_ref(repo_root)
+            canonical_plan_url = f"{normalized_remote}/blob/{source_ref}/{relative_plan_path}"
     return source_repo_slug, relative_plan_path, canonical_plan_url
 
 
@@ -1528,28 +1556,99 @@ def display_plan_path(path: Path) -> str:
     return relative_plan_path
 
 
-def parse_frontmatter(text: str) -> dict[str, str]:
-    match = FRONTMATTER_RE.match(text)
-    if not match:
-        return {}
-    frontmatter: dict[str, str] = {}
+def _clean_frontmatter_scalar(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1]
+    return text
+
+
+def _parse_scalar_frontmatter_block(block: str) -> dict[str, object]:
+    """Small YAML subset fallback for scalar frontmatter used by plan metadata."""
+    data: dict[str, object] = {}
     current_parent: str | None = None
-    for raw_line in match.group(1).splitlines():
+    current_multiline_key: str | None = None
+    current_multiline_indent = 0
+    current_multiline_lines: list[str] = []
+
+    def flush_multiline() -> None:
+        nonlocal current_multiline_key, current_multiline_lines
+        if current_multiline_key is not None:
+            data[current_multiline_key] = "\n".join(current_multiline_lines).rstrip()
+        current_multiline_key = None
+        current_multiline_lines = []
+
+    for raw_line in block.splitlines():
         indent = len(raw_line) - len(raw_line.lstrip(" "))
         line = raw_line.strip()
+        if current_multiline_key is not None:
+            if not line:
+                current_multiline_lines.append("")
+                continue
+            if indent >= current_multiline_indent:
+                current_multiline_lines.append(raw_line[current_multiline_indent:])
+                continue
+            flush_multiline()
         if not line or line.startswith("#") or ":" not in line:
             continue
         key, value = line.split(":", 1)
         key = key.strip()
-        value = value.strip().strip('"')
+        value = value.strip()
         if indent == 0:
             current_parent = key if not value else None
-            if key in {"name", "overview"}:
-                frontmatter[key] = value
+            if value in {"|", ">"}:
+                current_multiline_key = key
+                current_multiline_indent = indent + 2
+                current_multiline_lines = []
+            elif value:
+                data[key] = _clean_frontmatter_scalar(value)
             continue
-        if current_parent == "tracking":
-            frontmatter[f"tracking.{key}"] = value
+        if current_parent:
+            data.setdefault(current_parent, {})
+            parent = data[current_parent]
+            if isinstance(parent, dict):
+                parent[key] = _clean_frontmatter_scalar(value)
+    flush_multiline()
+    return data
+
+
+def _flatten_frontmatter(data: Mapping[str, object]) -> dict[str, str]:
+    frontmatter: dict[str, str] = {}
+    for key in ("name", "overview", "summary"):
+        value = data.get(key)
+        scalar = _clean_frontmatter_scalar(value)
+        if scalar:
+            frontmatter[key] = scalar
+    tracking = data.get("tracking")
+    if isinstance(tracking, Mapping):
+        for key, value in tracking.items():
+            scalar = _clean_frontmatter_scalar(value)
+            if scalar:
+                frontmatter[f"tracking.{key}"] = scalar
+    if "overview" not in frontmatter and frontmatter.get("summary"):
+        frontmatter["overview"] = frontmatter["summary"]
     return frontmatter
+
+
+def parse_frontmatter(text: str) -> dict[str, str]:
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return {}
+    block = match.group(1)
+    try:
+        yaml = _require_yaml()
+        parsed = yaml.safe_load(block)  # type: ignore[attr-defined]
+    except SystemExit:
+        parsed = _parse_scalar_frontmatter_block(block)
+    if not isinstance(parsed, Mapping):
+        return {}
+    return _flatten_frontmatter(parsed)
 
 
 def strip_frontmatter(text: str) -> str:
@@ -1686,6 +1785,21 @@ def collect_workstream_sections(lines: list[str]) -> list[tuple[str, list[str]]]
     ]
 
 
+def collect_automation_manifest_sections(lines: list[str]) -> list[tuple[str, list[str]]]:
+    canonical_sections = collect_bullet_sections(
+        lines,
+        section_heading=AUTOMATION_MANIFEST_SECTION_HEADING,
+        bullet_re=MANIFEST_LEAF_BULLET_RE,
+    )
+    if canonical_sections:
+        return canonical_sections
+    return collect_bullet_sections(
+        lines,
+        section_heading=MANIFEST_LEAF_SECTION_HEADING,
+        bullet_re=MANIFEST_LEAF_BULLET_RE,
+    )
+
+
 def normalize_excerpt(lines: Iterable[str], limit: int = 28) -> str:
     cleaned = [line.rstrip() for line in lines]
     while cleaned and not cleaned[0].strip():
@@ -1782,6 +1896,38 @@ def status_label_for_issue(
     return "status:ready"
 
 
+def normalize_dispatch_mode(values: list[str], *, default: str = "manual-review") -> str:
+    if not values:
+        return default
+    value = values[-1].replace("`", "").strip().lower()
+    aliases = {
+        "agent-ready": "agent-ready",
+        "auto": "agent-ready",
+        "auto-dispatch": "agent-ready",
+        "dispatch": "agent-ready",
+        "review": "manual-review",
+        "review-before-dispatch": "manual-review",
+        "manual": "manual-review",
+        "manual-review": "manual-review",
+        "tracking": "tracking-only",
+        "tracking-only": "tracking-only",
+        "blocked": "blocked",
+        "dry-run-only": "tracking-only",
+    }
+    return aliases.get(value, default)
+
+
+def dispatch_recommendation_for_manifest_mode(
+    mode: str,
+    inferred: str,
+) -> str:
+    if mode == "agent-ready":
+        return inferred
+    if mode == "manual-review":
+        return "review-before-dispatch"
+    return "tracking-only"
+
+
 def parse_int_value(value: str | None) -> int | None:
     if value is None:
         return None
@@ -1789,6 +1935,26 @@ def parse_int_value(value: str | None) -> int | None:
     if not match:
         return None
     return int(match.group(0))
+
+
+def normalize_points_value(value: str | None) -> int | None:
+    points = parse_int_value(value)
+    if points in ALLOWED_POINT_VALUES:
+        return points
+    return None
+
+
+def explicit_points_from_lines(lines: list[str]) -> int | None:
+    values = collect_field_values(lines, "points", "story points", "suggested points")
+    for value in reversed(values):
+        points = normalize_points_value(value)
+        if points is not None:
+            return points
+    return None
+
+
+def points_for_issue(title: str, repo_targets: list[str], gates: list[str], lines: list[str]) -> int:
+    return explicit_points_from_lines(lines) or suggest_points(title, repo_targets, gates)
 
 
 def should_block_dispatch(next_required_user_action: str | None) -> bool:
@@ -1831,7 +1997,7 @@ def build_plan_execution_context(
     if not repo:
         dispatch_blockers.append("Missing target repo; add `tracking.epicRepo` or pass `--repo`.")
     if not sections:
-        dispatch_blockers.append("No workstreams/phases were found for issue projection.")
+        dispatch_blockers.append("No projectable workstreams, phases, or manifest leaves were found.")
     if unresolved_blockers and unresolved_blockers > 0:
         dispatch_blockers.append(
             f"Plan state reports `{unresolved_blockers}` unresolved blocker(s)."
@@ -1884,7 +2050,7 @@ def build_stability_summary(
     if not repo:
         needs_user_input.append("tracking.epicRepo")
     if not sections:
-        needs_user_input.append("workstreams")
+        needs_user_input.append("projectable_sections")
 
     unstable_items: list[str] = []
     for child in children:
@@ -2233,6 +2399,50 @@ def analyze_dependency_values(values: list[str], *, default_repo: str | None = N
     return analysis
 
 
+def analyze_manifest_dependency_values(
+    values: list[str],
+    *,
+    manifest_source_ids: set[str],
+    default_repo: str | None = None,
+) -> DependencyAnalysis:
+    analysis = DependencyAnalysis()
+    for value in values:
+        for segment in value.split(","):
+            cleaned_value = segment.replace("`", "").strip()
+            if cleaned_value.lower() in {"", "none", "n/a", "na"}:
+                continue
+            issue_refs = extract_issue_refs(segment, default_repo=default_repo)
+            manifest_tokens = [
+                token
+                for token in extract_tokens(segment, MANIFEST_LEAF_TOKEN_RE)
+                if token in manifest_source_ids
+            ]
+            manifest_token_set = set(manifest_tokens)
+            unsupported_tokens = [
+                token
+                for token in [
+                    *extract_tokens(segment, WORKSTREAM_TOKEN_RE),
+                    *extract_tokens(segment, MERGE_POINT_RE),
+                    *extract_tokens(segment, GATE_RE),
+                    *extract_tokens(segment, DECISION_TOKEN_RE),
+                    *extract_tokens(segment, ASSUMPTION_TOKEN_RE),
+                    *extract_tokens(segment, RISK_TOKEN_RE),
+                ]
+                if token not in manifest_token_set
+            ]
+            analysis.issue_refs.extend(issue_refs)
+            analysis.dependencies.extend([*manifest_tokens, *issue_refs, *unsupported_tokens])
+            analysis.unsupported_tokens.extend(unsupported_tokens)
+            if not issue_refs and not manifest_tokens and not unsupported_tokens:
+                analysis.dependencies.append(cleaned_value)
+                analysis.opaque_values.append(cleaned_value)
+    analysis.dependencies = ordered_unique(analysis.dependencies)
+    analysis.issue_refs = ordered_unique(analysis.issue_refs)
+    analysis.unsupported_tokens = ordered_unique(analysis.unsupported_tokens)
+    analysis.opaque_values = ordered_unique(analysis.opaque_values)
+    return analysis
+
+
 def normalize_dependency_values(values: list[str]) -> list[str]:
     return analyze_dependency_values(values).dependencies
 
@@ -2382,7 +2592,14 @@ def collect_all_gates(text: str) -> list[str]:
 def infer_owner_labels(owner_names: list[str]) -> list[str]:
     labels: list[str] = []
     for owner_name in owner_names:
-        labels.append(f"owner:{owner_name.lower().replace('/', '-').replace(' ', '-')}")
+        token = owner_name.lower().replace("/", "-").replace(" ", "-")
+        label = f"owner:{token}"
+        if len(label) > 50:
+            digest = hashlib.sha1(label.encode("utf-8")).hexdigest()[:8]
+            token_budget = 50 - len("owner:") - len(digest) - 1
+            token = token[:token_budget].rstrip("-")
+            label = f"owner:{token}-{digest}"
+        labels.append(label)
     return labels
 
 
@@ -2745,6 +2962,7 @@ def infer_labels(
     repo_targets: list[str] | None = None,
     highest_tier: str | None = None,
     status_label: str = "status:draft",
+    points: int | None = None,
 ) -> list[str]:
     workstream_token = (workstream_label_scope or plan_key).strip()
     labels = [f"type:{kind}", f"workstream:{workstream_label_value(workstream_token)}"]
@@ -2771,6 +2989,8 @@ def infer_labels(
         labels.append("repo:cross-repo" if len(repo_targets) > 1 else f"repo:{repo_label_value(repo_targets[0])}")
     if highest_tier:
         labels.append(f"tier:{highest_tier.lower()}")
+    if points in ALLOWED_POINT_VALUES:
+        labels.append(f"points:{points}")
     return sorted(set(labels))
 
 
@@ -2883,12 +3103,13 @@ def build_epic(
     if repo_targets:
         body_lines.extend(["## Repo Boundaries", f"- {infer_repo_note(repo_targets)}", ""])
     if validation_requirements:
-        validation_heading = (
-            "## Validation / closeout requirements"
-            if plan_key in {"WS3", "WS4"}
-            else "## Azure-Specific Validation"
+        body_lines.extend(
+            [
+                "## Deployed / Manual Validation Requirements",
+                *[f"- {item}" for item in validation_requirements],
+                "",
+            ]
         )
-        body_lines.extend([validation_heading, *[f"- {item}" for item in validation_requirements], ""])
     if stability_notes:
         body_lines.extend(["## Stability Notes", *[f"- {item}" for item in stability_notes], ""])
     body_lines.extend(
@@ -2988,7 +3209,8 @@ def build_children(
         )
         issue_ready = parse_bool_field(collect_field_values(lines, "issue ready"), default=True)
         azure_closeout_only = parse_bool_field(
-            collect_field_values(lines, "azure closeout only"), default=False
+            collect_field_values(lines, "azure closeout only", "deployed closeout only", "provider closeout only"),
+            default=False,
         )
         status_label = status_label_for_issue(
             issue_ready=issue_ready,
@@ -3054,6 +3276,7 @@ def build_children(
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
         )
+        points = points_for_issue(title, repo_targets, gates, lines)
         labels = infer_labels(
             title,
             excerpt,
@@ -3064,6 +3287,7 @@ def build_children(
             repo_targets=repo_targets,
             highest_tier=highest_tier,
             status_label=status_label,
+            points=points,
         )
         body_lines = [
             "## Source Plan",
@@ -3071,7 +3295,7 @@ def build_children(
             f"- Source section: `{title}`",
             "",
             "## Suggested Draft Metadata",
-            f"- Suggested points: `{suggest_points(title, repo_targets, gates)}`",
+            f"- Suggested points: `{points}`",
             f"- Issue ready: `{'true' if issue_ready else 'false'}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
@@ -3090,7 +3314,7 @@ def build_children(
         if highest_tier:
             body_lines.append(f"- Highest tier: `{highest_tier}`")
         if azure_closeout_only:
-            body_lines.append("- Azure closeout only: `true`")
+            body_lines.append("- Deployed closeout only: `true`")
         if repo_note:
             body_lines.append(f"- Repo note: {repo_note}")
         body_lines.append("")
@@ -3125,13 +3349,12 @@ def build_children(
         if gates:
             body_lines.extend(["## Named Gates", *[f"- {item}" for item in gates], ""])
         if validation_requirements:
-            child_val_heading = (
-                "## Validation requirements"
-                if plan_key in {"WS3", "WS4"}
-                else "## Azure-Specific Validation"
-            )
             body_lines.extend(
-                [child_val_heading, *[f"- {item}" for item in validation_requirements], ""]
+                [
+                    "## Deployed / Manual Validation Requirements",
+                    *[f"- {item}" for item in validation_requirements],
+                    "",
+                ]
             )
         if (source_id.endswith(("D", "E")) or azure_closeout_only or not issue_ready) and stability_notes:
             body_lines.extend(["## Stability Notes", *[f"- {item}" for item in stability_notes], ""])
@@ -3158,7 +3381,7 @@ def build_children(
                 source_id=source_id,
                 execution_repo=execution_repo,
                 base_branch=base_branch,
-                suggested_points=suggest_points(title, repo_targets, gates),
+                suggested_points=points,
                 dependencies=dependencies,
                 blockers=blockers,
                 merge_points=merge_points,
@@ -3172,6 +3395,266 @@ def build_children(
                 azure_closeout_only=azure_closeout_only,
                 status_label=status_label,
                 dispatch_recommendation=dispatch_recommendation,
+                validation_scope=validation_scope,
+                risk_tags=risk_tags,
+                dependency_issue_refs=dependency_analysis.issue_refs,
+                blocker_issue_refs=blocker_analysis.issue_refs,
+                automation_blockers=automation_blockers,
+            )
+        )
+    return drafts
+
+
+def build_manifest_leaf_children(
+    plan_path: Path,
+    plan_display_path: str,
+    plan_key: str,
+    frontmatter: dict[str, str],
+    sections: list[tuple[str, list[str]]],
+    *,
+    issue_repo: str | None,
+    plan_base_branch: str | None,
+    plan_execution: dict[str, object],
+) -> list[IssueDraft]:
+    drafts: list[IssueDraft] = []
+    manifest_source_ids = {
+        title.split(" ", 1)[0].strip().replace("`", "").upper()
+        for title, _ in sections
+        if title.strip()
+    }
+    for title, lines in sections:
+        source_id = title.split(" ", 1)[0].strip().replace("`", "").upper()
+        display_title = title.split(" ", 1)[1].strip() if " " in title else source_id
+        excerpt = normalize_excerpt(lines)
+        owner_names = ordered_unique(
+            [value.replace("`", "").strip() for value in collect_field_values(lines, "owner")]
+        )
+        write_scope = ordered_unique(
+            [
+                value.replace("`", "").strip()
+                for value in collect_field_values(
+                    lines, "write scope", "files in scope", "owns files"
+                )
+            ]
+        )
+        explicit_repo_targets = normalize_repo_target_values(collect_field_values(lines, "target repo"))
+        repo_targets = explicit_repo_targets[:]
+        if not repo_targets:
+            repo_targets = normalize_repo_target_values(
+                [repo_for_path(item) for item in write_scope if item]
+            )
+        dependency_analysis = analyze_manifest_dependency_values(
+            collect_field_values(lines, "depends on", "dependencies"),
+            manifest_source_ids=manifest_source_ids,
+            default_repo=issue_repo,
+        )
+        dependencies = dependency_analysis.dependencies
+        blocker_analysis = analyze_blocker_values(
+            collect_field_values(
+                lines, "blocked by", "blockers", "external blockers", "manual blockers"
+            ),
+            default_repo=issue_repo,
+        )
+        explicit_blockers = blocker_analysis.blockers
+        raw_gate_values = [
+            *collect_field_values(
+                lines, "gates", "named gates", "review gates", "required gates"
+            ),
+        ]
+        gates = ordered_unique(
+            token
+            for value in raw_gate_values
+            for token in extract_tokens(value, GATE_RE)
+        )
+        gates = ordered_unique([*gates, *extract_review_gates_from_workstream_lines(lines)])
+        validation_commands = ordered_unique(
+            [
+                value.replace("`", "").strip()
+                for value in collect_field_values(
+                    lines, "validation", "validation commands", "validation command"
+                )
+            ]
+        )
+        requested_dispatch_mode = normalize_dispatch_mode(
+            collect_field_values(lines, "dispatch mode", "dispatch")
+        )
+        issue_ready = parse_bool_field(
+            collect_field_values(lines, "issue ready"),
+            default=requested_dispatch_mode in {"agent-ready", "manual-review"},
+        )
+        highest_tier = normalize_highest_tier(collect_field_values(lines, "highest tier")) or infer_highest_tier(gates)
+        validation_requirements = validation_commands[:]
+        validation_scope = infer_validation_scope(
+            title=title,
+            excerpt=excerpt,
+            gates=gates,
+            validation_requirements=validation_requirements,
+        )
+        repo_note = infer_repo_note(repo_targets)
+        execution_repo, base_branch = resolve_issue_execution_context(
+            issue_repo=issue_repo,
+            repo_targets=repo_targets,
+            explicit_base_branch=normalize_branch_field(
+                collect_field_values(lines, "base branch", "target base branch")
+            ),
+            default_base_branch=plan_base_branch or frontmatter.get("tracking.baseBranch"),
+        )
+        blockers = explicit_blockers
+        automation_blockers = ordered_unique(
+            [
+                *(
+                    f"Convert dependency token `{token}` into an explicit issue ref or Automation Issue Manifest leaf id before auto-dispatch."
+                    for token in dependency_analysis.unsupported_tokens
+                ),
+                *(
+                    f"Resolve opaque dependency `{value}` into an explicit issue ref or Automation Issue Manifest leaf id before auto-dispatch."
+                    for value in dependency_analysis.opaque_values
+                ),
+            ]
+        )
+        if requested_dispatch_mode == "blocked" or blockers or automation_blockers:
+            status_label = "status:blocked"
+        else:
+            status_label = status_label_for_issue(
+                issue_ready=issue_ready,
+                azure_closeout_only=False,
+                explicit_blockers=[],
+            )
+        risk_tags = infer_risk_tags(
+            title=title,
+            excerpt=excerpt,
+            repo_targets=repo_targets,
+            highest_tier=highest_tier,
+            blockers=[*blockers, *automation_blockers],
+            azure_closeout_only=False,
+            issue_ready=issue_ready,
+            validation_scope=validation_scope,
+            gates=gates,
+        )
+        dispatch_recommendation = infer_dispatch_recommendation(
+            issue_ready=issue_ready,
+            azure_closeout_only=False,
+            blockers=blockers,
+            repo_targets=repo_targets,
+            validation_scope=validation_scope,
+            risk_tags=risk_tags,
+            plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
+            automation_blockers=automation_blockers,
+        )
+        dispatch_recommendation = dispatch_recommendation_for_manifest_mode(
+            requested_dispatch_mode,
+            dispatch_recommendation,
+        )
+        points = points_for_issue(title, repo_targets, gates, lines)
+        labels = infer_labels(
+            title,
+            excerpt,
+            "story",
+            plan_key,
+            workstream_label_scope=source_id,
+            owner_names=owner_names,
+            repo_targets=repo_targets,
+            highest_tier=highest_tier,
+            status_label=status_label,
+            points=points,
+        )
+        body_lines = [
+            "## Source Plan",
+            *build_plan_reference_lines(plan_path, include_execution_note=bool(repo_targets)),
+            f"- Source section: `{AUTOMATION_MANIFEST_SECTION_TITLE}` / `{source_id}`",
+            "",
+            "## Automation Manifest Metadata",
+            f"- Suggested points: `{points}`",
+            f"- Issue ready: `{'true' if issue_ready else 'false'}`",
+            f"- Dispatch mode: `{requested_dispatch_mode}`",
+            f"- Dispatch recommendation: `{dispatch_recommendation}`",
+            f"- Validation scope: `{validation_scope}`",
+        ]
+        if risk_tags:
+            body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
+        if repo_targets:
+            body_lines.append(f"- Target repo(s): `{', '.join(repo_targets)}`")
+        if execution_repo:
+            body_lines.append(f"- Execution repo: `{execution_repo}`")
+        if base_branch:
+            body_lines.append(f"- Base branch: `{base_branch}`")
+            body_lines.append(
+                "- PR rule: create follow-up PRs against the explicit base branch above; do not infer from local checkout state, `origin/HEAD`, or fallback-to-`main` behavior."
+            )
+        if highest_tier:
+            body_lines.append(f"- Highest tier: `{highest_tier}`")
+        if repo_note:
+            body_lines.append(f"- Repo note: {repo_note}")
+        body_lines.append("")
+        if write_scope:
+            body_lines.extend(["## Write Scope", *[f"- `{item}`" for item in write_scope], ""])
+        if dependencies:
+            body_lines.extend(["## Dependencies", *[f"- {item}" for item in dependencies], ""])
+        if blockers:
+            body_lines.extend(["## Blockers", *[f"- {item}" for item in blockers], ""])
+        if dependency_analysis.issue_refs or blocker_analysis.issue_refs:
+            body_lines.append("## Linked Issue Refs")
+            if dependency_analysis.issue_refs:
+                body_lines.extend(
+                    ["- Depends on issue refs:", *[f"  - {item}" for item in dependency_analysis.issue_refs]]
+                )
+            if blocker_analysis.issue_refs:
+                body_lines.extend(
+                    ["- Blocked by issue refs:", *[f"  - {item}" for item in blocker_analysis.issue_refs]]
+                )
+            body_lines.append("")
+        combined_dispatch_blockers = ordered_unique(
+            [*automation_blockers, *plan_execution["dispatch_blockers"]]
+        )
+        if combined_dispatch_blockers:
+            body_lines.extend(
+                [
+                    "## Dispatch Guardrails",
+                    *[f"- {item}" for item in combined_dispatch_blockers],
+                    "",
+                ]
+            )
+        if gates:
+            body_lines.extend(["## Named Gates", *[f"- {item}" for item in gates], ""])
+        if validation_commands:
+            body_lines.extend(
+                ["## Validation Commands", *[f"- `{item}`" for item in validation_commands], ""]
+            )
+        body_lines.extend(
+            [
+                "## Excerpt",
+                "```md",
+                excerpt or "(no body found)",
+                "```",
+                "",
+                "## Implementation Notes",
+                "- Treat the Automation Issue Manifest leaf as the executable scope.",
+                "- Keep dependencies explicit before local automation dispatch.",
+            ]
+        )
+        drafts.append(
+            IssueDraft(
+                title=f"[{source_id}] {display_title}",
+                body="\n".join(body_lines),
+                labels=labels,
+                kind="story",
+                source_id=source_id,
+                execution_repo=execution_repo,
+                base_branch=base_branch,
+                suggested_points=points,
+                dependencies=dependencies,
+                blockers=blockers,
+                gates=gates,
+                highest_tier=highest_tier,
+                repo_targets=repo_targets,
+                repo_note=repo_note,
+                validation_requirements=validation_requirements,
+                issue_ready=issue_ready,
+                status_label=status_label,
+                dispatch_recommendation=dispatch_recommendation,
+                dispatch_mode=requested_dispatch_mode,
+                write_scope=write_scope,
+                validation_commands=validation_commands,
                 validation_scope=validation_scope,
                 risk_tags=risk_tags,
                 dependency_issue_refs=dependency_analysis.issue_refs,
@@ -4225,7 +4708,10 @@ def main() -> int:
     stability_notes = collect_stability_notes(markdown)
     azure_runner_inputs = collect_azure_runner_inputs(markdown)
     all_gates = collect_all_gates(markdown)
-    if args.strategy == "workstreams":
+    if args.strategy == "leaf-issues":
+        sections = collect_automation_manifest_sections(lines)
+        child_kind = "story"
+    elif args.strategy == "workstreams":
         sections = collect_workstream_sections(lines)
         child_kind = "story"
     else:
@@ -4238,23 +4724,35 @@ def main() -> int:
         sections=sections,
     )
 
-    children = build_children(
-        plan_path,
-        plan_display_path,
-        plan_key,
-        frontmatter,
-        sections,
-        child_kind,
-        issue_repo=repo,
-        owner_repo_targets=owner_repo_targets,
-        global_blockers=global_blockers,
-        decisions=decisions,
-        azure_runner_inputs=azure_runner_inputs,
-        stability_notes=stability_notes,
-        all_gates=all_gates,
-        plan_base_branch=plan_base_branch,
-        plan_execution=plan_execution,
-    )
+    if args.strategy == "leaf-issues":
+        children = build_manifest_leaf_children(
+            plan_path,
+            plan_display_path,
+            plan_key,
+            frontmatter,
+            sections,
+            issue_repo=repo,
+            plan_base_branch=plan_base_branch,
+            plan_execution=plan_execution,
+        )
+    else:
+        children = build_children(
+            plan_path,
+            plan_display_path,
+            plan_key,
+            frontmatter,
+            sections,
+            child_kind,
+            issue_repo=repo,
+            owner_repo_targets=owner_repo_targets,
+            global_blockers=global_blockers,
+            decisions=decisions,
+            azure_runner_inputs=azure_runner_inputs,
+            stability_notes=stability_notes,
+            all_gates=all_gates,
+            plan_base_branch=plan_base_branch,
+            plan_execution=plan_execution,
+        )
     epic_repo_targets = ordered_unique(
         repo_target
         for child in children
