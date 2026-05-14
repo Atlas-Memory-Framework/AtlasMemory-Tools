@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import argparse
+import contextlib
+import importlib.util
+import io
+import json
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "skills" / "github-project" / "scripts" / "create_project.py"
+
+
+def load_create_project_module():
+    spec = importlib.util.spec_from_file_location("github_project_create_project", SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load {SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class GithubProjectSkillTests(unittest.TestCase):
+    def test_dry_run_exposes_standard_fields_and_views(self) -> None:
+        module = load_create_project_module()
+        args = argparse.Namespace(owner="OWNER", title="Execution", visibility="PRIVATE", no_reuse=False)
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            module.print_dry_run(args)
+
+        payload = json.loads(output.getvalue())
+        fields = payload["required_fields"]
+        self.assertEqual(fields["Status"], ["Todo", "In Progress", "Done"])
+        self.assertEqual(fields["ItemType"], ["Epic", "Story", "Spike", "Tracker"])
+        self.assertIn("DependsOn", fields)
+        self.assertIn("Blocks", fields)
+        self.assertIn("AutomationState", fields)
+        view_names = [view["name"] for view in payload["recommended_views"]]
+        self.assertEqual(
+            view_names,
+            [
+                "Dispatch",
+                "Automation Flow",
+                "Epics",
+                "Dependencies",
+                "Review Queue",
+                "Risk And Dates",
+                "Done Audit",
+            ],
+        )
+
+    def test_existing_single_selects_warn_when_options_are_missing(self) -> None:
+        module = load_create_project_module()
+        existing_fields = [
+            {
+                "name": "Status",
+                "options": [{"name": "Todo"}, {"name": "In Progress"}, {"name": "Done"}],
+            },
+            {
+                "name": "ItemType",
+                "options": [{"name": "Epic"}, {"name": "Story"}],
+            },
+        ]
+
+        with (
+            patch.object(module, "field_list", return_value=existing_fields),
+            patch.object(module, "create_field") as create_field,
+        ):
+            warnings = module.ensure_fields("OWNER", 1)
+
+        self.assertTrue(any("ItemType field is missing option(s): Spike, Tracker" in warning for warning in warnings))
+        created_names = [call.args[2] for call in create_field.call_args_list]
+        self.assertIn("DependsOn", created_names)
+        self.assertIn("AutomationState", created_names)
+
+    def test_ensure_standard_views_fails_missing_with_template_guidance(self) -> None:
+        module = load_create_project_module()
+        initial_state = {
+            "fields": {
+                "nodes": [
+                    {"name": "Status", "databaseId": 1},
+                    {"name": "ItemType", "databaseId": 2},
+                    {"name": "Priority", "databaseId": 3},
+                    {"name": "Risk", "databaseId": 4},
+                    {"name": "TargetDate", "databaseId": 5},
+                    {"name": "Size", "databaseId": 6},
+                    {"name": "AutomationState", "databaseId": 7},
+                    {"name": "Workstream", "databaseId": 8},
+                    {"name": "TargetRepo", "databaseId": 9},
+                    {"name": "DependsOn", "databaseId": 10},
+                    {"name": "Blocks", "databaseId": 11},
+                    {"name": "ParentEpic", "databaseId": 12},
+                    {"name": "PR", "databaseId": 13},
+                    {"name": "Validation", "databaseId": 14},
+                    {"name": "ReviewGates", "databaseId": 15},
+                ]
+            },
+            "views": {"nodes": [{"name": "View 1", "number": 1}]},
+        }
+
+        with patch.object(module, "fetch_project_view_state", return_value=initial_state):
+            with self.assertRaises(SystemExit) as raised:
+                module.ensure_standard_views("PVT_project")
+
+        message = str(raised.exception)
+        self.assertIn("missing managed Project view: Dispatch", message)
+        self.assertIn("--template-owner and --template-number", message)
+
+    def test_ensure_standard_views_does_not_duplicate_existing_views(self) -> None:
+        module = load_create_project_module()
+        state = {
+            "fields": {"nodes": []},
+            "views": {
+                "nodes": [
+                    {"name": "View 1", "number": 1},
+                    *[
+                        {"name": name, "number": index + 2}
+                        for index, name in enumerate(module.MANAGED_VIEW_NAMES)
+                    ],
+                ]
+            },
+        }
+
+        with patch.object(module, "fetch_project_view_state", return_value=state):
+            results = module.ensure_standard_views("PVT_project")
+
+        self.assertEqual([result.action for result in results], ["present"] * len(module.MANAGED_VIEW_NAMES))
+
+    def test_check_standard_views_fails_with_named_missing_view(self) -> None:
+        module = load_create_project_module()
+        state = {"views": {"nodes": [{"name": "Dispatch", "number": 2}]}}
+
+        with self.assertRaises(SystemExit) as raised:
+            module.check_standard_views(state)
+
+        self.assertIn("missing managed Project view: Automation Flow", str(raised.exception))
+
+    def test_copy_project_template_invokes_gh_project_copy(self) -> None:
+        module = load_create_project_module()
+
+        with patch.object(module, "run_json", return_value={"number": 3}) as run_json:
+            result = module.copy_project_template("SOURCE", 2, "TARGET", "Execution")
+
+        self.assertEqual(result, {"number": 3})
+        run_json.assert_called_once_with(
+            [
+                "gh",
+                "project",
+                "copy",
+                "2",
+                "--source-owner",
+                "SOURCE",
+                "--target-owner",
+                "TARGET",
+                "--title",
+                "Execution",
+                "--format",
+                "json",
+            ]
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

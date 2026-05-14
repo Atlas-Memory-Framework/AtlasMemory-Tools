@@ -31,16 +31,158 @@ Required for local automation:
 - `Status` single select: `Todo`, `In Progress`, `Done`
 - `ExecutionState` single select: `Epic`, `Story`, `Spike`, `Tracker`, `Queued`, `Running`, `Blocked`, `Review`, `Done`
 
-Useful for human review and plan projection:
+Required for readable execution planning:
 
+- `ItemType` single select: `Epic`, `Story`, `Spike`, `Tracker`
 - `Workstream` text
 - `TargetRepo` text
+- `PlanKey` text
+- `SourceId` text
+- `ParentEpic` text
+- `DependsOn` text
+- `Blocks` text
+- `ReviewGates` text
+- `GateTier` single select: `T0`, `T1`, `T2`, `T3`, `T4`, `T5`, `T6`
+- `AutomationState` single select: `Manual`, `Ready`, `Queued`, `Running`, `PR Open`, `Review`, `Repair`, `Blocked`, `Done`
 - `Priority` single select: `P0`, `P1`, `P2`, `P3`
 - `Size` number
 - `Risk` single select: `Low`, `Medium`, `High`
 - `TargetDate` date
+- `Owner` text
+- `PR` text
+- `Validation` text
 
-The local project reconciler requires only `Status` and uses `ExecutionState=Epic` as one way to identify epic items. Labels such as `type:epic`, `type:story`, `status:ready`, and `agent:ready` remain on issues.
+`ExecutionState` is kept for compatibility with existing automation. New boards should use `ItemType`
+for shape and `AutomationState` for runtime lane. Labels such as `type:epic`, `type:story`,
+`status:ready`, `agent:ready`, and `agent:pr-open` remain on issues.
+
+The local project reconciler requires only `Status` and uses `ExecutionState=Epic` as one way to
+identify epic items. Project fields are a human operating view, not planning authority.
+
+## Standard Views
+
+Create these views for every execution Project. GitHub Project v2 saved views are readable through
+GraphQL, but the authenticated GraphQL schema does not expose create/update mutations for
+`ProjectV2View`. Do not rely on direct saved-view mutation.
+
+Use a preconfigured Project template/copy flow when a new Project must start with standard saved
+views:
+
+```bash
+python3 skills/github-project/scripts/create_project.py \
+  --owner OWNER \
+  --title "TITLE" \
+  --apply \
+  --template-owner TEMPLATE_OWNER \
+  --template-number TEMPLATE_NUMBER \
+  --ensure-views
+```
+
+Useful view-only modes:
+
+```bash
+python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE" --check-views
+python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE" --views-only --apply
+```
+
+The helper verifies the managed view names idempotently by reading Project views through GraphQL. If
+views are missing, provision them by copying a prepared Project template; do not ask operators to
+hand-build the same standard views repeatedly.
+
+### 1. Dispatch
+
+Purpose: decide what should run next.
+
+- Layout: table
+- Filter: open items where `Status` is not `Done` and `ItemType` is `Story` or `Spike`
+- Group by: `Priority`
+- Sort: `Priority` ascending, `Risk` descending, `TargetDate` ascending, `Size` ascending
+- Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `Priority`, `Risk`,
+  `Size`, `DependsOn`, `AutomationState`, `TargetDate`
+
+This is the operator's main queue. If it does not show dependency and risk context, people will pick
+the wrong next issue.
+
+### 2. Automation Flow
+
+Purpose: see what the runtime thinks is active.
+
+- Layout: board
+- Group by: `Status`
+- Filter: all open non-epic items
+- Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `AutomationState`, `PR`,
+  `Validation`
+
+Keep `Status` intentionally simple because automation reconciles it. Use `AutomationState` for
+finer human detail like `Queued`, `Running`, `PR Open`, `Review`, and `Repair`.
+
+### 3. Epics
+
+Purpose: see outcome-level progress and whether child work still exists.
+
+- Layout: table
+- Filter: `ItemType` is `Epic` or `ExecutionState` is `Epic`
+- Group by: `Workstream`
+- Sort: `Priority` ascending, `TargetDate` ascending
+- Fields: title, labels, `Status`, `Workstream`, `TargetRepo`, `Priority`, `Risk`, `TargetDate`,
+  `Blocks`, `ReviewGates`
+
+Epics should stay few and readable. They answer whether a plan outcome is done, blocked, or still
+has child work.
+
+### 4. Dependencies
+
+Purpose: expose blockers before they become stale board state.
+
+- Layout: table
+- Filter: open items where `DependsOn` is not empty, `Blocks` is not empty, or `AutomationState` is
+  `Blocked`
+- Group by: `TargetRepo`
+- Sort: `Priority` ascending, `Risk` descending
+- Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `Priority`, `DependsOn`, `Blocks`,
+  `ParentEpic`, `AutomationState`
+
+This view is required for multi-repo or staged work. A board without dependencies will make blocked
+items look idle or forgotten.
+
+### 5. Review Queue
+
+Purpose: focus reviewers and finalizers.
+
+- Layout: table
+- Filter: open items where `AutomationState` is `PR Open`, `Review`, or `Repair`
+- Group by: `AutomationState`
+- Sort: `Priority` ascending, `TargetDate` ascending
+- Fields: title, assignees, labels, `TargetRepo`, `PR`, `Validation`, `ReviewGates`, `Risk`,
+  `Priority`
+
+This is the view to use before merge/finalize automation. It should make missing validation and
+requested changes obvious.
+
+### 6. Risk And Dates
+
+Purpose: planning review and delivery pressure.
+
+- Layout: table or roadmap when dates are populated
+- Filter: open items where `Risk` is `High` or `TargetDate` is not empty
+- Group by: `Risk`
+- Sort: `TargetDate` ascending, `Priority` ascending
+- Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `Priority`, `Risk`, `TargetDate`,
+  `DependsOn`, `ReviewGates`
+
+Use this for human review, not automation dispatch.
+
+### 7. Done Audit
+
+Purpose: inspect completed work without polluting active views.
+
+- Layout: table
+- Filter: `Status` is `Done`
+- Group by: `ItemType`
+- Sort: most recently updated first
+- Fields: title, labels, `TargetRepo`, `Workstream`, `PR`, `Validation`, `TargetDate`
+
+This view exists so completed issues can remain searchable while active views stay clean.
 
 ## Inputs
 
@@ -63,6 +205,9 @@ If owner or title is unclear, ask. Do not create a project in a guessed account.
    - `python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE"`
 3. Apply only when the user explicitly asked to create/sync:
    - `python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE" --apply`
+   - Prefer `--template-owner TEMPLATE_OWNER --template-number TEMPLATE_NUMBER --ensure-views` for Projects that need the standard saved views.
+   - Add `--ensure-views` to fail clearly if the standard saved views are missing.
+   - Use `--views-only --apply` or `--check-views` to verify the standard view names through GraphQL without touching project metadata or fields.
 4. Capture the output:
    - Project URL: `https://github.com/orgs/OWNER/projects/NUMBER` or user-project equivalent
    - Runtime target: `OWNER/NUMBER` for `projects.txt`
@@ -78,6 +223,9 @@ If owner or title is unclear, ask. Do not create a project in a guessed account.
 - If an existing `Status` field lacks `Todo`, `In Progress`, or `Done`, stop and report it; the runtime depends on those exact option names.
 - Do not add issues to a Project until `plan-to-issues` has produced a dry-run preview.
 - For multiple Project memberships, name exactly one execution project; others are advisory views.
+- Do not call undocumented saved-view update endpoints.
+- Do not treat missing standard views as routine manual setup; use a maintained Project template/copy source.
+- Preserve existing views unless the user explicitly chooses to replace the Project by copying from a template.
 
 ## Output
 
@@ -88,7 +236,8 @@ Report:
 - project URL
 - `projects.txt` line
 - `plan-to-issues` argument
-- any schema gaps that require manual GitHub UI changes
+- managed view actions and any explicitly unsupported view configuration parts
+- any schema gaps that require operator action
 
 ## Supporting Files
 
