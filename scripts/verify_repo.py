@@ -21,6 +21,17 @@ FORBIDDEN_DEFAULT_TOKENS = (
     "fix/mime-" + "resolution-pins-mainline",
 )
 
+ALLOWED_CANONICAL_TEMPLATE_REFERENCES = {
+    "Atlas-" + "Memory-Framework": {
+        "skills/github-project/SKILL.md",
+        "skills/github-project/scripts/create_project.py",
+        ".cursor/skills/github-project/SKILL.md",
+        ".cursor/skills/github-project/scripts/create_project.py",
+        "docs/github-project-template-views.md",
+        "tests/test_github_project_skill.py",
+    },
+}
+
 FORBIDDEN_NEUTRAL_COPY = (
     "Atlas " + "automation",
     "Atlas " + "Codex runtime",
@@ -166,14 +177,15 @@ def iter_scanned_files() -> list[Path]:
 def check_forbidden_strings() -> None:
     offenders: list[str] = []
     for path in iter_scanned_files():
+        relative = rel(path)
         text = path.read_text(encoding="utf-8", errors="ignore")
         for token in FORBIDDEN_DEFAULT_TOKENS:
-            if token in text:
-                offenders.append(f"{rel(path)}: forbidden default {token}")
-        if "examples/atlasmemory" not in rel(path):
+            if token in text and relative not in ALLOWED_CANONICAL_TEMPLATE_REFERENCES.get(token, set()):
+                offenders.append(f"{relative}: forbidden default {token}")
+        if "examples/atlasmemory" not in relative:
             for token in FORBIDDEN_NEUTRAL_COPY:
                 if token in text:
-                    offenders.append(f"{rel(path)}: non-neutral runtime copy {token!r}")
+                    offenders.append(f"{relative}: non-neutral runtime copy {token!r}")
     if offenders:
         raise VerificationFailure("forbidden strings found outside allowed examples:\n- " + "\n- ".join(offenders))
 

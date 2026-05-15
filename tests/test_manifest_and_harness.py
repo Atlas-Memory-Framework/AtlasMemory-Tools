@@ -211,6 +211,13 @@ class PortabilityTests(unittest.TestCase):
         "AtlasMemory" "-Dev",
         "fix/mime-" "resolution-pins-mainline",
     )
+    ALLOWED_CANONICAL_TEMPLATE_REFERENCES = {
+        "Atlas-" "Memory-Framework": {
+            "skills/github-project/SKILL.md",
+            "skills/github-project/scripts/create_project.py",
+            "tests/test_github_project_skill.py",
+        },
+    }
 
     def test_no_atlas_specific_defaults_outside_examples(self) -> None:
         offenders: list[str] = []
@@ -222,8 +229,9 @@ class PortabilityTests(unittest.TestCase):
                     continue
                 text = path.read_text(encoding="utf-8", errors="ignore")
                 for token in self.FORBIDDEN:
-                    if token in text:
-                        offenders.append(f"{path.relative_to(ROOT)}: {token}")
+                    relative = path.relative_to(ROOT).as_posix()
+                    if token in text and relative not in self.ALLOWED_CANONICAL_TEMPLATE_REFERENCES.get(token, set()):
+                        offenders.append(f"{relative}: {token}")
         self.assertEqual(offenders, [])
 
     def test_runtime_examples_are_placeholder_safe(self) -> None:

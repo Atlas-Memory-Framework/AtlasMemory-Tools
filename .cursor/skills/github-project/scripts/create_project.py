@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# atlas-tools-generated: source=skills/github-project/scripts/create_project.py manifest=atlas-tools.v1 checksum=sha256:e27d4bc61d515bff52f2adce71b30f28f1d0c5d6ae1ded06485ff89ec70e8320
+# atlas-tools-generated: source=skills/github-project/scripts/create_project.py manifest=atlas-tools.v1 checksum=sha256:9330c7544ec8ac98c2d8e2d5bd34671bc63a8fb4459f1bdae8ee4d5db0c1384e
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from typing import Any
 
 
 REQUIRED_STATUS_OPTIONS = ("Todo", "In Progress", "Done")
+STANDARD_TEMPLATE_OWNER = "Atlas-Memory-Framework"
+STANDARD_TEMPLATE_NUMBER = 4
+STANDARD_TEMPLATE_URL = f"https://github.com/orgs/{STANDARD_TEMPLATE_OWNER}/projects/{STANDARD_TEMPLATE_NUMBER}"
 FIELD_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "ExecutionState",
@@ -21,24 +24,64 @@ FIELD_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("ItemType", "SINGLE_SELECT", ("Epic", "Story", "Spike", "Tracker")),
     ("Workstream", "TEXT", ()),
     ("TargetRepo", "TEXT", ()),
+    ("ExecutionRepo", "TEXT", ()),
+    ("BaseBranch", "TEXT", ()),
     ("PlanKey", "TEXT", ()),
     ("SourceId", "TEXT", ()),
     ("ParentEpic", "TEXT", ()),
     ("DependsOn", "TEXT", ()),
     ("Blocks", "TEXT", ()),
+    ("AutomationBlockers", "TEXT", ()),
     ("ReviewGates", "TEXT", ()),
     ("GateTier", "SINGLE_SELECT", ("T0", "T1", "T2", "T3", "T4", "T5", "T6")),
+    ("MergePoint", "TEXT", ()),
+    ("DispatchMode", "SINGLE_SELECT", ("agent-ready", "manual-review", "blocked", "tracking-only")),
+    (
+        "DispatchRecommendation",
+        "SINGLE_SELECT",
+        ("auto-dispatch", "review-before-dispatch", "tracking-only", "auto-dispatch-pilot"),
+    ),
+    ("IssueReady", "SINGLE_SELECT", ("Draft", "Ready", "Blocked")),
+    ("AgentType", "SINGLE_SELECT", ("generalPurpose", "test-engineer", "code-reviewer", "explore")),
     (
         "AutomationState",
         "SINGLE_SELECT",
-        ("Manual", "Ready", "Queued", "Running", "PR Open", "Review", "Repair", "Blocked", "Done"),
+        (
+            "Manual",
+            "Draft",
+            "Planned",
+            "Ready",
+            "Queued",
+            "Running",
+            "PR Open",
+            "Review",
+            "Local Validation",
+            "Deployed Validation",
+            "Semantic Review",
+            "Repair",
+            "Waiting",
+            "Blocked",
+            "Human Action",
+            "Failed",
+            "Done",
+            "Superseded",
+        ),
     ),
     ("Priority", "SINGLE_SELECT", ("P0", "P1", "P2", "P3")),
     ("Size", "NUMBER", ()),
     ("Risk", "SINGLE_SELECT", ("Low", "Medium", "High")),
+    ("RiskTags", "TEXT", ()),
+    ("ValidationScope", "SINGLE_SELECT", ("local", "ci", "deployed", "manual")),
+    ("WriteScope", "TEXT", ()),
+    ("OnePRContract", "SINGLE_SELECT", ("Yes", "No", "N/A")),
+    ("ReviewVerdict", "SINGLE_SELECT", ("Pending", "Changes Requested", "Approved", "Validated", "Merged")),
+    ("ReviewRoute", "SINGLE_SELECT", ("wait", "repair", "local-validate", "deployed-validate", "semantic-review", "human", "approved")),
+    ("BlockerType", "TEXT", ()),
+    ("BlockerReason", "TEXT", ()),
+    ("Checks", "TEXT", ()),
+    ("HeadSha", "TEXT", ()),
     ("TargetDate", "DATE", ()),
-    ("Owner", "TEXT", ()),
-    ("PR", "TEXT", ()),
+    ("ActivePR", "TEXT", ()),
     ("Validation", "TEXT", ()),
 )
 
@@ -51,7 +94,7 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
         "purpose": "Decide what should run next.",
         "filter": "Open Story or Spike items where Status is not Done.",
         "group_by": "Priority",
-        "sort": ["Priority asc", "Risk desc", "TargetDate asc", "Size asc"],
+        "sort": ["Priority asc", "IssueReady desc", "Risk desc", "TargetDate asc", "Size asc"],
         "fields": [
             "Title",
             "Assignees",
@@ -59,11 +102,20 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "ItemType",
             "Workstream",
             "TargetRepo",
+            "ExecutionRepo",
             "Priority",
             "Risk",
+            "RiskTags",
             "Size",
+            "IssueReady",
+            "DispatchMode",
+            "DispatchRecommendation",
             "DependsOn",
+            "AutomationBlockers",
             "AutomationState",
+            "BlockerType",
+            "BlockerReason",
+            "ValidationScope",
             "TargetDate",
         ],
     },
@@ -73,7 +125,7 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
         "api_filter": "is:open -itemtype:Epic",
         "purpose": "See what the runtime thinks is active.",
         "filter": "Open non-epic items.",
-        "group_by": "Status",
+        "group_by": "AutomationState",
         "sort": ["Priority asc", "TargetDate asc"],
         "fields": [
             "Title",
@@ -82,8 +134,14 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "ItemType",
             "Workstream",
             "TargetRepo",
+            "ExecutionRepo",
+            "IssueReady",
+            "DispatchRecommendation",
             "AutomationState",
-            "PR",
+            "Status",
+            "Linked pull requests",
+            "ActivePR",
+            "HeadSha",
             "Validation",
         ],
     },
@@ -104,6 +162,8 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "Status",
             "Workstream",
             "TargetRepo",
+            "PlanKey",
+            "ParentEpic",
             "Priority",
             "Risk",
             "TargetDate",
@@ -127,10 +187,13 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "ItemType",
             "Workstream",
             "TargetRepo",
+            "ExecutionRepo",
             "Priority",
             "DependsOn",
             "Blocks",
+            "AutomationBlockers",
             "ParentEpic",
+            "DispatchRecommendation",
             "AutomationState",
         ],
     },
@@ -147,11 +210,88 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "Assignees",
             "Labels",
             "TargetRepo",
-            "PR",
+            "ExecutionRepo",
+            "Linked pull requests",
+            "ActivePR",
             "Validation",
+            "ValidationScope",
+            "ReviewVerdict",
+            "ReviewRoute",
+            "Checks",
+            "HeadSha",
             "ReviewGates",
             "Risk",
             "Priority",
+        ],
+    },
+    {
+        "name": "Cross-Repo",
+        "layout": "table",
+        "api_filter": "is:open",
+        "unsupported_filter_parts": [
+            "GitHub Project filters do not compare TargetRepo and ExecutionRepo; filter by RiskTags manually when needed."
+        ],
+        "purpose": "Keep repo-boundary and explicit-base-branch work visible.",
+        "filter": "Open items where TargetRepo differs from ExecutionRepo, or RiskTags contains cross-repo.",
+        "group_by": "ExecutionRepo",
+        "sort": ["Priority asc", "Risk desc"],
+        "fields": [
+            "Title",
+            "Labels",
+            "ItemType",
+            "Workstream",
+            "TargetRepo",
+            "ExecutionRepo",
+            "BaseBranch",
+            "DispatchRecommendation",
+            "RiskTags",
+            "DependsOn",
+            "ReviewGates",
+        ],
+    },
+    {
+        "name": "Gate Audit",
+        "layout": "table",
+        "api_filter": "is:open",
+        "purpose": "Audit gate coverage, validation scope, and one-PR dispatch safety.",
+        "filter": "Open items with named gates, validation requirements, or higher gate tiers.",
+        "group_by": "GateTier",
+        "sort": ["GateTier desc", "Priority asc", "Risk desc"],
+        "fields": [
+            "Title",
+            "ItemType",
+            "Workstream",
+            "TargetRepo",
+            "ReviewGates",
+            "GateTier",
+            "ValidationScope",
+            "Validation",
+            "Checks",
+            "OnePRContract",
+            "WriteScope",
+            "RiskTags",
+        ],
+    },
+    {
+        "name": "Decomposition",
+        "layout": "table",
+        "api_filter": "is:open",
+        "purpose": "Find issues that are not one-point and should be split before unattended dispatch.",
+        "filter": "Open story or spike items where Size is greater than 1, OnePRContract is not Yes, or DispatchRecommendation is tracking-only.",
+        "group_by": "DispatchRecommendation",
+        "sort": ["Size desc", "Priority asc"],
+        "fields": [
+            "Title",
+            "Labels",
+            "ItemType",
+            "Workstream",
+            "TargetRepo",
+            "Size",
+            "OnePRContract",
+            "DispatchMode",
+            "DispatchRecommendation",
+            "WriteScope",
+            "AutomationBlockers",
         ],
     },
     {
@@ -173,9 +313,11 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "TargetRepo",
             "Priority",
             "Risk",
+            "RiskTags",
             "TargetDate",
             "DependsOn",
             "ReviewGates",
+            "ValidationScope",
         ],
     },
     {
@@ -186,12 +328,95 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
         "filter": "Status is Done.",
         "group_by": "ItemType",
         "sort": ["Updated desc"],
-        "fields": ["Title", "Labels", "TargetRepo", "Workstream", "PR", "Validation", "TargetDate"],
+        "fields": [
+            "Title",
+            "Labels",
+            "TargetRepo",
+            "ExecutionRepo",
+            "Workstream",
+            "Linked pull requests",
+            "ActivePR",
+            "ReviewVerdict",
+            "Validation",
+            "TargetDate",
+        ],
     },
 )
 
 
 MANAGED_VIEW_NAMES = tuple(str(view["name"]) for view in VIEW_SPECS)
+
+TEMPLATE_MAP: dict[str, Any] = {
+    "authority": {
+        "plan": "Authoring intent, rationale, and amendments.",
+        "registry": "Compiled local planning structure when registry-first is active.",
+        "issues": "Execution records, labels, PR links, and closure state.",
+        "project": "Downstream operator UI and signal surface only.",
+    },
+    "item_model": {
+        "plan": "One epic issue.",
+        "automation_manifest_leaf": "One story/spike/task issue; one PR when dispatchable.",
+        "workstream": "Legacy/fallback story issue.",
+        "oversized_story": "Decomposition candidate until points/Size is 1 or explicitly manual.",
+    },
+    "field_sources": {
+        "Size": "Points or Suggested points from the plan projection.",
+        "ReviewGates": "Required gates and named review gates.",
+        "GateTier": "Highest tier / tier:* labels.",
+        "DependsOn": "Leaf ids or explicit GitHub issue refs only.",
+        "AutomationBlockers": "Opaque dependencies, manual blockers, and dispatch guardrails.",
+        "DispatchMode": "Automation Issue Manifest Dispatch value.",
+        "DispatchRecommendation": "Projection/runtime dispatch recommendation.",
+        "ValidationScope": "Projection-inferred local/ci/deployed/manual validation scope.",
+        "WriteScope": "Manifest files in scope / write scope.",
+        "OnePRContract": "Manifest one-PR contract and one-point decomposition readiness.",
+        "ActivePR": "Current linked automation PR URL or number when the built-in linked PR field is insufficient.",
+        "HeadSha": "Current automation PR head SHA when available.",
+    },
+    "runtime_states": {
+        "labels": [
+            "agent:ready",
+            "agent:running",
+            "agent:pr-open",
+            "agent:needs-repair",
+            "agent:review-approved",
+            "agent:human-action-required",
+            "agent:done",
+        ],
+        "automation_state": [
+            "Manual",
+            "Draft",
+            "Planned",
+            "Ready",
+            "Queued",
+            "Running",
+            "PR Open",
+            "Review",
+            "Local Validation",
+            "Deployed Validation",
+            "Semantic Review",
+            "Repair",
+            "Waiting",
+            "Blocked",
+            "Human Action",
+            "Failed",
+            "Done",
+            "Superseded",
+        ],
+    },
+    "views": {
+        "Dispatch": "Operator queue for selecting the next runnable story/spike.",
+        "Automation Flow": "Runtime lane board grouped by AutomationState.",
+        "Epics": "Outcome-level plan containers and child-work progress.",
+        "Dependencies": "Dependency, blocker, and guardrail audit surface.",
+        "Review Queue": "PR-linked review, validation, repair, and finalizer queue.",
+        "Cross-Repo": "Repo-boundary and base-branch safety surface.",
+        "Gate Audit": "Validation gate, tier, and one-PR safety audit.",
+        "Decomposition": "Oversized/tracking-only items that need one-point child issues.",
+        "Risk And Dates": "Human planning review for high-risk or dated work.",
+        "Done Audit": "Completed work and validation evidence archive.",
+    },
+}
 
 DEFAULT_README = """# Execution Project
 
@@ -204,10 +429,71 @@ Recommended flow:
 - Status tracks board flow only: Todo, In Progress, Done.
 - ExecutionState is retained for existing automation compatibility.
 - ItemType identifies item shape: Epic, Story, Spike, Tracker.
-- AutomationState identifies human-readable runtime state: Manual, Ready, Queued, Running, PR Open, Review, Repair, Blocked, Done.
+- AutomationState identifies human-readable runtime state: Manual, Draft, Planned, Ready, Queued, Running, PR Open, Review, Local Validation, Deployed Validation, Semantic Review, Repair, Waiting, Blocked, Human Action, Failed, Done, Superseded.
+- DispatchMode and DispatchRecommendation explain whether a story can run, needs explicit approval, or is tracking-only.
+- ExecutionRepo and BaseBranch prevent cross-repo/base-branch ambiguity during PR creation.
+- WriteScope, OnePRContract, ValidationScope, and ReviewGates make one-PR safety and finalization gates visible without opening the issue body.
 
 Planning authority stays in the markdown plan or compiled registry. Issue labels and PR links remain the execution source of truth.
 """
+
+
+def view_setup_markdown() -> str:
+    lines = [
+        "# Atlas Execution Project Template Views",
+        "",
+        f"Canonical template: {STANDARD_TEMPLATE_URL}",
+        "",
+        "GitHub's public GraphQL/CLI surface can create fields and mark org-owned Projects as templates,",
+        "but it does not expose Project v2 saved-view create/update mutations. Configure these views once",
+        "in the GitHub UI on the canonical template; copied Projects should inherit them.",
+        "",
+        "## Setup Checklist",
+        "",
+        "- Ensure the Project is public if it should be discoverable from public repos.",
+        "- Ensure the Project is marked as a template.",
+        "- Link the Project to the public tooling repo if desired.",
+        "- Rename the default view or create saved views with the exact names below.",
+        "",
+    ]
+    for index, view in enumerate(VIEW_SPECS, start=1):
+        fields = ", ".join(f"`{field}`" for field in view["fields"])
+        sort = ", ".join(f"`{item}`" for item in view.get("sort", ()))
+        lines.extend(
+            [
+                f"## {index}. {view['name']}",
+                "",
+                f"- Purpose: {view['purpose']}",
+                f"- Layout: `{view['layout']}`",
+                f"- Filter: {view['filter']}",
+                f"- Group by: `{view['group_by']}`",
+                f"- Sort: {sort}",
+                f"- Fields: {fields}",
+            ]
+        )
+        unsupported = view.get("unsupported_filter_parts") or []
+        if unsupported:
+            lines.append("- Saved-filter note:")
+            lines.extend(f"  - {item}" for item in unsupported)
+        lines.append("")
+    lines.extend(
+        [
+            "## Verification",
+            "",
+            "After configuring the template views, verify with:",
+            "",
+            "```bash",
+            f"python3 skills/github-project/scripts/create_project.py --owner {STANDARD_TEMPLATE_OWNER} --title \"Atlas Execution Project Template\" --check-views",
+            "```",
+            "",
+            "Copy from the template with:",
+            "",
+            "```bash",
+            f"gh project copy {STANDARD_TEMPLATE_NUMBER} --source-owner {STANDARD_TEMPLATE_OWNER} --target-owner OWNER --title \"New Execution Project\"",
+            "```",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True)
@@ -517,19 +803,35 @@ def managed_views(project: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
 
 def check_standard_views(project: dict[str, Any]) -> list[ViewSyncResult]:
     by_name = managed_views(project)
+    specs_by_name = {view["name"]: view for view in VIEW_SPECS}
     results: list[ViewSyncResult] = []
     errors: list[str] = []
     for name in MANAGED_VIEW_NAMES:
+        unsupported_parts = tuple(specs_by_name.get(name, {}).get("unsupported_filter_parts", ()))
         views = by_name[name]
         if not views:
-            results.append(ViewSyncResult(name, "missing"))
+            results.append(ViewSyncResult(name, "missing", unsupported_parts=unsupported_parts))
             errors.append(f"missing managed Project view: {name}")
         elif len(views) > 1:
-            results.append(ViewSyncResult(name, "duplicate", views[0].get("number") if isinstance(views[0], dict) else None))
+            results.append(
+                ViewSyncResult(
+                    name,
+                    "duplicate",
+                    views[0].get("number") if isinstance(views[0], dict) else None,
+                    unsupported_parts,
+                )
+            )
             errors.append(f"duplicate managed Project view name: {name}")
         else:
             number_value = views[0].get("number")
-            results.append(ViewSyncResult(name, "present", number_value if isinstance(number_value, int) else None))
+            results.append(
+                ViewSyncResult(
+                    name,
+                    "present",
+                    number_value if isinstance(number_value, int) else None,
+                    unsupported_parts,
+                )
+            )
     if errors:
         raise SystemExit("Project view check failed:\n- " + "\n- ".join(errors))
     return results
@@ -626,7 +928,13 @@ def print_summary(summary: ProjectSummary, warnings: list[str], view_results: li
         "projects_txt": f"{summary.owner}/{summary.number}",
         "plan_to_issues_arg": f'--project-url "{summary.url}"',
         "recommended_views": list(VIEW_SPECS),
+        "template_map": TEMPLATE_MAP,
         "managed_views": view_results_payload(view_results or []),
+        "standard_template": {
+            "owner": STANDARD_TEMPLATE_OWNER,
+            "number": STANDARD_TEMPLATE_NUMBER,
+            "url": STANDARD_TEMPLATE_URL,
+        },
         "warnings": warnings,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -658,7 +966,25 @@ def print_dry_run(args: argparse.Namespace) -> None:
         "reuse_existing": not args.no_reuse,
         "required_fields": required_fields(),
         "recommended_views": list(VIEW_SPECS),
+        "template_map": TEMPLATE_MAP,
         "managed_view_names": list(MANAGED_VIEW_NAMES),
+        "standard_template": {
+            "owner": STANDARD_TEMPLATE_OWNER,
+            "number": STANDARD_TEMPLATE_NUMBER,
+            "url": STANDARD_TEMPLATE_URL,
+            "copy_command": [
+                "gh",
+                "project",
+                "copy",
+                str(STANDARD_TEMPLATE_NUMBER),
+                "--source-owner",
+                STANDARD_TEMPLATE_OWNER,
+                "--target-owner",
+                args.owner,
+                "--title",
+                args.title,
+            ],
+        },
         "view_creation_note": "Saved Project v2 views are GraphQL-verifiable but not directly updated by this helper. Use --template-owner and --template-number to copy a preconfigured Project with views, then --ensure-views or --check-views to verify.",
         "apply_command": apply_command,
     }
@@ -667,8 +993,8 @@ def print_dry_run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create or verify a plan-projection GitHub Project v2.")
-    parser.add_argument("--owner", required=True, help='Project owner login or org. Use "@me" for the current user.')
-    parser.add_argument("--title", required=True, help="Project title.")
+    parser.add_argument("--owner", help='Project owner login or org. Use "@me" for the current user.')
+    parser.add_argument("--title", help="Project title.")
     parser.add_argument("--description", default="Execution board for plan-projected GitHub issues.")
     parser.add_argument("--readme", default=DEFAULT_README)
     parser.add_argument("--visibility", choices=("PRIVATE", "PUBLIC"), default="PRIVATE")
@@ -701,7 +1027,18 @@ def main() -> None:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--view-setup",
+        action="store_true",
+        help="Print the manual saved-view setup checklist generated from the standard view specs.",
+    )
     args = parser.parse_args()
+
+    if args.view_setup:
+        print(view_setup_markdown(), end="")
+        return
+    if not args.owner or not args.title:
+        parser.error("--owner and --title are required unless --view-setup is used")
 
     if not args.apply and not args.check_views:
         print_dry_run(args)

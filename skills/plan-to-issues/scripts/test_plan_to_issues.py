@@ -165,6 +165,102 @@ name: ws1 workflow control plane
     assert "Project owner mismatch" in result.stderr
 
 
+def test_project_field_values_populate_execution_board_metadata() -> None:
+    mod = load_plan_to_issues_module()
+    draft = mod.IssueDraft(
+        title="[LEAF-001] Add sync",
+        body="body",
+        labels=["type:story", "status:ready", "repo:service", "tier:t2"],
+        kind="story",
+        source_id="LEAF-001",
+        execution_repo="OWNER/service",
+        base_branch="main",
+        suggested_points=1,
+        dependencies=["LEAF-000", "OWNER/service#42"],
+        gates=["G-SYNC"],
+        highest_tier="T2",
+        repo_targets=["OWNER/service"],
+        status_label="status:ready",
+        dispatch_recommendation="auto-dispatch",
+        dispatch_mode="agent-ready",
+        write_scope=["skills/plan-to-issues/scripts/plan_to_issues.py"],
+        validation_commands=["python3 -m pytest"],
+        validation_scope="local",
+        risk_tags=["cross-repo"],
+    )
+
+    values = mod.project_field_values(
+        draft,
+        issue_repo="OWNER/service",
+        plan_key="PLAN-1",
+        parent_epic_url="https://github.com/OWNER/service/issues/1",
+    )
+
+    assert values["Status"] == "Todo"
+    assert values["ItemType"] == "Story"
+    assert values["PlanKey"] == "PLAN-1"
+    assert values["ParentEpic"] == "https://github.com/OWNER/service/issues/1"
+    assert values["DispatchMode"] == "agent-ready"
+    assert values["DispatchRecommendation"] == "auto-dispatch"
+    assert values["IssueReady"] == "Ready"
+    assert values["AutomationState"] == "Ready"
+    assert values["Size"] == 1
+    assert values["OnePRContract"] == "Yes"
+    assert values["Validation"] == "python3 -m pytest"
+
+
+def test_project_field_sync_uses_project_item_edit_for_supported_fields() -> None:
+    mod = load_plan_to_issues_module()
+    draft = mod.IssueDraft(
+        title="[WS1] Story",
+        body="body",
+        labels=["type:story", "status:ready"],
+        kind="story",
+        source_id="WS1",
+        status_label="status:ready",
+        dispatch_recommendation="auto-dispatch",
+        dispatch_mode="agent-ready",
+        suggested_points=1,
+    )
+    fields = {
+        "Status": {
+            "id": "status-field",
+            "name": "Status",
+            "options": [{"name": "Todo", "id": "todo-option"}],
+        },
+        "ItemType": {
+            "id": "item-type-field",
+            "name": "ItemType",
+            "options": [{"name": "Story", "id": "story-option"}],
+        },
+        "Size": {"id": "size-field", "name": "Size"},
+        "SourceId": {"id": "source-field", "name": "SourceId"},
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_: object) -> object:
+        calls.append(cmd)
+        return object()
+
+    with (
+        patch.object(mod, "gh_project_config", return_value={"project_id": "project-id", "fields": fields}),
+        patch.object(mod.subprocess, "run", side_effect=fake_run),
+    ):
+        mod.gh_project_sync_issue_fields(
+            "OWNER",
+            2,
+            "item-id",
+            draft,
+            issue_repo="OWNER/service",
+            plan_key="PLAN-1",
+        )
+
+    assert any("--single-select-option-id" in call and "todo-option" in call for call in calls)
+    assert any("--single-select-option-id" in call and "story-option" in call for call in calls)
+    assert any("--number" in call and "1.0" in call for call in calls)
+    assert any("--text" in call and "WS1" in call for call in calls)
+
+
 def test_frontmatter_supports_multiline_overview_summary_alias_and_nested_tracking(tmp_path: Path) -> None:
     plan_path = tmp_path / "instablinds.plan.md"
     plan_path.write_text(

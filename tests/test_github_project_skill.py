@@ -41,6 +41,14 @@ class GithubProjectSkillTests(unittest.TestCase):
         self.assertIn("DependsOn", fields)
         self.assertIn("Blocks", fields)
         self.assertIn("AutomationState", fields)
+        self.assertIn("DispatchMode", fields)
+        self.assertIn("DispatchRecommendation", fields)
+        self.assertIn("ValidationScope", fields)
+        self.assertIn("WriteScope", fields)
+        self.assertIn("OnePRContract", fields)
+        self.assertIn("template_map", payload)
+        self.assertEqual(payload["standard_template"]["owner"], "Atlas-Memory-Framework")
+        self.assertEqual(payload["standard_template"]["number"], 4)
         view_names = [view["name"] for view in payload["recommended_views"]]
         self.assertEqual(
             view_names,
@@ -50,10 +58,28 @@ class GithubProjectSkillTests(unittest.TestCase):
                 "Epics",
                 "Dependencies",
                 "Review Queue",
+                "Cross-Repo",
+                "Gate Audit",
+                "Decomposition",
                 "Risk And Dates",
                 "Done Audit",
             ],
         )
+
+    def test_dry_run_documents_saved_views_need_template_setup(self) -> None:
+        module = load_create_project_module()
+        args = argparse.Namespace(owner="OWNER", title="Execution", visibility="PRIVATE", no_reuse=False)
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            module.print_dry_run(args)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["managed_view_names"], [view["name"] for view in payload["recommended_views"]])
+        self.assertIn("Saved Project v2 views", payload["view_creation_note"])
+        self.assertIn("not directly updated by this helper", payload["view_creation_note"])
+        self.assertIn("--template-owner and --template-number", payload["view_creation_note"])
+        self.assertIn("--ensure-views or --check-views", payload["view_creation_note"])
 
     def test_existing_single_selects_warn_when_options_are_missing(self) -> None:
         module = load_create_project_module()
@@ -78,6 +104,20 @@ class GithubProjectSkillTests(unittest.TestCase):
         created_names = [call.args[2] for call in create_field.call_args_list]
         self.assertIn("DependsOn", created_names)
         self.assertIn("AutomationState", created_names)
+        self.assertIn("DispatchMode", created_names)
+        self.assertIn("ValidationScope", created_names)
+
+    def test_view_setup_markdown_is_generated_from_managed_views(self) -> None:
+        module = load_create_project_module()
+
+        setup = module.view_setup_markdown()
+
+        self.assertIn("Atlas Execution Project Template Views", setup)
+        self.assertIn("https://github.com/orgs/Atlas-Memory-Framework/projects/4", setup)
+        for name in module.MANAGED_VIEW_NAMES:
+            self.assertIn(f". {name}", setup)
+        self.assertIn("--check-views", setup)
+        self.assertIn("gh project copy 4", setup)
 
     def test_ensure_standard_views_fails_missing_with_template_guidance(self) -> None:
         module = load_create_project_module()

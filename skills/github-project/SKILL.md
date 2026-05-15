@@ -36,20 +36,37 @@ Required for readable execution planning:
 - `ItemType` single select: `Epic`, `Story`, `Spike`, `Tracker`
 - `Workstream` text
 - `TargetRepo` text
+- `ExecutionRepo` text
+- `BaseBranch` text
 - `PlanKey` text
 - `SourceId` text
 - `ParentEpic` text
 - `DependsOn` text
 - `Blocks` text
+- `AutomationBlockers` text
 - `ReviewGates` text
 - `GateTier` single select: `T0`, `T1`, `T2`, `T3`, `T4`, `T5`, `T6`
-- `AutomationState` single select: `Manual`, `Ready`, `Queued`, `Running`, `PR Open`, `Review`, `Repair`, `Blocked`, `Done`
+- `MergePoint` text
+- `DispatchMode` single select: `agent-ready`, `manual-review`, `blocked`, `tracking-only`
+- `DispatchRecommendation` single select: `auto-dispatch`, `review-before-dispatch`, `tracking-only`, `auto-dispatch-pilot`
+- `IssueReady` single select: `Draft`, `Ready`, `Blocked`
+- `AgentType` single select: `generalPurpose`, `test-engineer`, `code-reviewer`, `explore`
+- `AutomationState` single select: `Manual`, `Draft`, `Planned`, `Ready`, `Queued`, `Running`, `PR Open`, `Review`, `Local Validation`, `Deployed Validation`, `Semantic Review`, `Repair`, `Waiting`, `Blocked`, `Human Action`, `Failed`, `Done`, `Superseded`
 - `Priority` single select: `P0`, `P1`, `P2`, `P3`
 - `Size` number
 - `Risk` single select: `Low`, `Medium`, `High`
+- `RiskTags` text
+- `ValidationScope` single select: `local`, `ci`, `deployed`, `manual`
+- `WriteScope` text
+- `OnePRContract` single select: `Yes`, `No`, `N/A`
+- `ReviewVerdict` single select: `Pending`, `Changes Requested`, `Approved`, `Validated`, `Merged`
+- `ReviewRoute` single select: `wait`, `repair`, `local-validate`, `deployed-validate`, `semantic-review`, `human`, `approved`
+- `BlockerType` text
+- `BlockerReason` text
+- `Checks` text
+- `HeadSha` text
 - `TargetDate` date
-- `Owner` text
-- `PR` text
+- `ActivePR` text
 - `Validation` text
 
 `ExecutionState` is kept for compatibility with existing automation. New boards should use `ItemType`
@@ -58,6 +75,59 @@ for shape and `AutomationState` for runtime lane. Labels such as `type:epic`, `t
 
 The local project reconciler requires only `Status` and uses `ExecutionState=Epic` as one way to
 identify epic items. Project fields are a human operating view, not planning authority.
+
+## Template Map
+
+Use this model for the standard template:
+
+- One plan projects to one epic issue.
+- Each Automation Issue Manifest leaf projects to one story/spike/task issue; dispatchable leaves
+  should satisfy the one-PR contract.
+- Workstream issues are legacy/fallback stories when no manifest exists.
+- Oversized stories are decomposition candidates until `Size` is `1` or the issue is explicitly
+  manual/tracking-only.
+- Native GitHub sub-issues can be useful for manually decomposed oversized issues, but the current
+  runtime reads parent links from issue bodies (`## Parent Epic` / `## Parent Issue`) and labels, so
+  do not make native sub-issues required for automation.
+
+Field source map:
+
+- `Size` maps from `Points` / `Suggested points`.
+- `ReviewGates` maps from manifest `Required gates` and workstream review gates.
+- `GateTier` maps from `Highest tier` / `tier:*` labels.
+- `DependsOn` should contain leaf ids or explicit GitHub issue refs.
+- `AutomationBlockers`, `BlockerType`, and `BlockerReason` capture opaque dependencies, manual
+  blockers, review routes, and dispatch guardrails.
+- `DispatchMode` maps from the manifest `Dispatch` value.
+- `DispatchRecommendation` maps from projection/runtime dispatch guidance.
+- `ValidationScope`, `Validation`, and `Checks` expose local/CI/deployed/manual evidence.
+- `ExecutionRepo`, `BaseBranch`, `ActivePR`, linked pull requests, and `HeadSha` expose PR safety state.
+
+The template intentionally does not store plan-level dispatch policy as item fields. Keep
+`AutomationTarget`, strategy, concurrency, branch/PR/merge policies, and human-approval rules in the
+Project readme or plan/manifest, then use item fields only for filtering and operator triage.
+
+## Public Standard Template
+
+The canonical reusable Project template is:
+
+- Owner: `Atlas-Memory-Framework`
+- Number: `4`
+- URL: `https://github.com/orgs/Atlas-Memory-Framework/projects/4`
+- Visibility: public
+- Linked repo: `Atlas-Memory-Framework/AtlasMemory-Tools`
+
+Copy it with:
+
+```bash
+gh project copy 4 \
+  --source-owner Atlas-Memory-Framework \
+  --target-owner OWNER \
+  --title "New Execution Project"
+```
+
+GitHub only allows organization-owned Projects to be marked as templates. User-owned Projects can be
+schema instances, but they cannot be marked as reusable GitHub templates.
 
 ## Standard Views
 
@@ -89,6 +159,12 @@ The helper verifies the managed view names idempotently by reading Project views
 views are missing, provision them by copying a prepared Project template; do not ask operators to
 hand-build the same standard views repeatedly.
 
+To print the deterministic UI setup checklist generated from the same view specs:
+
+```bash
+python3 skills/github-project/scripts/create_project.py --view-setup
+```
+
 ### 1. Dispatch
 
 Purpose: decide what should run next.
@@ -96,9 +172,12 @@ Purpose: decide what should run next.
 - Layout: table
 - Filter: open items where `Status` is not `Done` and `ItemType` is `Story` or `Spike`
 - Group by: `Priority`
-- Sort: `Priority` ascending, `Risk` descending, `TargetDate` ascending, `Size` ascending
-- Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `Priority`, `Risk`,
-  `Size`, `DependsOn`, `AutomationState`, `TargetDate`
+- Sort: `Priority` ascending, `IssueReady` descending, `Risk` descending, `TargetDate` ascending,
+  `Size` ascending
+- Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`,
+  `Priority`, `Risk`, `RiskTags`, `Size`, `IssueReady`, `DispatchMode`,
+  `DispatchRecommendation`, `DependsOn`, `AutomationBlockers`, `AutomationState`, `BlockerType`,
+  `BlockerReason`, `ValidationScope`, `TargetDate`
 
 This is the operator's main queue. If it does not show dependency and risk context, people will pick
 the wrong next issue.
@@ -108,13 +187,15 @@ the wrong next issue.
 Purpose: see what the runtime thinks is active.
 
 - Layout: board
-- Group by: `Status`
+- Group by: `AutomationState`
 - Filter: all open non-epic items
-- Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `AutomationState`, `PR`,
-  `Validation`
+- Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`,
+  `IssueReady`, `DispatchRecommendation`, `AutomationState`, `Status`, linked pull requests,
+  `ActivePR`, `HeadSha`, `Validation`
 
-Keep `Status` intentionally simple because automation reconciles it. Use `AutomationState` for
-finer human detail like `Queued`, `Running`, `PR Open`, `Review`, and `Repair`.
+Keep `Status` intentionally simple because automation reconciles it. Group by `AutomationState` for
+finer human detail like `Queued`, `Running`, `PR Open`, validation, review, repair, blocked, and
+human-action routes.
 
 ### 3. Epics
 
@@ -124,8 +205,8 @@ Purpose: see outcome-level progress and whether child work still exists.
 - Filter: `ItemType` is `Epic` or `ExecutionState` is `Epic`
 - Group by: `Workstream`
 - Sort: `Priority` ascending, `TargetDate` ascending
-- Fields: title, labels, `Status`, `Workstream`, `TargetRepo`, `Priority`, `Risk`, `TargetDate`,
-  `Blocks`, `ReviewGates`
+- Fields: title, labels, `Status`, `Workstream`, `TargetRepo`, `PlanKey`, `ParentEpic`, `Priority`,
+  `Risk`, `TargetDate`, `Blocks`, `ReviewGates`
 
 Epics should stay few and readable. They answer whether a plan outcome is done, blocked, or still
 has child work.
@@ -139,8 +220,8 @@ Purpose: expose blockers before they become stale board state.
   `Blocked`
 - Group by: `TargetRepo`
 - Sort: `Priority` ascending, `Risk` descending
-- Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `Priority`, `DependsOn`, `Blocks`,
-  `ParentEpic`, `AutomationState`
+- Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`, `Priority`, `DependsOn`,
+  `Blocks`, `AutomationBlockers`, `ParentEpic`, `DispatchRecommendation`, `AutomationState`
 
 This view is required for multi-repo or staged work. A board without dependencies will make blocked
 items look idle or forgotten.
@@ -153,13 +234,57 @@ Purpose: focus reviewers and finalizers.
 - Filter: open items where `AutomationState` is `PR Open`, `Review`, or `Repair`
 - Group by: `AutomationState`
 - Sort: `Priority` ascending, `TargetDate` ascending
-- Fields: title, assignees, labels, `TargetRepo`, `PR`, `Validation`, `ReviewGates`, `Risk`,
-  `Priority`
+- Fields: title, assignees, labels, `TargetRepo`, `ExecutionRepo`, linked pull requests,
+  `ActivePR`, `Validation`, `ValidationScope`, `ReviewVerdict`, `ReviewRoute`, `Checks`, `HeadSha`,
+  `ReviewGates`, `Risk`, `Priority`
 
 This is the view to use before merge/finalize automation. It should make missing validation and
 requested changes obvious.
 
-### 6. Risk And Dates
+### 6. Cross-Repo
+
+Purpose: keep repo-boundary and explicit-base-branch work visible.
+
+- Layout: table
+- Filter: open items where `TargetRepo` differs from `ExecutionRepo`, or `RiskTags` contains
+  `cross-repo`
+- Group by: `ExecutionRepo`
+- Sort: `Priority` ascending, `Risk` descending
+- Fields: title, labels, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`, `BaseBranch`,
+  `DispatchRecommendation`, `RiskTags`, `DependsOn`, `ReviewGates`
+
+GitHub saved filters cannot compare two Project fields, so template copies should keep this broad
+and operators can narrow by `RiskTags`.
+
+### 7. Gate Audit
+
+Purpose: audit gate coverage, validation scope, and one-PR dispatch safety.
+
+- Layout: table
+- Filter: open items with named gates, validation requirements, or higher gate tiers
+- Group by: `GateTier`
+- Sort: `GateTier` descending, `Priority` ascending, `Risk` descending
+- Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `ReviewGates`, `GateTier`,
+  `ValidationScope`, `Validation`, `Checks`, `OnePRContract`, `WriteScope`, `RiskTags`
+
+Use this before approving dispatch or finalization for risky work.
+
+### 8. Decomposition
+
+Purpose: find issues that are too broad for unattended issue-to-PR automation.
+
+- Layout: table
+- Filter: open story or spike items where `Size` is greater than `1`, `OnePRContract` is not `Yes`,
+  or `DispatchRecommendation` is `tracking-only`
+- Group by: `DispatchRecommendation`
+- Sort: `Size` descending, `Priority` ascending
+- Fields: title, labels, `ItemType`, `Workstream`, `TargetRepo`, `Size`, `OnePRContract`,
+  `DispatchMode`, `DispatchRecommendation`, `WriteScope`, `AutomationBlockers`
+
+For unattended local automation, one-point leaves are the intended executable unit. Larger issues
+should be split or explicitly kept manual/tracking-only.
+
+### 9. Risk And Dates
 
 Purpose: planning review and delivery pressure.
 
@@ -167,12 +292,12 @@ Purpose: planning review and delivery pressure.
 - Filter: open items where `Risk` is `High` or `TargetDate` is not empty
 - Group by: `Risk`
 - Sort: `TargetDate` ascending, `Priority` ascending
-- Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `Priority`, `Risk`, `TargetDate`,
-  `DependsOn`, `ReviewGates`
+- Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `Priority`, `Risk`, `RiskTags`,
+  `TargetDate`, `DependsOn`, `ReviewGates`, `ValidationScope`
 
 Use this for human review, not automation dispatch.
 
-### 7. Done Audit
+### 10. Done Audit
 
 Purpose: inspect completed work without polluting active views.
 
@@ -180,7 +305,8 @@ Purpose: inspect completed work without polluting active views.
 - Filter: `Status` is `Done`
 - Group by: `ItemType`
 - Sort: most recently updated first
-- Fields: title, labels, `TargetRepo`, `Workstream`, `PR`, `Validation`, `TargetDate`
+- Fields: title, labels, `TargetRepo`, `ExecutionRepo`, `Workstream`, linked pull requests,
+  `ActivePR`, `ReviewVerdict`, `Validation`, `TargetDate`
 
 This view exists so completed issues can remain searchable while active views stay clean.
 
@@ -205,7 +331,7 @@ If owner or title is unclear, ask. Do not create a project in a guessed account.
    - `python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE"`
 3. Apply only when the user explicitly asked to create/sync:
    - `python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE" --apply`
-   - Prefer `--template-owner TEMPLATE_OWNER --template-number TEMPLATE_NUMBER --ensure-views` for Projects that need the standard saved views.
+   - Prefer `--template-owner Atlas-Memory-Framework --template-number 4 --ensure-views` for Projects that need the standard saved views.
    - Add `--ensure-views` to fail clearly if the standard saved views are missing.
    - Use `--views-only --apply` or `--check-views` to verify the standard view names through GraphQL without touching project metadata or fields.
 4. Capture the output:

@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:5e20c33a94b692dd15819ca47c70f2860b09af1a7d66139947c9ecbc0c1dfedc
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:ef4e5b6e70f4383cf3dd5f2c9ecf6940c7be4fb1f49517140fed678bef07eb10
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -3694,7 +3694,49 @@ def gh_issue_create(repo: str, draft: IssueDraft) -> str:
         tmp_path.unlink(missing_ok=True)
 
 
-def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> None:
+FIELD_DATA_TYPES = {
+    "Status": "SINGLE_SELECT",
+    "ExecutionState": "SINGLE_SELECT",
+    "ItemType": "SINGLE_SELECT",
+    "Workstream": "TEXT",
+    "TargetRepo": "TEXT",
+    "ExecutionRepo": "TEXT",
+    "BaseBranch": "TEXT",
+    "PlanKey": "TEXT",
+    "SourceId": "TEXT",
+    "ParentEpic": "TEXT",
+    "DependsOn": "TEXT",
+    "Blocks": "TEXT",
+    "AutomationBlockers": "TEXT",
+    "ReviewGates": "TEXT",
+    "GateTier": "SINGLE_SELECT",
+    "MergePoint": "TEXT",
+    "DispatchMode": "SINGLE_SELECT",
+    "DispatchRecommendation": "SINGLE_SELECT",
+    "IssueReady": "SINGLE_SELECT",
+    "AgentType": "SINGLE_SELECT",
+    "AutomationState": "SINGLE_SELECT",
+    "Priority": "SINGLE_SELECT",
+    "Size": "NUMBER",
+    "Risk": "SINGLE_SELECT",
+    "RiskTags": "TEXT",
+    "ValidationScope": "SINGLE_SELECT",
+    "WriteScope": "TEXT",
+    "OnePRContract": "SINGLE_SELECT",
+    "ReviewVerdict": "SINGLE_SELECT",
+    "ReviewRoute": "SINGLE_SELECT",
+    "BlockerType": "TEXT",
+    "BlockerReason": "TEXT",
+    "Checks": "TEXT",
+    "HeadSha": "TEXT",
+    "TargetDate": "DATE",
+    "ActivePR": "TEXT",
+    "Validation": "TEXT",
+}
+PROJECT_CONFIG_CACHE: dict[tuple[str, int], dict[str, object]] = {}
+
+
+def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> str | None:
     cmd = [
         "gh",
         "project",
@@ -3704,12 +3746,16 @@ def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> N
         project_owner,
         "--url",
         issue_url,
+        "--format",
+        "json",
     ]
     try:
-        subprocess.run(
+        result = subprocess.run(
             cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True
         )
-        return
+        payload = json.loads(result.stdout or "{}")
+        item_id = payload.get("id")
+        return str(item_id) if item_id else None
     except subprocess.CalledProcessError as exc:
         list_cmd = [
             "gh",
@@ -3750,13 +3796,237 @@ def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> N
                 continue
             content = current.get("content")
             if isinstance(content, dict) and str(content.get("url") or "") == issue_url:
-                return
+                item_id = current.get("id")
+                return str(item_id) if item_id else None
 
         stderr = (exc.stderr or exc.stdout or "").strip()
         raise RuntimeError(
             f"failed to add {issue_url} to GitHub Project {project_owner}/{project_number}: "
             f"{stderr or exc}"
         ) from exc
+
+
+def gh_project_config(project_owner: str, project_number: int) -> dict[str, object]:
+    cache_key = (project_owner, project_number)
+    cached = PROJECT_CONFIG_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    project = subprocess.run(
+        ["gh", "project", "view", str(project_number), "--owner", project_owner, "--format", "json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    fields = subprocess.run(
+        ["gh", "project", "field-list", str(project_number), "--owner", project_owner, "--format", "json", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    project_payload = json.loads(project.stdout or "{}")
+    fields_payload = json.loads(fields.stdout or "{}")
+    by_name: dict[str, dict[str, object]] = {}
+    for field in fields_payload.get("fields") or []:
+        if not isinstance(field, dict):
+            continue
+        name = field.get("name")
+        if isinstance(name, str) and name:
+            by_name[name] = field
+    config: dict[str, object] = {
+        "project_id": str(project_payload["id"]),
+        "fields": by_name,
+    }
+    PROJECT_CONFIG_CACHE[cache_key] = config
+    return config
+
+
+def first_label_value(labels: list[str], prefix: str) -> str | None:
+    for label in labels:
+        if label.startswith(prefix):
+            return label.split(":", 1)[1]
+    return None
+
+
+def issue_ready_project_value(draft: IssueDraft) -> str:
+    if draft.status_label == "status:blocked" or draft.blockers or draft.automation_blockers:
+        return "Blocked"
+    if draft.issue_ready and draft.status_label == "status:ready":
+        return "Ready"
+    return "Draft"
+
+
+def item_type_project_value(draft: IssueDraft) -> str:
+    if draft.kind == "epic":
+        return "Epic"
+    if draft.kind == "spike":
+        return "Spike"
+    if draft.kind == "tracker":
+        return "Tracker"
+    return "Story"
+
+
+def automation_state_project_value(draft: IssueDraft) -> str:
+    if draft.kind == "epic":
+        return "Planned"
+    if draft.status_label == "status:blocked" or draft.blockers or draft.automation_blockers:
+        return "Blocked"
+    if draft.status_label == "status:draft":
+        return "Draft"
+    if draft.dispatch_recommendation == "tracking-only":
+        return "Manual"
+    if draft.dispatch_recommendation == "review-before-dispatch":
+        return "Manual"
+    if draft.dispatch_recommendation in {"auto-dispatch", "auto-dispatch-pilot"}:
+        return "Ready"
+    return "Planned"
+
+
+def risk_project_value(draft: IssueDraft) -> str | None:
+    tags = {tag.lower() for tag in draft.risk_tags}
+    if tags & {"auth", "secrets", "migration", "cross-repo", "needs-deployed-validation", "ui-surface"}:
+        return "High"
+    if tags:
+        return "Medium"
+    return None
+
+
+def one_pr_project_value(draft: IssueDraft) -> str:
+    if draft.suggested_points == 1:
+        return "Yes"
+    if draft.suggested_points and draft.suggested_points > 1:
+        return "No"
+    return "N/A"
+
+
+def blocker_type_project_value(draft: IssueDraft) -> str | None:
+    if draft.automation_blockers:
+        return "automation"
+    if draft.blockers:
+        return "manual"
+    if draft.dependencies:
+        return "dependency"
+    return None
+
+
+def project_field_values(
+    draft: IssueDraft,
+    *,
+    issue_repo: str,
+    plan_key: str,
+    parent_epic_url: str | None = None,
+) -> dict[str, object]:
+    labels = draft.labels
+    target_repo = ", ".join(draft.repo_targets) if draft.repo_targets else issue_repo
+    values: dict[str, object] = {
+        "Status": "Todo",
+        "ExecutionState": item_type_project_value(draft),
+        "ItemType": item_type_project_value(draft),
+        "Workstream": draft.source_id,
+        "TargetRepo": target_repo,
+        "ExecutionRepo": draft.execution_repo or issue_repo,
+        "BaseBranch": draft.base_branch,
+        "PlanKey": plan_key,
+        "SourceId": draft.source_id,
+        "ParentEpic": parent_epic_url,
+        "DependsOn": "\n".join(draft.dependencies),
+        "Blocks": "\n".join(draft.blockers),
+        "AutomationBlockers": "\n".join(draft.automation_blockers),
+        "ReviewGates": "\n".join(draft.gates),
+        "GateTier": draft.highest_tier,
+        "MergePoint": "\n".join(draft.merge_points),
+        "DispatchMode": draft.dispatch_mode,
+        "DispatchRecommendation": draft.dispatch_recommendation,
+        "IssueReady": issue_ready_project_value(draft),
+        "AutomationState": automation_state_project_value(draft),
+        "Priority": (first_label_value(labels, "priority:") or "").upper() or None,
+        "Size": draft.suggested_points,
+        "Risk": risk_project_value(draft),
+        "RiskTags": ", ".join(draft.risk_tags),
+        "ValidationScope": draft.validation_scope,
+        "WriteScope": "\n".join(draft.write_scope),
+        "OnePRContract": one_pr_project_value(draft),
+        "BlockerType": blocker_type_project_value(draft),
+        "BlockerReason": "\n".join([*draft.blockers, *draft.automation_blockers]),
+        "Validation": "\n".join([*draft.validation_commands, *draft.validation_requirements]),
+    }
+    return {name: value for name, value in values.items() if value not in (None, "", [])}
+
+
+def gh_project_item_edit_value(
+    *,
+    project_id: str,
+    item_id: str,
+    field: dict[str, object],
+    value: object,
+) -> None:
+    field_name = str(field.get("name") or "")
+    data_type = FIELD_DATA_TYPES.get(field_name)
+    if not data_type:
+        return
+    cmd = [
+        "gh",
+        "project",
+        "item-edit",
+        "--id",
+        item_id,
+        "--project-id",
+        project_id,
+        "--field-id",
+        str(field["id"]),
+    ]
+    if data_type == "SINGLE_SELECT":
+        options = {
+            str(option.get("name")): str(option.get("id"))
+            for option in field.get("options") or []
+            if isinstance(option, dict) and option.get("name") and option.get("id")
+        }
+        option_id = options.get(str(value))
+        if not option_id:
+            return
+        cmd.extend(["--single-select-option-id", option_id])
+    elif data_type == "NUMBER":
+        try:
+            number_value = float(value)
+        except (TypeError, ValueError):
+            return
+        cmd.extend(["--number", str(number_value)])
+    elif data_type == "DATE":
+        cmd.extend(["--date", str(value)])
+    else:
+        cmd.extend(["--text", str(value)])
+    subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
+
+
+def gh_project_sync_issue_fields(
+    project_owner: str,
+    project_number: int,
+    item_id: str | None,
+    draft: IssueDraft,
+    *,
+    issue_repo: str,
+    plan_key: str,
+    parent_epic_url: str | None = None,
+) -> None:
+    if not item_id:
+        return
+    config = gh_project_config(project_owner, project_number)
+    project_id = str(config["project_id"])
+    fields = config["fields"]
+    if not isinstance(fields, dict):
+        return
+    for name, value in project_field_values(
+        draft,
+        issue_repo=issue_repo,
+        plan_key=plan_key,
+        parent_epic_url=parent_epic_url,
+    ).items():
+        field = fields.get(name)
+        if isinstance(field, dict):
+            gh_project_item_edit_value(project_id=project_id, item_id=item_id, field=field, value=value)
 
 
 def label_metadata(name: str) -> tuple[str, str]:
@@ -4372,7 +4642,15 @@ def apply_sync_operations(
                 }
             )
     if project_owner and project_number:
-        gh_project_add(project_owner, project_number, epic_url)
+        item_id = gh_project_add(project_owner, project_number, epic_url)
+        gh_project_sync_issue_fields(
+            project_owner,
+            project_number,
+            item_id,
+            epic,
+            issue_repo=epic_key,
+            plan_key=epic.source_id,
+        )
 
     for child in children:
         landing = issue_landing_repo(epic_repo, child)
@@ -4434,7 +4712,16 @@ def apply_sync_operations(
                     }
                 )
             if project_owner and project_number:
-                gh_project_add(project_owner, project_number, issue_url)
+                item_id = gh_project_add(project_owner, project_number, issue_url)
+                gh_project_sync_issue_fields(
+                    project_owner,
+                    project_number,
+                    item_id,
+                    child,
+                    issue_repo=landing,
+                    plan_key=epic.source_id,
+                    parent_epic_url=child_parent_epic_url,
+                )
             continue
 
         issue_url = gh_issue_create(
@@ -4490,7 +4777,16 @@ def apply_sync_operations(
                     remove_labels=[],
                 )
         if project_owner and project_number:
-            gh_project_add(project_owner, project_number, issue_url)
+            item_id = gh_project_add(project_owner, project_number, issue_url)
+            gh_project_sync_issue_fields(
+                project_owner,
+                project_number,
+                item_id,
+                child,
+                issue_repo=landing,
+                plan_key=epic.source_id,
+                parent_epic_url=child_parent_epic_url,
+            )
 
     return {
         "epic_repo": epic_repo,
@@ -4636,7 +4932,15 @@ def run_registry_projection(
         {"kind": "epic", "title": epic.title, "url": epic_url, "repo": epic_landing}
     )
     if project_owner and project_number:
-        gh_project_add(project_owner, project_number, epic_url)
+        item_id = gh_project_add(project_owner, project_number, epic_url)
+        gh_project_sync_issue_fields(
+            project_owner,
+            project_number,
+            item_id,
+            epic,
+            issue_repo=epic_landing,
+            plan_key=epic.source_id,
+        )
 
     for child in children:
         child.body = "\n".join(
@@ -4658,7 +4962,16 @@ def run_registry_projection(
             }
         )
         if project_owner and project_number:
-            gh_project_add(project_owner, project_number, issue_url)
+            item_id = gh_project_add(project_owner, project_number, issue_url)
+            gh_project_sync_issue_fields(
+                project_owner,
+                project_number,
+                item_id,
+                child,
+                issue_repo=child_landing,
+                plan_key=epic.source_id,
+                parent_epic_url=epic_url,
+            )
 
     json.dump({"created": created}, sys.stdout, indent=2)
     sys.stdout.write("\n")
@@ -4861,7 +5174,15 @@ def main() -> int:
         {"kind": "epic", "title": epic.title, "url": epic_url, "repo": epic_landing}
     )
     if project_owner and project_number:
-        gh_project_add(project_owner, project_number, epic_url)
+        item_id = gh_project_add(project_owner, project_number, epic_url)
+        gh_project_sync_issue_fields(
+            project_owner,
+            project_number,
+            item_id,
+            epic,
+            issue_repo=epic_landing,
+            plan_key=epic.source_id,
+        )
 
     for child in children:
         child.body = "\n".join(
@@ -4883,7 +5204,16 @@ def main() -> int:
             }
         )
         if project_owner and project_number:
-            gh_project_add(project_owner, project_number, issue_url)
+            item_id = gh_project_add(project_owner, project_number, issue_url)
+            gh_project_sync_issue_fields(
+                project_owner,
+                project_number,
+                item_id,
+                child,
+                issue_repo=child_landing,
+                plan_key=epic.source_id,
+                parent_epic_url=epic_url,
+            )
 
     json.dump({"created": created}, sys.stdout, indent=2)
     sys.stdout.write("\n")
