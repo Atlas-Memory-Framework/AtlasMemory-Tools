@@ -7,6 +7,16 @@ Canonical template:
 - URL: `https://github.com/orgs/Atlas-Memory-Framework/projects/4`
 - Repository link: `Atlas-Memory-Framework/AtlasMemory-Tools`
 
+What this means:
+
+- The template is the live GitHub Project above, not a file in this repo.
+- The code in `skills/github-project/scripts/create_project.py` creates/verifies schema fields,
+  copies the live template, and verifies saved view configuration.
+- The code in `skills/plan-to-issues/scripts/plan_to_issues.py` adds issues to a selected Project
+  and populates item field values.
+- Existing Projects do not inherit later template edits. Copy a verified template for new work, or
+  manually configure the existing Project's views.
+
 The standard execution Project uses these saved view names:
 
 - `Dispatch`
@@ -20,10 +30,16 @@ The standard execution Project uses these saved view names:
 - `Risk And Dates`
 - `Done Audit`
 
-Saved Project v2 views are a template/UI concern. The helper can verify these names through GraphQL
-with `--ensure-views`, `--check-views`, or `--views-only --apply`, but it does not create or update
-saved view configuration directly because GitHub does not expose Project v2 saved-view mutations
-through the CLI/API surface this skill can use.
+Saved Project v2 views are a template/UI concern. The helper can verify these names and readable
+configuration through GraphQL with `--ensure-views`, `--check-views`, or `--views-only --apply`.
+GitHub REST can create missing views with layout, filter, and visible fields, but it does not
+document saved-view update, group-by, or sort mutation parameters. The supported full setup path is
+still to configure the canonical template in GitHub UI once, then copy it.
+
+Do not treat the canonical Project as a complete reusable template until view verification passes.
+A Project with the standard fields and only `View 1`, or with blank tabs using the standard names,
+is schema-only. Existing downstream Projects are not converted into the copied template; either
+configure their views manually or create a new Project by copying the verified canonical template.
 
 For a new Project that must include the standard saved views, copy a prepared template Project:
 

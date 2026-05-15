@@ -77,9 +77,50 @@ class GithubProjectSkillTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["managed_view_names"], [view["name"] for view in payload["recommended_views"]])
         self.assertIn("Saved Project v2 views", payload["view_creation_note"])
-        self.assertIn("not directly updated by this helper", payload["view_creation_note"])
-        self.assertIn("--template-owner and --template-number", payload["view_creation_note"])
-        self.assertIn("--ensure-views or --check-views", payload["view_creation_note"])
+        self.assertIn("not fully created or updated by this helper", payload["view_creation_note"])
+        self.assertIn("group-by, or sort", payload["view_creation_note"])
+        self.assertIn("schema-only", payload["view_creation_note"])
+        self.assertIn("--check-views or --ensure-views", payload["view_creation_note"])
+
+    def test_summary_marks_views_incomplete_when_not_checked(self) -> None:
+        module = load_create_project_module()
+        summary = module.ProjectSummary(
+            owner="OWNER",
+            number=1,
+            title="Execution",
+            url="https://github.com/orgs/OWNER/projects/1",
+            id="PVT_project",
+            created=True,
+        )
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            module.print_summary(summary, ["warning"], None)
+
+        payload = json.loads(output.getvalue())
+        self.assertFalse(payload["view_completion"]["complete"])
+        self.assertEqual(payload["view_completion"]["state"], "not_checked")
+        self.assertIn("schema-only", payload["view_completion"]["note"])
+
+    def test_summary_marks_views_verified_after_check(self) -> None:
+        module = load_create_project_module()
+        summary = module.ProjectSummary(
+            owner="OWNER",
+            number=1,
+            title="Execution",
+            url="https://github.com/orgs/OWNER/projects/1",
+            id="PVT_project",
+            created=False,
+        )
+        results = [module.ViewSyncResult(name, "present", index) for index, name in enumerate(module.MANAGED_VIEW_NAMES, start=1)]
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            module.print_summary(summary, [], results)
+
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["view_completion"]["complete"])
+        self.assertEqual(payload["view_completion"]["state"], "verified")
 
     def test_existing_single_selects_warn_when_options_are_missing(self) -> None:
         module = load_create_project_module()
@@ -171,6 +212,38 @@ class GithubProjectSkillTests(unittest.TestCase):
             results = module.ensure_standard_views("PVT_project")
 
         self.assertEqual([result.action for result in results], ["present"] * len(module.MANAGED_VIEW_NAMES))
+
+    def test_check_standard_views_fails_misconfigured_view_details(self) -> None:
+        module = load_create_project_module()
+        state = {
+            "views": {
+                "nodes": [
+                    {
+                        "name": "Dispatch",
+                        "number": 2,
+                        "layout": "table",
+                        "filter": "",
+                        "fields": {"nodes": [{"name": "ItemType"}]},
+                        "groupByFields": {"nodes": []},
+                        "sortByFields": {"nodes": []},
+                    },
+                    *[
+                        {"name": name, "number": index + 3}
+                        for index, name in enumerate(module.MANAGED_VIEW_NAMES)
+                        if name != "Dispatch"
+                    ],
+                ]
+            },
+        }
+
+        with self.assertRaises(SystemExit) as raised:
+            module.check_standard_views(state)
+
+        message = str(raised.exception)
+        self.assertIn("misconfigured managed Project view Dispatch", message)
+        self.assertIn("filter is ''", message)
+        self.assertIn("group by is none", message)
+        self.assertIn("sort is none", message)
 
     def test_check_standard_views_fails_with_named_missing_view(self) -> None:
         module = load_create_project_module()

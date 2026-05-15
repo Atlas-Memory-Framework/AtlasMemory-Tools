@@ -12,7 +12,17 @@ from typing import Any
 REQUIRED_STATUS_OPTIONS = ("Todo", "In Progress", "Done")
 STANDARD_TEMPLATE_OWNER = "Atlas-Memory-Framework"
 STANDARD_TEMPLATE_NUMBER = 4
+STANDARD_TEMPLATE_TITLE = "Atlas Execution Project Template"
 STANDARD_TEMPLATE_URL = f"https://github.com/orgs/{STANDARD_TEMPLATE_OWNER}/projects/{STANDARD_TEMPLATE_NUMBER}"
+VIEW_CREATION_NOTE = (
+    "Saved Project v2 views are GraphQL-verifiable but are not fully created or updated by this helper. "
+    "A Project with the standard fields and only GitHub's default 'View 1' is schema-only, not a "
+    "complete reusable execution template. GitHub REST can create a missing view with layout, filter, "
+    "and visible fields, but it does not document saved-view update, group-by, or sort mutation. "
+    "Configure the saved views once in the GitHub UI, then "
+    "run --check-views or --ensure-views before reporting the template as ready."
+)
+BUILT_IN_VIEW_FIELDS = {"Title", "Assignees", "Labels", "Linked pull requests"}
 FIELD_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "ExecutionState",
@@ -92,7 +102,8 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
         "purpose": "Decide what should run next.",
         "filter": "Open Story or Spike items where Status is not Done.",
         "group_by": "Priority",
-        "sort": ["Priority asc", "IssueReady desc", "Risk desc", "TargetDate asc", "Size asc"],
+        "sort": ["IssueReady asc", "Risk desc"],
+        "sort_note": "GitHub saved views currently expose at most two sort fields. Priority is handled by grouping.",
         "fields": [
             "Title",
             "Assignees",
@@ -254,7 +265,8 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
         "purpose": "Audit gate coverage, validation scope, and one-PR dispatch safety.",
         "filter": "Open items with named gates, validation requirements, or higher gate tiers.",
         "group_by": "GateTier",
-        "sort": ["GateTier desc", "Priority asc", "Risk desc"],
+        "sort": ["GateTier desc", "Priority asc"],
+        "sort_note": "GitHub saved views currently expose at most two sort fields.",
         "fields": [
             "Title",
             "ItemType",
@@ -325,7 +337,8 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
         "purpose": "Inspect completed work without polluting active views.",
         "filter": "Status is Done.",
         "group_by": "ItemType",
-        "sort": ["Updated desc"],
+        "sort": [],
+        "sort_note": "Leave manual/default; GitHub UI does not expose a reliable saved Updated-desc sort.",
         "fields": [
             "Title",
             "Labels",
@@ -442,9 +455,10 @@ def view_setup_markdown() -> str:
         "",
         f"Canonical template: {STANDARD_TEMPLATE_URL}",
         "",
-        "GitHub's public GraphQL/CLI surface can create fields and mark org-owned Projects as templates,",
-        "but it does not expose Project v2 saved-view create/update mutations. Configure these views once",
-        "in the GitHub UI on the canonical template; copied Projects should inherit them.",
+        "GitHub's public GraphQL/CLI surface can create fields and mark org-owned Projects as templates.",
+        "GitHub REST can create missing views with layout, filter, and visible fields, but it does not",
+        "document saved-view update, group-by, or sort mutation. Configure group-by and sort once in the",
+        "GitHub UI on the canonical template; copied Projects should inherit them.",
         "",
         "## Setup Checklist",
         "",
@@ -456,7 +470,8 @@ def view_setup_markdown() -> str:
     ]
     for index, view in enumerate(VIEW_SPECS, start=1):
         fields = ", ".join(f"`{field}`" for field in view["fields"])
-        sort = ", ".join(f"`{item}`" for item in view.get("sort", ()))
+        sort = ", ".join(f"`{item}`" for item in view.get("sort", ())) or "manual/default"
+        grouping_label = "Column by" if view["layout"] == "board" else "Group by"
         lines.extend(
             [
                 f"## {index}. {view['name']}",
@@ -464,11 +479,14 @@ def view_setup_markdown() -> str:
                 f"- Purpose: {view['purpose']}",
                 f"- Layout: `{view['layout']}`",
                 f"- Filter: {view['filter']}",
-                f"- Group by: `{view['group_by']}`",
+                f"- Filter query: `{view.get('api_filter', '')}`",
+                f"- {grouping_label}: `{view['group_by']}`",
                 f"- Sort: {sort}",
                 f"- Fields: {fields}",
             ]
         )
+        if view.get("sort_note"):
+            lines.append(f"- Sort note: {view['sort_note']}")
         unsupported = view.get("unsupported_filter_parts") or []
         if unsupported:
             lines.append("- Saved-filter note:")
@@ -481,7 +499,7 @@ def view_setup_markdown() -> str:
             "After configuring the template views, verify with:",
             "",
             "```bash",
-            f"python3 skills/github-project/scripts/create_project.py --owner {STANDARD_TEMPLATE_OWNER} --title \"Atlas Execution Project Template\" --check-views",
+            f"python3 skills/github-project/scripts/create_project.py --owner {STANDARD_TEMPLATE_OWNER} --title \"{STANDARD_TEMPLATE_TITLE}\" --check-views",
             "```",
             "",
             "Copy from the template with:",
@@ -510,6 +528,7 @@ class ViewSyncResult:
     action: str
     number: int | None = None
     unsupported_parts: tuple[str, ...] = ()
+    details: tuple[str, ...] = ()
 
 
 def run_json(args: list[str], input_text: str | None = None) -> dict[str, Any]:
@@ -713,6 +732,26 @@ query($projectId: ID!) {
               }
             }
           }
+          verticalGroupByFields(first: 10) {
+            nodes {
+              __typename
+              ... on ProjectV2Field {
+                id
+                databaseId
+                name
+              }
+              ... on ProjectV2SingleSelectField {
+                id
+                databaseId
+                name
+              }
+              ... on ProjectV2IterationField {
+                id
+                databaseId
+                name
+              }
+            }
+          }
           sortByFields(first: 10) {
             nodes {
               direction
@@ -787,6 +826,105 @@ def field_database_ids(project: dict[str, Any]) -> dict[str, int]:
     return field_ids
 
 
+def connection_nodes(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, dict):
+        return []
+    nodes = value.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    return [node for node in nodes if isinstance(node, dict)]
+
+
+def project_field_name(field: Any) -> str | None:
+    if not isinstance(field, dict):
+        return None
+    name = field.get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def view_field_names(view: dict[str, Any], key: str) -> list[str]:
+    return [name for node in connection_nodes(view.get(key)) if (name := project_field_name(node))]
+
+
+def parse_sort_spec(value: str) -> tuple[str, str] | None:
+    parts = value.rsplit(" ", 1)
+    if len(parts) != 2:
+        return None
+    field, direction = parts[0].strip(), parts[1].strip().lower()
+    if not field or direction not in {"asc", "desc"}:
+        return None
+    return field, direction
+
+
+def view_sort_entries(view: dict[str, Any]) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for node in connection_nodes(view.get("sortByFields")):
+        field = project_field_name(node.get("field"))
+        direction = node.get("direction")
+        if field and isinstance(direction, str):
+            entries.append((field, direction.lower()))
+    return entries
+
+
+def normalized_filter(value: Any) -> str:
+    return " ".join(str(value or "").lower().split())
+
+
+def normalized_layout(value: Any) -> str:
+    text = str(value or "").lower()
+    if text.endswith("_layout"):
+        return text.removesuffix("_layout")
+    return text
+
+
+def view_configuration_details(view: dict[str, Any], spec: dict[str, Any]) -> tuple[str, ...]:
+    config_keys = ("layout", "filter", "fields", "groupByFields", "sortByFields")
+    if not any(key in view for key in config_keys):
+        return ()
+
+    details: list[str] = []
+    expected_layout = str(spec.get("api_layout") or spec.get("layout") or "").lower()
+    actual_layout = normalized_layout(view.get("layout"))
+    if expected_layout and actual_layout and actual_layout != expected_layout:
+        details.append(f"layout is {actual_layout!r}, expected {expected_layout!r}")
+
+    expected_filter = normalized_filter(spec.get("api_filter"))
+    actual_filter = normalized_filter(view.get("filter"))
+    if expected_filter and actual_filter != expected_filter:
+        details.append(f"filter is {actual_filter!r}, expected {expected_filter!r}")
+
+    actual_fields = set(view_field_names(view, "fields"))
+    expected_custom_fields = [
+        str(field)
+        for field in spec.get("fields", ())
+        if isinstance(field, str) and field not in BUILT_IN_VIEW_FIELDS
+    ]
+    missing_fields = [field for field in expected_custom_fields if field not in actual_fields]
+    if missing_fields:
+        details.append("missing visible field(s): " + ", ".join(missing_fields))
+
+    expected_group = spec.get("group_by")
+    group_key = "verticalGroupByFields" if normalized_layout(view.get("layout")) == "board" else "groupByFields"
+    actual_group = view_field_names(view, group_key)
+    if isinstance(expected_group, str) and expected_group and expected_group not in actual_group:
+        found = ", ".join(actual_group) if actual_group else "none"
+        label = "column by" if group_key == "verticalGroupByFields" else "group by"
+        details.append(f"{label} is {found}, expected {expected_group}")
+
+    expected_sort = tuple(
+        parsed
+        for item in spec.get("sort", ())
+        if isinstance(item, str) and (parsed := parse_sort_spec(item))
+    )
+    actual_sort = tuple(view_sort_entries(view))
+    if expected_sort and actual_sort != expected_sort:
+        expected = ", ".join(f"{field} {direction}" for field, direction in expected_sort)
+        found = ", ".join(f"{field} {direction}" for field, direction in actual_sort) or "none"
+        details.append(f"sort is {found}, expected {expected}")
+
+    return tuple(details)
+
+
 def managed_views(project: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     views = ((project.get("views") or {}).get("nodes") or [])
     by_name = {name: [] for name in MANAGED_VIEW_NAMES}
@@ -822,6 +960,19 @@ def check_standard_views(project: dict[str, Any]) -> list[ViewSyncResult]:
             errors.append(f"duplicate managed Project view name: {name}")
         else:
             number_value = views[0].get("number")
+            details = view_configuration_details(views[0], specs_by_name.get(name, {}))
+            if details:
+                results.append(
+                    ViewSyncResult(
+                        name,
+                        "misconfigured",
+                        number_value if isinstance(number_value, int) else None,
+                        unsupported_parts,
+                        details,
+                    )
+                )
+                errors.append(f"misconfigured managed Project view {name}: " + "; ".join(details))
+                continue
             results.append(
                 ViewSyncResult(
                     name,
@@ -910,9 +1061,28 @@ def view_results_payload(results: list[ViewSyncResult]) -> list[dict[str, Any]]:
             "action": result.action,
             "number": result.number,
             "unsupported_parts": list(result.unsupported_parts),
+            "details": list(result.details),
         }
         for result in results
     ]
+
+
+def view_completion_payload(results: list[ViewSyncResult] | None) -> dict[str, Any]:
+    if not results:
+        return {
+            "complete": False,
+            "state": "not_checked",
+            "note": VIEW_CREATION_NOTE,
+        }
+    incomplete = [result.name for result in results if result.action != "present"]
+    return {
+        "complete": not incomplete,
+        "state": "verified" if not incomplete else "incomplete",
+        "incomplete": incomplete,
+        "note": "Standard saved view names were verified through GraphQL."
+        if not incomplete
+        else VIEW_CREATION_NOTE,
+    }
 
 
 def print_summary(summary: ProjectSummary, warnings: list[str], view_results: list[ViewSyncResult] | None = None) -> None:
@@ -928,6 +1098,7 @@ def print_summary(summary: ProjectSummary, warnings: list[str], view_results: li
         "recommended_views": list(VIEW_SPECS),
         "template_map": TEMPLATE_MAP,
         "managed_views": view_results_payload(view_results or []),
+        "view_completion": view_completion_payload(view_results),
         "standard_template": {
             "owner": STANDARD_TEMPLATE_OWNER,
             "number": STANDARD_TEMPLATE_NUMBER,
@@ -983,7 +1154,7 @@ def print_dry_run(args: argparse.Namespace) -> None:
                 args.title,
             ],
         },
-        "view_creation_note": "Saved Project v2 views are GraphQL-verifiable but not directly updated by this helper. Use --template-owner and --template-number to copy a preconfigured Project with views, then --ensure-views or --check-views to verify.",
+        "view_creation_note": VIEW_CREATION_NOTE,
         "apply_command": apply_command,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -1072,6 +1243,8 @@ def main() -> None:
     if args.ensure_views or args.views_only or args.check_views:
         project_id = summary.id or project_id_from_view(args.owner, summary.number)
         view_results = ensure_standard_views(project_id)
+    elif args.apply:
+        warnings.append(VIEW_CREATION_NOTE)
 
     print_summary(summary, warnings, view_results)
 

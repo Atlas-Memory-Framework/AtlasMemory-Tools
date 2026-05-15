@@ -129,11 +129,26 @@ gh project copy 4 \
 GitHub only allows organization-owned Projects to be marked as templates. User-owned Projects can be
 schema instances, but they cannot be marked as reusable GitHub templates.
 
+Completion rule:
+
+- A Project is not a complete reusable execution template until `--check-views` or `--ensure-views`
+  passes against the live Project.
+- If the live Project has only GitHub's default `View 1`, it is schema-only even if it is public,
+  linked to a repo, and marked as a template.
+- Do not tell the user the template is built, ready, or reusable unless the saved views have been
+  configured in GitHub UI and verified.
+- Existing Projects are not retroactively converted into the copied template. They either need the
+  saved views configured manually or they need to be replaced by a new Project copied from a verified
+  template.
+
 ## Standard Views
 
 Create these views for every execution Project. GitHub Project v2 saved views are readable through
-GraphQL, but the authenticated GraphQL schema does not expose create/update mutations for
-`ProjectV2View`. Do not rely on direct saved-view mutation.
+GraphQL. GitHub REST can create missing views with layout, filter, and visible fields, but it does
+not document saved-view update, group-by, or sort mutation parameters. Do not use undocumented
+mutation fields blindly. The helper can create fields, mark organization Projects as templates, copy
+Projects, and verify saved view names/configuration; group-by and sort still have to come from a
+configured template copy or GitHub UI.
 
 Use a preconfigured Project template/copy flow when a new Project must start with standard saved
 views:
@@ -155,9 +170,10 @@ python3 skills/github-project/scripts/create_project.py --owner OWNER --title "T
 python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE" --views-only --apply
 ```
 
-The helper verifies the managed view names idempotently by reading Project views through GraphQL. If
-views are missing, provision them by copying a prepared Project template; do not ask operators to
-hand-build the same standard views repeatedly.
+The helper verifies the managed view names and readable configuration idempotently by reading Project
+views through GraphQL. If views are missing or misconfigured on the canonical template, provision them
+once in the GitHub UI. If views are missing or misconfigured on a downstream Project, copy from the
+verified canonical template or configure the views manually in that Project.
 
 To print the deterministic UI setup checklist generated from the same view specs:
 
@@ -172,8 +188,9 @@ Purpose: decide what should run next.
 - Layout: table
 - Filter: open items where `Status` is not `Done` and `ItemType` is `Story` or `Spike`
 - Group by: `Priority`
-- Sort: `Priority` ascending, `IssueReady` descending, `Risk` descending, `TargetDate` ascending,
-  `Size` ascending
+- Sort: `IssueReady` ascending, `Risk` descending
+- Sort note: GitHub saved views currently expose at most two sort fields. `Priority` is handled by
+  grouping.
 - Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`,
   `Priority`, `Risk`, `RiskTags`, `Size`, `IssueReady`, `DispatchMode`,
   `DispatchRecommendation`, `DependsOn`, `AutomationBlockers`, `AutomationState`, `BlockerType`,
@@ -263,7 +280,8 @@ Purpose: audit gate coverage, validation scope, and one-PR dispatch safety.
 - Layout: table
 - Filter: open items with named gates, validation requirements, or higher gate tiers
 - Group by: `GateTier`
-- Sort: `GateTier` descending, `Priority` ascending, `Risk` descending
+- Sort: `GateTier` descending, `Priority` ascending
+- Sort note: GitHub saved views currently expose at most two sort fields.
 - Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `ReviewGates`, `GateTier`,
   `ValidationScope`, `Validation`, `Checks`, `OnePRContract`, `WriteScope`, `RiskTags`
 
@@ -304,7 +322,8 @@ Purpose: inspect completed work without polluting active views.
 - Layout: table
 - Filter: `Status` is `Done`
 - Group by: `ItemType`
-- Sort: most recently updated first
+- Sort: manual/default
+- Sort note: GitHub UI does not expose a reliable saved `Updated` descending sort for this view.
 - Fields: title, labels, `TargetRepo`, `ExecutionRepo`, `Workstream`, linked pull requests,
   `ActivePR`, `ReviewVerdict`, `Validation`, `TargetDate`
 
@@ -333,6 +352,8 @@ If owner or title is unclear, ask. Do not create a project in a guessed account.
    - `python3 skills/github-project/scripts/create_project.py --owner OWNER --title "TITLE" --apply`
    - Prefer `--template-owner Atlas-Memory-Framework --template-number 4 --ensure-views` for Projects that need the standard saved views.
    - Add `--ensure-views` to fail clearly if the standard saved views are missing.
+   - Treat output with `view_completion.state=not_checked` as incomplete; it means fields/schema
+     were handled but saved views were not verified.
    - Use `--views-only --apply` or `--check-views` to verify the standard view names through GraphQL without touching project metadata or fields.
 4. Capture the output:
    - Project URL: `https://github.com/orgs/OWNER/projects/NUMBER` or user-project equivalent
