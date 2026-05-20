@@ -86,6 +86,17 @@ class IssueDecomposeTests(unittest.TestCase):
 
         self.assertEqual(payload["children"][0]["title"], "A")
 
+    def test_extract_json_object_skips_prompt_schema_example(self) -> None:
+        raw = (
+            'Schema: {"children":[{"title":"...","body":"...","labels":["points:1"]}],"notes":["..."]}\n'
+            "codex\n"
+            '{"children":[{"title":"Add env docs","body":"Scope: docs.","labels":["points:1"]}],"notes":[]}\n'
+        )
+
+        payload = self.decompose.extract_json_object(raw)
+
+        self.assertEqual(payload["children"][0]["title"], "Add env docs")
+
     def test_child_issue_inherits_parent_dependency_gate(self) -> None:
         parent = issue(
             body="""## Execution State

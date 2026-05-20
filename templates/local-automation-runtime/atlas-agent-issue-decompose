@@ -172,6 +172,7 @@ Body:
 def extract_json_object(text: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     first_error: json.JSONDecodeError | None = None
+    candidates: list[dict[str, Any]] = []
     for index, char in enumerate(text):
         if char != "{":
             continue
@@ -182,7 +183,22 @@ def extract_json_object(text: str) -> dict[str, Any]:
                 first_error = exc
             continue
         if isinstance(payload, dict):
+            candidates.append(payload)
+    for payload in reversed(candidates):
+        children = payload.get("children")
+        if not isinstance(children, list):
+            continue
+        usable_children = [
+            child
+            for child in children
+            if isinstance(child, dict)
+            and str(child.get("title") or "").strip()
+            and str(child.get("title") or "").strip() != "..."
+        ]
+        if usable_children or not children:
             return payload
+    if candidates:
+        return candidates[-1]
     if first_error is not None:
         return {"children": [], "notes": [f"planner returned invalid JSON: {first_error}"]}
     else:
