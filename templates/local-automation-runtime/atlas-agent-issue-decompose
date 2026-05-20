@@ -139,7 +139,8 @@ def mark_decomposition_required(repo: str, number: int, candidate_labels: list[s
         "agent:ready",
     ]
     for label in candidate_labels:
-        cmd.extend(["--remove-label", label])
+        if label != DECOMPOSITION_REQUIRED_LABEL:
+            cmd.extend(["--remove-label", label])
     common.run(cmd, check=False)
 
 
@@ -169,17 +170,78 @@ Body:
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
+    decoder = json.JSONDecoder()
+    first_error: json.JSONDecodeError | None = None
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            payload, _end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError as exc:
+            if first_error is None:
+                first_error = exc
+            continue
+        if isinstance(payload, dict):
+            return payload
+    if first_error is not None:
+        return {"children": [], "notes": [f"planner returned invalid JSON: {first_error}"]}
+    else:
         return {"children": [], "notes": ["planner did not return JSON"]}
-    try:
-        payload = json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        return {"children": [], "notes": [f"planner returned invalid JSON: {exc}"]}
-    if not isinstance(payload, dict):
-        return {"children": [], "notes": ["planner JSON root was not an object"]}
-    return payload
+
+
+def parent_field_text(parent: dict[str, Any], field: str) -> str:
+    values = common.body_field_values(str(parent.get("body") or ""), field)
+    concrete = [value for value in values if value.strip().strip("`").lower() not in common.NONE_FIELD_VALUES]
+    return "; ".join(concrete) if concrete else "none"
+
+
+def child_blocked_by_parent(parent: dict[str, Any]) -> bool:
+    return parent_field_text(parent, "Open dependencies") != "none" or parent_field_text(parent, "Manual gates remaining") != "none"
+
+
+def child_labels(parent: dict[str, Any], child: dict[str, Any]) -> list[str]:
+    labels = {
+        "points:1",
+        ONE_POINT_LABEL,
+        *[str(label) for label in child.get("labels") or [] if str(label).strip()],
+    }
+    if child_blocked_by_parent(parent):
+        labels.difference_update({"status:ready", "agent:ready", "agent:approved-dispatch"})
+        labels.add("status:blocked")
+    else:
+        labels.add("status:ready")
+    return sorted(labels)
+
+
+def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
+    dependencies = parent_field_text(parent, "Open dependencies")
+    manual_gates = parent_field_text(parent, "Manual gates remaining")
+    blocked = dependencies != "none" or manual_gates != "none"
+    body = str(child.get("body") or "").rstrip()
+    metadata = [
+        "## Automation Manifest Metadata",
+        "- Suggested points: `1`",
+        f"- Issue ready: `{'false' if blocked else 'true'}`",
+        f"- Dispatch mode: `{'blocked' if blocked else 'agent-ready'}`",
+        f"- Dispatch recommendation: `{'dependency-gated' if blocked else 'auto-dispatch'}`",
+        "",
+        "## Execution State",
+        f"- Open dependencies: `{dependencies}`",
+        f"- Manual gates remaining: `{manual_gates}`",
+        "",
+    ]
+    return "\n".join(
+        [
+            *metadata,
+            body,
+            "",
+            "## Parent Issue",
+            str(parent.get("url") or f"{repo}#{parent.get('number')}"),
+            "",
+            "## Suggested Draft Metadata",
+            "- Suggested points: `1`",
+        ]
+    )
 
 
 def run_planning_codex(issue: dict[str, Any], job_dir: Path, max_children: int) -> dict[str, Any]:
@@ -214,26 +276,8 @@ def run_planning_codex(issue: dict[str, Any], job_dir: Path, max_children: int) 
 
 
 def create_child_issue(repo: str, parent: dict[str, Any], child: dict[str, Any]) -> str:
-    labels = sorted(
-        {
-            "points:1",
-            "status:ready",
-            ONE_POINT_LABEL,
-            *[str(label) for label in child.get("labels") or [] if str(label).strip()],
-        }
-    )
-    body = str(child.get("body") or "").rstrip()
-    body = "\n".join(
-        [
-            body,
-            "",
-            "## Parent Issue",
-            str(parent.get("url") or f"{repo}#{parent.get('number')}"),
-            "",
-            "## Suggested Draft Metadata",
-            "- Suggested points: `1`",
-        ]
-    )
+    labels = child_labels(parent, child)
+    body = child_body(parent, repo, child)
     tmp = common.jobs_dir() / f"decompose-child-{repo.replace('/', '__')}-{parent.get('number')}.md"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(body, encoding="utf-8")
@@ -269,23 +313,21 @@ def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any],
     for child in children[: args.max_children]:
         created.append(create_child_issue(repo, issue, child))
     if created:
-        common.run(
-            [
-                "gh",
-                "issue",
-                "edit",
-                str(number),
-                "--repo",
-                repo,
-                "--add-label",
-                DECOMPOSED_LABEL,
-                "--remove-label",
-                "agent:ready",
-                "--remove-label",
-                args.candidate_label,
-            ],
-            check=False,
-        )
+        cmd = [
+            "gh",
+            "issue",
+            "edit",
+            str(number),
+            "--repo",
+            repo,
+            "--add-label",
+            DECOMPOSED_LABEL,
+            "--remove-label",
+            "agent:ready",
+        ]
+        for label in args.candidate_label:
+            cmd.extend(["--remove-label", label])
+        common.run(cmd, check=False)
         record["applied"] = "created-subissues"
         record["children"] = created
     else:

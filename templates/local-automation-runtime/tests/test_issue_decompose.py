@@ -74,6 +74,36 @@ class IssueDecomposeTests(unittest.TestCase):
         self.assertEqual(record["reason"], "conflicting point metadata")
         self.assertEqual(record["point_values"], [1, 5])
 
+    def test_extract_json_object_handles_repeated_planner_json(self) -> None:
+        raw = (
+            "thinking\n"
+            '{"children":[{"title":"A","body":"B","labels":["points:1"]}],"notes":[]}\n'
+            "tokens used\n"
+            '{"children":[{"title":"A","body":"B","labels":["points:1"]}],"notes":[]}\n'
+        )
+
+        payload = self.decompose.extract_json_object(raw)
+
+        self.assertEqual(payload["children"][0]["title"], "A")
+
+    def test_child_issue_inherits_parent_dependency_gate(self) -> None:
+        parent = issue(
+            body="""## Execution State
+- Open dependencies: `#7; #9`
+- Manual gates remaining: `none`
+""",
+            labels=["points:5"],
+        )
+        child = {"body": "Scope: update one file.", "labels": ["points:1", "status:ready", "agent:ready"]}
+
+        self.assertEqual(
+            self.decompose.child_labels(parent, child),
+            ["agent:one-point", "points:1", "status:blocked"],
+        )
+        body = self.decompose.child_body(parent, "owner/repo", child)
+        self.assertIn("- Open dependencies: `#7; #9`", body)
+        self.assertIn("- Dispatch recommendation: `dependency-gated`", body)
+
     def test_dry_run_writes_summary_without_mutations(self) -> None:
         original_candidates = self.decompose.candidate_issues
         self.decompose.candidate_issues = lambda _repo, _label, _limit: [
