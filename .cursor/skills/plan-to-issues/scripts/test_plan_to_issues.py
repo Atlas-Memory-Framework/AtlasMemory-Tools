@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:d46552cfd72028d63bc9c2d37eb8eda9dc44f42986038c668716185d8c4340fd
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:bc1c9af19ff2fd10a1794c5b9d712380857b61b099ae8a35340cb5d8f278e830
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -826,6 +826,7 @@ tracking:
 ### Workstreams + merge points
 - WS1: Auto-dispatch candidate with unsupported dependency token
   - Target repo: core
+  - Points: 1
   - Depends on: `WS1-MP2`
 """,
         encoding="utf-8",
@@ -1347,9 +1348,11 @@ tracking:
 - WS1: README inventory cleanup
   - Target repo: core
   - Issue ready: true
+  - Points: 1
 - WS2: Schema migration and infra rollout
   - Target repo: core, infra
   - Issue ready: true
+  - Points: 1
   - Review gates (named):
     - G-CI-SCHEMA
 """,
@@ -1905,6 +1908,7 @@ tracking:
 ### Leaf issues
 - LEAF-010: Blocked leaf
   - Dispatch: agent-ready
+  - Points: 1
   - Target repo: service
   - Depends on:
     - `WS1-MP2`

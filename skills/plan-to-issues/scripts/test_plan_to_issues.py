@@ -824,6 +824,7 @@ tracking:
 ### Workstreams + merge points
 - WS1: Auto-dispatch candidate with unsupported dependency token
   - Target repo: core
+  - Points: 1
   - Depends on: `WS1-MP2`
 """,
         encoding="utf-8",
@@ -1345,9 +1346,11 @@ tracking:
 - WS1: README inventory cleanup
   - Target repo: core
   - Issue ready: true
+  - Points: 1
 - WS2: Schema migration and infra rollout
   - Target repo: core, infra
   - Issue ready: true
+  - Points: 1
   - Review gates (named):
     - G-CI-SCHEMA
 """,
@@ -1903,6 +1906,7 @@ tracking:
 ### Leaf issues
 - LEAF-010: Blocked leaf
   - Dispatch: agent-ready
+  - Points: 1
   - Target repo: service
   - Depends on:
     - `WS1-MP2`
