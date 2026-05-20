@@ -193,7 +193,7 @@ def run_codex_review(job_dir: Path, prompt: str) -> str:
         *common.podman_cmd(),
         "run",
         "--rm",
-        "--userns=keep-id",
+        *common.podman_userns_args(),
         "--network=slirp4netns",
         "-v",
         f"{run_home}:/home/agent/.codex:Z",

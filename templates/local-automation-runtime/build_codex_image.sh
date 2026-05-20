@@ -19,13 +19,23 @@ fi
 echo "+ $podman_cmd build -t localhost/codex-agent:latest $runtime_dir/container"
 $podman_cmd build -t localhost/codex-agent:latest "$runtime_dir/container"
 
-echo
-echo "+ $podman_cmd run --rm localhost/codex-agent:latest codex --version"
-$podman_cmd run --rm localhost/codex-agent:latest codex --version
+userns_args=("--userns=keep-id")
+if [[ "$podman_cmd" == sudo* ]]; then
+  userns_args=()
+fi
 
 echo
-echo "+ $podman_cmd run --rm --userns=keep-id -v $codex_home:/home/agent/.codex:ro,Z localhost/codex-agent:latest test -r /home/agent/.codex/config.toml"
-$podman_cmd run --rm --userns=keep-id \
-  -v "$codex_home:/home/agent/.codex:ro,Z" \
+echo "+ $podman_cmd run --rm --network=slirp4netns localhost/codex-agent:latest codex --version"
+$podman_cmd run --rm --network=slirp4netns localhost/codex-agent:latest codex --version
+
+echo
+tmp_codex_home="$(mktemp -d "$runtime_dir/codex-home-smoke.XXXXXX")"
+trap 'rm -rf "$tmp_codex_home"' EXIT
+cp -a "$codex_home"/. "$tmp_codex_home"/
+chmod -R u+rwX,go-rwx "$tmp_codex_home"
+
+echo "+ $podman_cmd run --rm ${userns_args[*]} --network=slirp4netns -v $tmp_codex_home:/home/agent/.codex:Z localhost/codex-agent:latest bash -lc 'test -r /home/agent/.codex/config.toml && touch /home/agent/.codex/.write-test'"
+$podman_cmd run --rm "${userns_args[@]}" --network=slirp4netns \
+  -v "$tmp_codex_home:/home/agent/.codex:Z" \
   localhost/codex-agent:latest \
-  test -r /home/agent/.codex/config.toml
+  bash -lc 'test -r /home/agent/.codex/config.toml && touch /home/agent/.codex/.write-test'

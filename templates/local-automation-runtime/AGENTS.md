@@ -1,7 +1,7 @@
 # Runtime Operator Notes
 
 This directory is an installed local automation runtime. Treat `config.env`, `repos/`,
-`jobs/`, `logs/`, `codex-home/`, validation result files, and webhook/token values as
+`jobs/`, `logs/`, `codex-home/`, `repo-env/`, validation result files, and webhook/token values as
 local operator state. Do not overwrite or delete them during template upgrades.
 
 ## GitHub CLI Auth

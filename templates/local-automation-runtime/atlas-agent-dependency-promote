@@ -1,0 +1,658 @@
+#!/usr/bin/env python3
+"""Promote dependency-gated Project issues when upstream work is complete."""
+
+from __future__ import annotations
+
+import argparse
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+READY_LABELS = ("status:ready", "agent:approved-dispatch", "agent:ready")
+STALE_LABELS = ("status:blocked", "needs-human", "agent:failed", "agent:running")
+NON_EXECUTION_LABELS = {"type:epic", "type/epic", "type:tracker", "type/tracker", "tracking-only"}
+NON_EXECUTION_TYPES = {"epic", "tracker"}
+READY_BODY_FIELDS = {
+    "Open dependencies": "none",
+    "Manual gates remaining": "none",
+    "Issue ready": "true",
+    "Dispatch mode": "agent-ready",
+    "Dispatch recommendation": "auto-dispatch",
+}
+READY_PROJECT_FIELDS = {
+    "AutomationState": "Ready",
+    "IssueReady": "Ready",
+    "DispatchMode": "agent-ready",
+    "DispatchRecommendation": "auto-dispatch",
+    "DependsOn": "",
+    "AutomationBlockers": "",
+    "BlockerType": "",
+    "BlockerReason": "",
+    "Blocks": "",
+}
+
+
+@dataclass(frozen=True)
+class ProjectTarget:
+    owner: str
+    number: int
+
+
+@dataclass(frozen=True)
+class Ref:
+    repo: str
+    number: int
+    kind: str
+    token: str
+
+
+@dataclass
+class Resolution:
+    ref: Ref
+    satisfied: bool
+    evidence: str
+
+
+@dataclass
+class FieldConfig:
+    project_id: str
+    fields: dict[str, dict[str, Any]]
+
+
+@dataclass
+class PromotionDecision:
+    repo: str
+    number: int
+    title: str
+    url: str
+    action: str
+    classification: str
+    reasons: list[str]
+    labels_add: list[str]
+    labels_remove: list[str]
+    body_updates: dict[str, str]
+    project_updates: dict[str, str]
+    dependencies: list[dict[str, Any]]
+    manual_gates: list[dict[str, Any]]
+    item_id: str | None = None
+    project_owner: str | None = None
+    project_number: int | None = None
+
+
+def read_lines(path: str | None, default: str) -> list[str]:
+    source = Path(path) if path else common.RUNTIME_DIR / default
+    result: list[str] = []
+    for raw in source.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            result.append(line)
+    return result
+
+
+def target_repos(path: str | None) -> list[str]:
+    return read_lines(path, "repos.txt")
+
+
+def project_targets(path: str | None) -> list[ProjectTarget]:
+    targets: list[ProjectTarget] = []
+    for raw in read_lines(path, "projects.txt"):
+        if "/" in raw:
+            owner, number = raw.rsplit("/", 1)
+        else:
+            owner, number = raw.split(None, 1)
+        targets.append(ProjectTarget(owner.strip(), int(number.strip())))
+    return targets
+
+
+def project_info(owner: str, project_number: int) -> dict[str, Any]:
+    projects = common.gh_json(
+        ["project", "list", "--owner", owner, "--format", "json", "--limit", "100"],
+        retries=2,
+    ).get("projects") or []
+    for project in projects:
+        if int(project.get("number") or 0) == project_number:
+            return project
+    raise RuntimeError(f"Project not found: {owner}/{project_number}")
+
+
+def project_fields(owner: str, project_number: int) -> list[dict[str, Any]]:
+    return common.gh_json(
+        ["project", "field-list", str(project_number), "--owner", owner, "--format", "json", "--limit", "100"],
+        retries=2,
+    ).get("fields") or []
+
+
+def project_config(owner: str, project_number: int) -> FieldConfig:
+    info = project_info(owner, project_number)
+    fields = {str(field.get("name")): field for field in project_fields(owner, project_number)}
+    return FieldConfig(project_id=str(info["id"]), fields=fields)
+
+
+def project_items(owner: str, project_number: int, limit: int) -> list[dict[str, Any]]:
+    return common.gh_json(
+        ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(limit)],
+        retries=2,
+    ).get("items") or []
+
+
+def normalize_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def lower_camel(value: str) -> str:
+    return value[:1].lower() + value[1:]
+
+
+def item_value(item: dict[str, Any], field: str) -> str:
+    for key in (field, lower_camel(field), normalize_key(field)):
+        if key in item and item.get(key) is not None:
+            return str(item.get(key) or "").strip()
+    wanted = normalize_key(field)
+    for key, value in item.items():
+        if normalize_key(str(key)) == wanted and value is not None:
+            return str(value).strip()
+    return ""
+
+
+def item_repo_number(item: dict[str, Any]) -> tuple[str, int] | None:
+    content = item.get("content") or {}
+    repo = content.get("repository")
+    number = content.get("number")
+    if repo and number:
+        return str(repo), int(number)
+    return None
+
+
+def content_issue(item: dict[str, Any]) -> dict[str, Any]:
+    content = dict(item.get("content") or {})
+    if "labels" not in content and item.get("labels") is not None:
+        content["labels"] = [{"name": str(label)} for label in item.get("labels") or []]
+    return content
+
+
+def open_issues(repo: str, limit: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,body,author,labels,url",
+        ],
+        retries=2,
+    ) or []
+
+
+def issue_detail(repo: str, number: int) -> dict[str, Any] | None:
+    return common.gh_json_or_none(
+        ["issue", "view", str(number), "--repo", repo, "--json", "number,title,body,author,labels,state,url"],
+        retries=2,
+    )
+
+
+def open_prs_for_issue(repo: str, number: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--search",
+            f"#{number}",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,url,state,isDraft",
+        ],
+        retries=2,
+    ) or []
+
+
+def body_field_first(body: str, field: str) -> str:
+    values = common.body_field_values(body, field)
+    return values[0] if values else ""
+
+
+def field_is_none(value: str) -> bool:
+    return value.strip().strip("`").strip().lower() in common.NONE_FIELD_VALUES
+
+
+def field_texts(*values: str) -> list[str]:
+    return [value.strip() for value in values if value and not field_is_none(value)]
+
+
+def build_dependency_map(items: list[dict[str, Any]]) -> dict[str, list[Ref]]:
+    mapping: dict[str, list[Ref]] = {}
+    for item in items:
+        key = item_repo_number(item)
+        if not key:
+            continue
+        repo, number = key
+        tokens = {
+            item_value(item, "SourceId"),
+            item_value(item, "Workstream"),
+        }
+        for label in item.get("labels") or []:
+            label_text = str(label.get("name") if isinstance(label, dict) else label)
+            match = re.search(r"(?i)\bworkstream[:/](ws-\d+)\b", label_text)
+            if match:
+                tokens.add(match.group(1).upper())
+        for token in tokens:
+            token = token.strip().strip("`")
+            if not token:
+                continue
+            mapping.setdefault(token.upper(), []).append(Ref(repo=repo, number=number, kind="issue", token=token))
+    return mapping
+
+
+def unique_refs(refs: list[Ref]) -> list[Ref]:
+    seen: set[tuple[str, int, str, str]] = set()
+    result: list[Ref] = []
+    for ref in refs:
+        key = (ref.repo, ref.number, ref.kind, ref.token.upper())
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(ref)
+    return result
+
+
+def parse_refs(text: str, default_repo: str, dependency_map: dict[str, list[Ref]]) -> tuple[list[Ref], list[str]]:
+    if not text or field_is_none(text):
+        return [], []
+    refs: list[Ref] = []
+    opaque = text
+    for owner, name, kind, number in re.findall(
+        r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(issues|pull)/(\d+)",
+        text,
+    ):
+        token = f"https://github.com/{owner}/{name}/{kind}/{number}"
+        refs.append(Ref(f"{owner}/{name}", int(number), "pr" if kind == "pull" else "issue", token))
+        opaque = opaque.replace(token, " ")
+    for match in re.finditer(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b", text):
+        prefix = text[max(0, match.start() - 12) : match.start()].lower()
+        kind = "pr" if re.search(r"(?:pr|pull)\s*$", prefix) else "issue"
+        refs.append(Ref(match.group(1), int(match.group(2)), kind, match.group(0)))
+        opaque = opaque.replace(match.group(0), " ")
+    for match in re.finditer(r"(?<![\w/])#(\d+)\b", text):
+        prefix = text[max(0, match.start() - 12) : match.start()].lower()
+        kind = "pr" if re.search(r"(?:pr|pull)\s*$", prefix) else "issue"
+        refs.append(Ref(default_repo, int(match.group(1)), kind, match.group(0)))
+        opaque = opaque.replace(match.group(0), " ")
+    for token in re.findall(r"\b[A-Z]{2,}-\d+\b", text.upper()):
+        mapped = dependency_map.get(token)
+        if mapped:
+            refs.extend(mapped)
+        else:
+            refs.append(Ref(default_repo, -1, "token", token))
+        opaque = re.sub(re.escape(token), " ", opaque, flags=re.IGNORECASE)
+    remainder = re.sub(r"(?i)\b(?:and|or|blocked|by|depends|on|closed|merged|evidence|closure|validation|remains|open|manual|gate|gates|none|issue|issues|pr|pull|request|remaining|tracking|only)\b", " ", opaque)
+    remainder = re.sub(r"[`*,.;:()[\]\-/]+", " ", remainder)
+    opaque_parts = [part for part in re.split(r"\s+", remainder.strip()) if part]
+    return unique_refs(refs), opaque_parts
+
+
+def issue_closed(repo: str, number: int) -> tuple[bool, str]:
+    issue = common.gh_json_or_none(["issue", "view", str(number), "--repo", repo, "--json", "state,url"], retries=2)
+    if not issue:
+        return False, f"{repo}#{number} could not be verified"
+    state = str(issue.get("state") or "").upper()
+    return state == "CLOSED", f"{repo}#{number} issue state={state or 'UNKNOWN'}"
+
+
+def pr_merged(repo: str, number: int) -> tuple[bool, str]:
+    pr = common.gh_json_or_none(["pr", "view", str(number), "--repo", repo, "--json", "state,merged,url"], retries=2)
+    if not pr:
+        return False, f"{repo}#{number} PR could not be verified"
+    merged = bool(pr.get("merged"))
+    state = str(pr.get("state") or "").upper()
+    return merged, f"{repo}#{number} PR state={state or 'UNKNOWN'} merged={merged}"
+
+
+def resolve_refs(refs: list[Ref]) -> list[Resolution]:
+    resolved: list[Resolution] = []
+    for ref in refs:
+        if ref.kind == "token":
+            resolved.append(Resolution(ref, False, f"{ref.token} did not resolve to a Project issue"))
+        elif ref.kind == "pr":
+            satisfied, evidence = pr_merged(ref.repo, ref.number)
+            resolved.append(Resolution(ref, satisfied, evidence))
+        else:
+            satisfied, evidence = issue_closed(ref.repo, ref.number)
+            resolved.append(Resolution(ref, satisfied, evidence))
+    return resolved
+
+
+def resolution_dict(resolution: Resolution) -> dict[str, Any]:
+    return {
+        "repo": resolution.ref.repo,
+        "number": resolution.ref.number,
+        "kind": resolution.ref.kind,
+        "token": resolution.ref.token,
+        "satisfied": resolution.satisfied,
+        "evidence": resolution.evidence,
+    }
+
+
+def is_non_execution(issue: dict[str, Any], item: dict[str, Any]) -> bool:
+    labels = common.label_names(issue) | set(str(label) for label in item.get("labels") or [])
+    title = str(issue.get("title") or item_value(item, "Title") or "")
+    item_type = item_value(item, "ItemType").lower()
+    execution_state = item_value(item, "ExecutionState").lower()
+    return (
+        bool(labels & NON_EXECUTION_LABELS)
+        or item_type in NON_EXECUTION_TYPES
+        or execution_state in NON_EXECUTION_TYPES
+        or title.startswith("[Epic]")
+        or title.startswith("[Tracker]")
+    )
+
+
+def has_required_metadata(issue: dict[str, Any], item: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    point_blockers = common.issue_point_blockers(issue, require_one_point=True)
+    if point_blockers:
+        size = item_value(item, "Size")
+        if size != "1":
+            reasons.extend(point_blockers)
+    if item_value(item, "OnePRContract").lower() != "yes":
+        reasons.append("OnePRContract is not Yes")
+    write_scope = item_value(item, "WriteScope") or "\n".join(common.markdown_section_items(str(issue.get("body") or ""), "Write Scope"))
+    if not write_scope:
+        reasons.append("missing write scope")
+    validation = item_value(item, "Validation") or "\n".join(common.markdown_section_items(str(issue.get("body") or ""), "Validation Commands"))
+    if not validation:
+        reasons.append("missing validation commands")
+    author = (issue.get("author") or {}).get("login")
+    if author not in common.trusted_authors():
+        reasons.append(f"untrusted author {author}")
+    return reasons
+
+
+def body_with_ready_fields(body: str) -> str:
+    result = body
+    for field, value in READY_BODY_FIELDS.items():
+        line = f"- {field}: `{value}`"
+        pattern = re.compile(rf"(?im)^(\s*[-*]?\s*{re.escape(field)}:\s*).*$")
+        if pattern.search(result):
+            result = pattern.sub(line, result, count=1)
+        else:
+            result = result.rstrip() + "\n" + line + "\n"
+    return result
+
+
+def changed_body_fields(body: str) -> dict[str, str]:
+    updates: dict[str, str] = {}
+    for field, target in READY_BODY_FIELDS.items():
+        current = body_field_first(body, field)
+        if current.strip().strip("`") != target:
+            updates[field] = target
+    return updates
+
+
+def project_updates_for(item: dict[str, Any]) -> dict[str, str]:
+    updates: dict[str, str] = {}
+    for field, target in READY_PROJECT_FIELDS.items():
+        current = item_value(item, field)
+        if target:
+            if current != target:
+                updates[field] = target
+        elif current and not field_is_none(current):
+            updates[field] = target
+    return updates
+
+
+def classify_issue(
+    repo: str,
+    issue: dict[str, Any],
+    item: dict[str, Any],
+    project: ProjectTarget,
+    dependency_map: dict[str, list[Ref]],
+) -> PromotionDecision:
+    body = str(issue.get("body") or "")
+    labels = common.label_names(issue)
+    number = int(issue["number"])
+    dependency_texts = field_texts(body_field_first(body, "Open dependencies"), item_value(item, "DependsOn"))
+    manual_texts = field_texts(body_field_first(body, "Manual gates remaining"))
+    if item_value(item, "BlockerType").lower() == "manual":
+        manual_texts.extend(field_texts(item_value(item, "BlockerReason"), item_value(item, "Blocks"), item_value(item, "AutomationBlockers")))
+
+    dep_refs: list[Ref] = []
+    manual_refs: list[Ref] = []
+    opaque: list[str] = []
+    for text in dependency_texts:
+        refs, bad = parse_refs(text, repo, dependency_map)
+        dep_refs.extend(refs)
+        opaque.extend(bad)
+    for text in manual_texts:
+        refs, bad = parse_refs(text, repo, dependency_map)
+        manual_refs.extend(refs)
+        opaque.extend(bad)
+    dep_resolutions = resolve_refs(unique_refs(dep_refs))
+    manual_resolutions = resolve_refs(unique_refs(manual_refs))
+
+    reasons: list[str] = []
+    if is_non_execution(issue, item):
+        reasons.append("epic, tracker, or tracking-only item")
+    reasons.extend(has_required_metadata(issue, item))
+    if opaque:
+        reasons.append("opaque dependency text: " + ", ".join(sorted(set(opaque))[:8]))
+    for resolution in dep_resolutions:
+        if not resolution.satisfied:
+            reasons.append("open dependency: " + resolution.evidence)
+    for resolution in manual_resolutions:
+        if not resolution.satisfied:
+            reasons.append("manual gate remaining: " + resolution.evidence)
+    open_prs = open_prs_for_issue(repo, number)
+    if open_prs:
+        refs = ", ".join(f"#{pr.get('number')}" for pr in open_prs[:5])
+        reasons.append(f"active/open PR conflict: {refs}")
+
+    body_updates = changed_body_fields(body)
+    project_updates = project_updates_for(item)
+    labels_add = [label for label in READY_LABELS if label not in labels]
+    labels_remove = [label for label in STALE_LABELS if label in labels]
+
+    if reasons:
+        action = "blocked"
+        classification = "Blocked" if opaque or is_non_execution(issue, item) else "Dependency-gated"
+    elif not (body_updates or project_updates or labels_add or labels_remove):
+        action = "already-ready"
+        classification = "Ready"
+    else:
+        action = "promote"
+        classification = "Ready"
+
+    return PromotionDecision(
+        repo=repo,
+        number=number,
+        title=str(issue.get("title") or ""),
+        url=str(issue.get("url") or ""),
+        action=action,
+        classification=classification,
+        reasons=reasons,
+        labels_add=labels_add if action == "promote" else [],
+        labels_remove=labels_remove if action == "promote" else [],
+        body_updates=body_updates if action == "promote" else {},
+        project_updates=project_updates if action == "promote" else {},
+        dependencies=[resolution_dict(resolution) for resolution in dep_resolutions],
+        manual_gates=[resolution_dict(resolution) for resolution in manual_resolutions],
+        item_id=str(item.get("id") or "") or None,
+        project_owner=project.owner,
+        project_number=project.number,
+    )
+
+
+def ensure_labels(repo: str) -> None:
+    for label, color in (
+        ("status:ready", "D4C5F9"),
+        ("agent:approved-dispatch", "0E8A16"),
+        ("agent:ready", "0E8A16"),
+    ):
+        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+
+
+def apply_project_field(config: FieldConfig, item_id: str, field_name: str, value: str) -> None:
+    field = config.fields.get(field_name)
+    if not field:
+        return
+    cmd = [
+        "gh",
+        "project",
+        "item-edit",
+        "--id",
+        item_id,
+        "--project-id",
+        config.project_id,
+        "--field-id",
+        str(field["id"]),
+    ]
+    options = {str(option.get("name")): str(option.get("id")) for option in field.get("options") or []}
+    if not value:
+        cmd.append("--clear")
+    elif options:
+        option_id = options.get(value)
+        if not option_id:
+            raise RuntimeError(f"Project field {field_name} has no option {value!r}")
+        cmd.extend(["--single-select-option-id", option_id])
+    else:
+        cmd.extend(["--text", value])
+    common.run(cmd, retries=3)
+
+
+def apply_decision(decision: PromotionDecision, issue: dict[str, Any], config: FieldConfig) -> None:
+    ensure_labels(decision.repo)
+    if decision.body_updates:
+        body = body_with_ready_fields(str(issue.get("body") or ""))
+        common.run(["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--body", body], retries=3)
+    for label in decision.labels_remove:
+        common.run(
+            ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--remove-label", label],
+            check=False,
+        )
+    for label in decision.labels_add:
+        common.run(
+            ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", label],
+            retries=3,
+        )
+    if decision.item_id:
+        for field_name, value in decision.project_updates.items():
+            apply_project_field(config, decision.item_id, field_name, value)
+
+
+def decision_record(decision: PromotionDecision) -> dict[str, Any]:
+    return {
+        "repo": decision.repo,
+        "number": decision.number,
+        "title": decision.title,
+        "url": decision.url,
+        "action": decision.action,
+        "classification": decision.classification,
+        "reasons": decision.reasons,
+        "labels_add": decision.labels_add,
+        "labels_remove": decision.labels_remove,
+        "body_updates": decision.body_updates,
+        "project_updates": decision.project_updates,
+        "dependencies": decision.dependencies,
+        "manual_gates": decision.manual_gates,
+        "project_owner": decision.project_owner,
+        "project_number": decision.project_number,
+        "item_id": decision.item_id,
+    }
+
+
+def scan(args: argparse.Namespace) -> tuple[list[PromotionDecision], dict[tuple[str, int], FieldConfig], dict[tuple[str, int], dict[tuple[str, int], dict[str, Any]]]]:
+    repos = set(target_repos(args.repos_file))
+    configs: dict[tuple[str, int], FieldConfig] = {}
+    item_sets: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    all_items: list[dict[str, Any]] = []
+    for project in project_targets(args.projects_file):
+        key = (project.owner, project.number)
+        configs[key] = project_config(project.owner, project.number)
+        items = project_items(project.owner, project.number, args.limit)
+        item_sets[key] = items
+        all_items.extend(items)
+    dependency_map = build_dependency_map(all_items)
+
+    decisions: list[PromotionDecision] = []
+    issue_cache: dict[tuple[str, int], dict[str, Any]] = {}
+    for project in project_targets(args.projects_file):
+        for item in item_sets[(project.owner, project.number)]:
+            key = item_repo_number(item)
+            if not key or key[0] not in repos:
+                continue
+            repo, number = key
+            content = content_issue(item)
+            if str(content.get("type") or "").lower() != "issue":
+                continue
+            issue = issue_detail(repo, number) or content
+            if str(issue.get("state") or "OPEN").upper() != "OPEN":
+                continue
+            issue_cache[(repo, number)] = issue
+            decisions.append(classify_issue(repo, issue, item, project, dependency_map))
+    items_by_project = {
+        key: {item_repo_number(item): item for item in items if item_repo_number(item)}
+        for key, items in item_sets.items()
+    }
+    return decisions, configs, items_by_project
+
+
+def write_summary(path: str, decisions: list[PromotionDecision]) -> None:
+    common.write_json(
+        Path(path),
+        {
+            "generated_at": common.now_id(),
+            "decisions": [decision_record(decision) for decision in decisions],
+            "counts": {
+                "promote": sum(1 for decision in decisions if decision.action == "promote"),
+                "already-ready": sum(1 for decision in decisions if decision.action == "already-ready"),
+                "blocked": sum(1 for decision in decisions if decision.action == "blocked"),
+            },
+        },
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
+    parser.add_argument("--projects-file", default=str(common.RUNTIME_DIR / "projects.txt"))
+    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--summary")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Preview promotions. This is the default.")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    decisions, configs, items_by_project = scan(args)
+    if args.summary:
+        write_summary(args.summary, decisions)
+    for decision in decisions:
+        why = ", ".join(decision.reasons[:4]) if decision.reasons else "dependencies and manual gates satisfied"
+        print(
+            f"{'APPLY' if args.apply else 'DRY-RUN'} DEPENDENCY-PROMOTE "
+            f"{decision.repo}#{decision.number}: {decision.action}: {why}",
+            flush=True,
+        )
+        if args.apply and decision.action == "promote":
+            key = (str(decision.project_owner), int(decision.project_number or 0))
+            issue = issue_detail(decision.repo, decision.number)
+            if not issue:
+                raise RuntimeError(f"Could not reload issue before applying: {decision.repo}#{decision.number}")
+            apply_decision(decision, issue, configs[key])
+
+
+if __name__ == "__main__":
+    main()

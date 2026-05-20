@@ -12,12 +12,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+import atlas_agent_common as common
+
 
 RUNTIME_DIR = Path(__file__).resolve().parent
 
 
 def find_tools_root() -> Path:
-    configured = os.environ.get("ATLAS_TOOLS_ROOT")
+    configured = os.environ.get("ATLAS_TOOLS_ROOT") or common.read_config().get("ATLAS_TOOLS_ROOT")
     candidates: list[Path] = []
     if configured:
         candidates.append(Path(configured).expanduser())
@@ -62,11 +64,21 @@ def child_blockers(child: dict) -> list[str]:
         values = child.get(field) or []
         if values:
             blockers.append(f"{field}: {', '.join(str(value) for value in values[:5])}")
+    points = child.get("suggested_points")
+    if isinstance(points, int) and points > 1:
+        blockers.append(f"points:{points} requires decomposition before dispatch")
     if child.get("dispatch_recommendation") != "auto-dispatch":
         blockers.append(f"dispatch_recommendation: {child.get('dispatch_recommendation')}")
     labels = set(child.get("labels") or [])
     if "status:ready" not in labels:
         blockers.append("missing status:ready")
+    body = str(child.get("body") or "")
+    if ("## Dependencies" in body or child.get("dependencies")) and "Open dependencies:" not in body:
+        blockers.append("missing Open dependencies execution field")
+    if common.has_nonempty_body_field(body, "Manual gates remaining"):
+        blockers.append("manual gates remaining")
+    if "## Dispatch Guardrails" in body:
+        blockers.append("dispatch guardrails")
     return blockers
 
 
@@ -172,6 +184,7 @@ def run_orchestrator(repos: list[str], *, max_queue: int, publish: bool) -> int:
     ]
     if publish:
         cmd.append("--publish")
+    cmd.append("--require-one-point")
     return run_cmd(cmd)
 
 

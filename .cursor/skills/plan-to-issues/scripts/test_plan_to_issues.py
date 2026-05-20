@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:fff44a9cb388c2924eff7e76b11376ee2c6fac2151d239da308e0c342bb746bf
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:bc1c9af19ff2fd10a1794c5b9d712380857b61b099ae8a35340cb5d8f278e830
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -209,6 +209,28 @@ def test_project_field_values_populate_execution_board_metadata() -> None:
     assert values["Size"] == 1
     assert values["OnePRContract"] == "Yes"
     assert values["Validation"] == "python3 -m pytest"
+
+
+def test_project_field_values_do_not_mark_oversized_auto_dispatch_ready() -> None:
+    mod = load_plan_to_issues_module()
+    draft = mod.IssueDraft(
+        title="[LEAF-002] Broad sync",
+        body="body",
+        labels=["type:story", "status:ready", "repo:service", "points:5"],
+        kind="story",
+        source_id="LEAF-002",
+        execution_repo="OWNER/service",
+        suggested_points=5,
+        repo_targets=["OWNER/service"],
+        status_label="status:ready",
+        dispatch_recommendation="auto-dispatch",
+        dispatch_mode="agent-ready",
+    )
+
+    values = mod.project_field_values(draft, issue_repo="OWNER/service", plan_key="PLAN-1")
+
+    assert values["AutomationState"] == "Manual"
+    assert values["OnePRContract"] == "No"
 
 
 def test_project_field_sync_uses_project_item_edit_for_supported_fields() -> None:
@@ -804,6 +826,7 @@ tracking:
 ### Workstreams + merge points
 - WS1: Auto-dispatch candidate with unsupported dependency token
   - Target repo: core
+  - Points: 1
   - Depends on: `WS1-MP2`
 """,
         encoding="utf-8",
@@ -826,6 +849,52 @@ tracking:
     ]
     assert "## Dispatch Guardrails" in child["body"]
     assert "Convert dependency token `WS1-MP2`" in child["body"]
+
+
+def test_agent_ready_manifest_leaf_over_one_point_is_tracking_only(tmp_path: Path) -> None:
+    plan_path = tmp_path / "automation_manifest_oversized.plan.md"
+    plan_path.write_text(
+        """---
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Oversized manifest lane
+
+## Implementation Plan
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-020: Oversized agent-ready leaf
+  - Dispatch: agent-ready
+  - Points: 5
+  - Target repo: service
+  - Files in scope:
+    - `src/app.ts`
+  - Validation:
+    - `npm test`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "OWNER/service",
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    child = payload["children"][0]
+    assert child["dispatch_mode"] == "agent-ready"
+    assert child["dispatch_recommendation"] == "tracking-only"
+    assert child["suggested_points"] == 5
+    assert child["automation_blockers"] == [
+        "Decompose `points:5` issue into one-point child issues before local automation dispatch."
+    ]
+    assert "## Dispatch Guardrails" in child["body"]
 
 
 def test_dry_run_uses_repo_relative_plan_path_for_git_checkout(tmp_path: Path) -> None:
@@ -1279,9 +1348,11 @@ tracking:
 - WS1: README inventory cleanup
   - Target repo: core
   - Issue ready: true
+  - Points: 1
 - WS2: Schema migration and infra rollout
   - Target repo: core, infra
   - Issue ready: true
+  - Points: 1
   - Review gates (named):
     - G-CI-SCHEMA
 """,
@@ -1807,12 +1878,16 @@ tracking:
     assert payload["children"][0]["gates"] == ["G-ISSUE-DRY-RUN"]
     assert payload["children"][0]["execution_repo"] == "OWNER/service"
     assert payload["children"][0]["base_branch"] == "main"
+    assert "- Open dependencies: `none`" in payload["children"][0]["body"]
+    assert "- Manual gates remaining: `none`" in payload["children"][0]["body"]
     assert payload["children"][1]["dependencies"] == ["LEAF-001", "OWNER/service#42"]
     assert payload["children"][1]["dependency_issue_refs"] == ["OWNER/service#42"]
     assert payload["children"][1]["dispatch_mode"] == "manual-review"
-    assert payload["children"][1]["dispatch_recommendation"] == "review-before-dispatch"
+    assert payload["children"][1]["dispatch_recommendation"] == "tracking-only"
     assert payload["children"][1]["suggested_points"] == 2
     assert "points:2" in payload["children"][1]["labels"]
+    assert "- Open dependencies: `LEAF-001; OWNER/service#42`" in payload["children"][1]["body"]
+    assert "Decompose `points:2` issue into one-point child issues before local automation dispatch." in payload["children"][1]["body"]
     assert len(payload["children"]) == 2
 
 
@@ -1833,6 +1908,7 @@ tracking:
 ### Leaf issues
 - LEAF-010: Blocked leaf
   - Dispatch: agent-ready
+  - Points: 1
   - Target repo: service
   - Depends on:
     - `WS1-MP2`

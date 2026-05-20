@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -16,10 +15,6 @@ import atlas_agent_common as common
 ONE_POINT_LABEL = "agent:one-point"
 DECOMPOSITION_REQUIRED_LABEL = "agent:decomposition-required"
 DECOMPOSED_LABEL = "agent:decomposed"
-POINT_LABEL_RE = re.compile(r"^points:(\d+)$")
-POINT_FIELD_RE = re.compile(
-    r"(?im)^\s*(?:-\s*)?(?:suggested\s+points|story\s+points|points):\s*`?(\d+)`?\s*$"
-)
 
 
 def target_repos(path: str | None) -> list[str]:
@@ -33,15 +28,7 @@ def target_repos(path: str | None) -> list[str]:
 
 
 def issue_points(issue: dict[str, Any]) -> int | None:
-    labels = common.label_names(issue)
-    for label in labels:
-        match = POINT_LABEL_RE.match(label)
-        if match:
-            return int(match.group(1))
-    match = POINT_FIELD_RE.search(issue.get("body") or "")
-    if match:
-        return int(match.group(1))
-    return None
+    return common.issue_points(issue)
 
 
 def candidate_issues(repo: str, label: str, limit: int) -> list[dict[str, Any]]:
@@ -64,17 +51,39 @@ def candidate_issues(repo: str, label: str, limit: int) -> list[dict[str, Any]]:
     ) or []
 
 
+def candidate_issues_for_labels(repo: str, labels: list[str], limit: int) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for label in labels:
+        if len(issues) >= limit:
+            break
+        for issue in candidate_issues(repo, label, max(limit - len(issues), 1)):
+            number = int(issue.get("number") or 0)
+            if number in seen:
+                continue
+            seen.add(number)
+            issues.append(issue)
+            if len(issues) >= limit:
+                break
+    return issues
+
+
 def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
     labels = common.label_names(issue)
+    point_values = common.issue_point_values(issue)
     points = issue_points(issue)
     action = "needs-points"
+    reason = ""
     if DECOMPOSED_LABEL in labels:
         action = "already-decomposed"
-    elif ONE_POINT_LABEL in labels or points == 1:
-        action = "mark-one-point"
+    elif len(point_values) > 1:
+        action = "decompose" if any(value > 1 for value in point_values) else "needs-points"
+        reason = "conflicting point metadata"
     elif points and points > 1:
         action = "decompose"
-    return {
+    elif ONE_POINT_LABEL in labels or points == 1:
+        action = "mark-one-point"
+    record = {
         "repo": repo,
         "number": issue.get("number"),
         "title": issue.get("title"),
@@ -82,6 +91,10 @@ def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
         "points": points,
         "action": action,
     }
+    if reason:
+        record["reason"] = reason
+        record["point_values"] = point_values
+    return record
 
 
 def ensure_labels(repo: str) -> None:
@@ -112,24 +125,22 @@ def mark_one_point(repo: str, number: int) -> None:
     )
 
 
-def mark_decomposition_required(repo: str, number: int, candidate_label: str) -> None:
-    common.run(
-        [
-            "gh",
-            "issue",
-            "edit",
-            str(number),
-            "--repo",
-            repo,
-            "--add-label",
-            DECOMPOSITION_REQUIRED_LABEL,
-            "--remove-label",
-            "agent:ready",
-            "--remove-label",
-            candidate_label,
-        ],
-        check=False,
-    )
+def mark_decomposition_required(repo: str, number: int, candidate_labels: list[str]) -> None:
+    cmd = [
+        "gh",
+        "issue",
+        "edit",
+        str(number),
+        "--repo",
+        repo,
+        "--add-label",
+        DECOMPOSITION_REQUIRED_LABEL,
+        "--remove-label",
+        "agent:ready",
+    ]
+    for label in candidate_labels:
+        cmd.extend(["--remove-label", label])
+    common.run(cmd, check=False)
 
 
 def planning_prompt(issue: dict[str, Any], max_children: int) -> str:
@@ -182,7 +193,7 @@ def run_planning_codex(issue: dict[str, Any], job_dir: Path, max_children: int) 
         *common.podman_cmd(),
         "run",
         "--rm",
-        "--userns=keep-id",
+        *common.podman_userns_args(),
         "--network=slirp4netns",
         "-v",
         f"{run_home}:/home/agent/.codex:Z",
@@ -287,10 +298,11 @@ def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any],
 def run(args: argparse.Namespace) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     remaining = args.max
+    candidate_labels = args.candidate_label or ["status:ready"]
     for repo in target_repos(args.repos_file):
         if remaining <= 0:
             break
-        for issue in candidate_issues(repo, args.candidate_label, remaining):
+        for issue in candidate_issues_for_labels(repo, candidate_labels, remaining):
             record = classify_issue(repo, issue)
             if args.apply:
                 record = apply_issue_action(repo, issue, record, args)
@@ -308,7 +320,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
-    parser.add_argument("--candidate-label", default="status:ready")
+    parser.add_argument(
+        "--candidate-label",
+        action="append",
+        default=None,
+        help="Label to scan for decomposition candidates. Repeatable; defaults to status:ready.",
+    )
     parser.add_argument("--max", type=int, default=10)
     parser.add_argument("--max-children", type=int, default=8)
     parser.add_argument("--summary", default=str(common.RUNTIME_DIR / "jobs" / "decompose-summary.json"))
@@ -325,6 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if not args.candidate_label:
+        args.candidate_label = ["status:ready"]
     if args.max < 0:
         raise SystemExit("--max must be >= 0")
     if args.max_children < 1:

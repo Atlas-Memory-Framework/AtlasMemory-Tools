@@ -55,6 +55,25 @@ class IssueDecomposeTests(unittest.TestCase):
             "needs-points",
         )
 
+    def test_classify_decomposes_agent_one_point_with_oversized_body_points(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(labels=["agent:one-point"], body="Points: 5"),
+        )
+
+        self.assertEqual(record["action"], "decompose")
+        self.assertEqual(record["points"], 5)
+
+    def test_classify_decomposes_conflicting_point_metadata(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(labels=["points:1", "points:5"]),
+        )
+
+        self.assertEqual(record["action"], "decompose")
+        self.assertEqual(record["reason"], "conflicting point metadata")
+        self.assertEqual(record["point_values"], [1, 5])
+
     def test_dry_run_writes_summary_without_mutations(self) -> None:
         original_candidates = self.decompose.candidate_issues
         self.decompose.candidate_issues = lambda _repo, _label, _limit: [
@@ -76,6 +95,41 @@ class IssueDecomposeTests(unittest.TestCase):
             self.decompose.candidate_issues = original_candidates
 
         self.assertEqual(payload["counts"], {"decompose": 1, "mark-one-point": 1})
+
+    def test_run_scans_multiple_candidate_labels_without_duplicates(self) -> None:
+        calls: list[str] = []
+        original_candidates = self.decompose.candidate_issues
+
+        def candidates(_repo, label, _limit):
+            calls.append(label)
+            if label == "status:ready":
+                return [issue(labels=["points:1"], number=1)]
+            if label == "status:draft":
+                return [issue(body="Points: 5", number=2), issue(labels=["points:1"], number=1)]
+            return []
+
+        self.decompose.candidate_issues = candidates
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repos = Path(tmp) / "repos.txt"
+                repos.write_text("owner/repo\n", encoding="utf-8")
+                args = self.decompose.build_parser().parse_args(
+                    [
+                        "--repos-file",
+                        str(repos),
+                        "--candidate-label",
+                        "status:ready",
+                        "--candidate-label",
+                        "status:draft",
+                        "--dry-run",
+                    ]
+                )
+                payload = self.decompose.run(args)
+        finally:
+            self.decompose.candidate_issues = original_candidates
+
+        self.assertEqual(calls, ["status:ready", "status:draft"])
+        self.assertEqual(payload["counts"], {"mark-one-point": 1, "decompose": 1})
 
 
 if __name__ == "__main__":

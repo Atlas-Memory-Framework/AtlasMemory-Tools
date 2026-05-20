@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 
+TOOLS_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_DIR = Path("/home/mat/distrobox-homes/atlas-agent/agent-runtime")
 MUTATING_FLAGS = {
     "--apply",
@@ -43,6 +44,18 @@ def run_runtime(root: Path, command: list[str]) -> int:
         raise SystemExit(f"runtime dir does not exist: {root}")
     if not Path(command[0]).exists():
         raise SystemExit(f"missing runtime script: {command[0]}")
+    if os.environ.get("ATLAS_RUNTIME_SKIP_SYNC", "").lower() not in {"1", "true", "yes"}:
+        sync_cmd = [
+            sys.executable,
+            str(TOOLS_ROOT / "scripts" / "sync_runtime_template.py"),
+            "--runtime-dir",
+            str(root),
+            "--apply",
+            "--migrate-config",
+            "--readonly",
+        ]
+        print("+ " + shlex.join(sync_cmd), flush=True)
+        subprocess.run(sync_cmd, cwd=TOOLS_ROOT, check=True)
     print("+ " + shlex.join(command), flush=True)
     return subprocess.run(command, cwd=root).returncode
 
@@ -84,6 +97,24 @@ def cmd_repos(args: argparse.Namespace) -> int:
 def cmd_projects(args: argparse.Namespace) -> int:
     print_file(runtime_dir(args) / "projects.txt")
     return 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    root = runtime_dir(args)
+    command = [
+        sys.executable,
+        str(TOOLS_ROOT / "scripts" / "sync_runtime_template.py"),
+        "--runtime-dir",
+        str(root),
+    ]
+    if args.apply:
+        command.append("--apply")
+    if args.migrate_config:
+        command.append("--migrate-config")
+    if args.readonly:
+        command.append("--readonly")
+    print("+ " + shlex.join(command), flush=True)
+    return subprocess.run(command, cwd=TOOLS_ROOT).returncode
 
 
 def add_plan_args(command: list[str], args: argparse.Namespace) -> None:
@@ -202,6 +233,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     projects = subparsers.add_parser("projects", help="Print projects.txt.")
     projects.set_defaults(func=cmd_projects)
+
+    sync = subparsers.add_parser("sync", help="Check or apply managed runtime files from the source template.")
+    sync.add_argument("--apply", action="store_true", help="Overwrite managed runtime files from the template.")
+    sync.add_argument("--migrate-config", action="store_true", help="Append missing config.env keys from the template example.")
+    sync.add_argument("--readonly", action="store_true", help="Make managed copied files read-only after sync.")
+    sync.set_defaults(func=cmd_sync)
 
     plan_preview = subparsers.add_parser("plan-preview", help="Preview plan projection and queue eligibility.")
     plan_preview.add_argument("--plan", required=True)

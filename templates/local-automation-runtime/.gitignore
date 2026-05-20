@@ -1,5 +1,12 @@
 config.env
+repos.txt
+projects.txt
+local-validation*.json
+deployed-validation*.json
+review-*.json
+finalize-*.json
 codex-home/
+repo-env/
 jobs/
 logs/
 repos/

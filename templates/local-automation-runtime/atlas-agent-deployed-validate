@@ -63,6 +63,17 @@ def configured_commands(entry: dict[str, Any]) -> list[str]:
     return [str(command) for command in commands if str(command).strip()]
 
 
+def configured_install_commands(entry: dict[str, Any]) -> list[str]:
+    commands: list[str] = []
+    for key in ("install_commands", "setup_commands"):
+        raw = entry.get(key) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        if isinstance(raw, list):
+            commands.extend(str(command) for command in raw if str(command).strip())
+    return commands
+
+
 def configured_workflows(entry: dict[str, Any]) -> list[dict[str, Any]]:
     raw = entry.get("workflows") or entry.get("workflow_chain") or []
     if not isinstance(raw, list):
@@ -93,6 +104,9 @@ def clean_worktree(repo: str, pr: dict[str, Any], job_dir: Path) -> Path:
     fetch = common.run(["git", "fetch", "origin", f"+refs/pull/{number}/head:{pr_ref}"], cwd=repo_path, check=False)
     ref = pr_ref if fetch.returncode == 0 else f"origin/{pr['headRefName']}"
     common.run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_path)
+    overlay_paths = common.apply_repo_env_overlay(repo, worktree)
+    if overlay_paths:
+        (job_dir / "repo-env-overlay.txt").write_text("\n".join(overlay_paths) + "\n", encoding="utf-8")
     (job_dir / "worktree.txt").write_text(str(worktree) + "\n", encoding="utf-8")
     return worktree
 
@@ -122,7 +136,7 @@ def expand_value(value: Any, env: dict[str, str]) -> str:
 
 def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path, env: dict[str, str]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    with (job_dir / "commands.log").open("w", encoding="utf-8") as log:
+    with (job_dir / "commands.log").open("a", encoding="utf-8") as log:
         for command in commands:
             log.write("+ " + command + "\n")
             log.flush()
@@ -336,13 +350,14 @@ def validate(args: argparse.Namespace) -> int:
     repo, number = common.pr_ref_parts(args.pr)
     pr = pr_json(repo, number)
     entry = config_entry(repo, args.commands_file)
+    install_commands = configured_install_commands(entry)
     commands = configured_commands(entry)
     workflows = configured_workflows(entry)
     job_dir = common.jobs_dir() / f"pr-{number}-deployed-validate-{common.now_id()}"
     job_dir.mkdir(parents=True, exist_ok=True)
     common.write_json(job_dir / "pr.json", pr)
     common.write_json(job_dir / "validation-config.json", entry)
-    if not commands and not workflows:
+    if not install_commands and not commands and not workflows:
         common.write_json(job_dir / "validation.json", {"passed": False, "error": "no deployed validation commands or workflows configured"})
         print(f"No deployed validation commands or workflows configured. Artifacts: {job_dir}")
         return 1
@@ -350,8 +365,11 @@ def validate(args: argparse.Namespace) -> int:
     results: list[dict[str, Any]] = []
     if workflows:
         results.extend(run_validation_workflows(repo, pr, workflows, job_dir, env))
-    if commands and (not results or all(result["returncode"] == 0 for result in results)):
+    if (install_commands or commands) and (not results or all(result["returncode"] == 0 for result in results)):
         worktree = clean_worktree(repo, pr, job_dir)
+        if install_commands:
+            results.extend(run_validation_commands(worktree, install_commands, job_dir, env))
+    if commands and (not results or all(result["returncode"] == 0 for result in results)):
         results.extend(run_validation_commands(worktree, commands, job_dir, env))
     passed = bool(results) and all(result["returncode"] == 0 for result in results)
     common.write_json(job_dir / "validation.json", {"passed": passed, "results": results})

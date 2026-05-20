@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import harnesslib  # noqa: E402
 import enforce_local_ssot  # noqa: E402
+import verify_repo  # noqa: E402
+import sync_runtime_template  # noqa: E402
 
 
 class ManifestAndHarnessTests(unittest.TestCase):
@@ -203,6 +205,29 @@ class LocalSsotEnforcementTests(unittest.TestCase):
             self.assertIn("--harness codex", hook_path.read_text(encoding="utf-8"))
 
 
+class RuntimeTemplateSyncTests(unittest.TestCase):
+    def test_runtime_sync_preserves_local_config_and_adds_missing_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            runtime.mkdir()
+            (runtime / "config.env").write_text('AGENT_REPO="OWNER/LOCAL"\n', encoding="utf-8")
+            (runtime / "required-checks.json").write_text('{"local": true}\n', encoding="utf-8")
+
+            result = sync_runtime_template.sync_runtime(
+                runtime,
+                apply=True,
+                migrate_config=True,
+                readonly=False,
+            )
+
+            self.assertEqual(result, 0)
+            self.assertTrue((runtime / "atlas-agent-worker").exists())
+            self.assertEqual((runtime / "required-checks.json").read_text(encoding="utf-8"), '{"local": true}\n')
+            config = (runtime / "config.env").read_text(encoding="utf-8")
+            self.assertIn('AGENT_REPO="OWNER/LOCAL"', config)
+            self.assertIn("AGENT_CODEX_PLANNING_PROFILE", config)
+
+
 class PortabilityTests(unittest.TestCase):
     FORBIDDEN = (
         "Atlas-" "Memory-Framework",
@@ -222,10 +247,8 @@ class PortabilityTests(unittest.TestCase):
     def test_no_atlas_specific_defaults_outside_examples(self) -> None:
         offenders: list[str] = []
         for base in ("skills", "agents", "templates", "scripts", "tests", "manifests"):
-            for path in (ROOT / base).rglob("*"):
+            for path in verify_repo.iter_tree_files(ROOT / base):
                 if not path.is_file():
-                    continue
-                if "__pycache__" in path.parts:
                     continue
                 text = path.read_text(encoding="utf-8", errors="ignore")
                 for token in self.FORBIDDEN:
@@ -235,8 +258,10 @@ class PortabilityTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_runtime_examples_are_placeholder_safe(self) -> None:
-        for path in (ROOT / "templates" / "local-automation-runtime").rglob("*example*"):
+        for path in verify_repo.iter_tree_files(ROOT / "templates" / "local-automation-runtime"):
             if not path.is_file():
+                continue
+            if "example" not in path.name:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
             self.assertIn("OWNER", text, path)

@@ -18,6 +18,10 @@ from typing import Any
 
 RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
 CONFIG_PATH = RUNTIME_DIR / "config.env"
+NONE_FIELD_VALUES = {"", "none", "n/a", "na", "-"}
+POINT_FIELD_RE = re.compile(
+    r"(?im)^\s*(?:-\s*)?(?:suggested\s+points|story\s+points|points):\s*`?(\d+)`?\s*$"
+)
 
 
 def now_id() -> str:
@@ -186,6 +190,36 @@ def repo_dir(repo: str) -> pathlib.Path:
     return base / repo.replace("/", "__")
 
 
+def safe_repo_name(repo: str) -> str:
+    return repo.replace("/", "__")
+
+
+def repo_env_overlay_dir(repo: str) -> pathlib.Path:
+    cfg = read_config()
+    raw_base = os.environ.get("AGENT_REPO_ENV_OVERLAY_DIR") or cfg.get(
+        "AGENT_REPO_ENV_OVERLAY_DIR",
+        str(RUNTIME_DIR / "repo-env"),
+    )
+    return pathlib.Path(os.path.expandvars(raw_base)).expanduser() / safe_repo_name(repo)
+
+
+def apply_repo_env_overlay(repo: str, worktree: pathlib.Path) -> list[str]:
+    overlay = repo_env_overlay_dir(repo)
+    if not overlay.exists():
+        return []
+    copied: list[str] = []
+    for source in sorted(overlay.rglob("*")):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(overlay)
+        target = worktree / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        os.chmod(target, 0o600)
+        copied.append(relative.as_posix())
+    return copied
+
+
 def jobs_dir() -> pathlib.Path:
     cfg = read_config()
     return pathlib.Path(os.path.expandvars(cfg.get("AGENT_JOBS", str(RUNTIME_DIR / "jobs"))))
@@ -244,14 +278,160 @@ def no_checks_policy_for_repo(repo: str, path: pathlib.Path | str | None = None)
     return raw if isinstance(raw, dict) else {}
 
 
+def body_field_values(body: str, field: str) -> list[str]:
+    values: list[str] = []
+    pattern = re.compile(rf"^(?P<indent>\s*)[-*]?\s*{re.escape(field)}:\s*(?P<value>.*?)\s*$", re.IGNORECASE)
+    lines = body.splitlines()
+    for idx, line in enumerate(lines):
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = match.group("value").strip().strip("`").strip()
+        if value:
+            values.append(value)
+            continue
+        parent_indent = len(match.group("indent"))
+        for child in lines[idx + 1 :]:
+            if not child.strip():
+                break
+            child_indent = len(child) - len(child.lstrip())
+            stripped = child.strip()
+            if stripped.startswith("#"):
+                break
+            if stripped.startswith("-"):
+                if child_indent <= parent_indent and re.match(r"^[-*]\s*[A-Za-z][A-Za-z ]+:", stripped):
+                    break
+                item = stripped.lstrip("-").strip().strip("`").strip()
+                if item:
+                    values.append(item)
+                continue
+            if child_indent <= parent_indent:
+                break
+    return values
+
+
+def has_body_field(body: str, field: str) -> bool:
+    return bool(body_field_values(body, field))
+
+
+def has_nonempty_body_field(body: str, field: str) -> bool:
+    return any(value.lower() not in NONE_FIELD_VALUES for value in body_field_values(body, field))
+
+
+def markdown_section_items(body: str, heading: str) -> list[str]:
+    pattern = rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(?P<body>.*?)(?=^##\s+|\Z)"
+    match = re.search(pattern, body)
+    if not match:
+        return []
+    items: list[str] = []
+    in_fence = False
+    for raw in match.group("body").splitlines():
+        line = raw.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line:
+            continue
+        if line.startswith("-"):
+            item = line.lstrip("-").strip().strip("`").strip()
+            if item and item.lower() not in NONE_FIELD_VALUES:
+                items.append(item)
+    return items
+
+
+def issue_point_values(issue: dict[str, Any]) -> list[int]:
+    values: list[int] = []
+    for label in sorted(label_names(issue)):
+        if not label.startswith("points:"):
+            continue
+        try:
+            values.append(int(label.split(":", 1)[1]))
+        except ValueError:
+            continue
+    for match in POINT_FIELD_RE.finditer(str(issue.get("body") or "")):
+        values.append(int(match.group(1)))
+
+    unique: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def issue_points(issue: dict[str, Any]) -> int | None:
+    values = issue_point_values(issue)
+    return values[0] if len(values) == 1 else None
+
+
+def issue_point_blockers(issue: dict[str, Any], *, require_one_point: bool) -> list[str]:
+    if not require_one_point:
+        return []
+    labels = label_names(issue)
+    values = issue_point_values(issue)
+    if len(values) > 1:
+        joined = ", ".join(f"points:{value}" for value in sorted(values))
+        return [f"conflicting point metadata ({joined})"]
+    if values:
+        points = values[0]
+        if points > 1:
+            return [f"points:{points} requires decomposition before dispatch"]
+        if points < 1:
+            return [f"invalid points:{points}"]
+        return []
+    if "agent:one-point" in labels:
+        return []
+    return ["missing one-point metadata"]
+
+
+def issue_execution_metadata_blockers(issue: dict[str, Any], *, require_one_point: bool = False) -> list[str]:
+    body = str(issue.get("body") or "")
+    lowered = body.lower()
+    labels = label_names(issue)
+    reasons: list[str] = []
+
+    if "dispatch mode: `blocked`" in lowered or "dispatch mode: blocked" in lowered:
+        reasons.append("blocked dispatch mode")
+    if (
+        ("dispatch mode: `manual-review`" in lowered or "dispatch mode: manual-review" in lowered)
+        and "agent:approved-dispatch" not in labels
+    ):
+        reasons.append("manual-review dispatch mode requires explicit queueing")
+    if "issue ready: `false`" in lowered or "issue ready: false" in lowered:
+        reasons.append("issue ready false")
+
+    if has_nonempty_body_field(body, "Open dependencies"):
+        reasons.append("open dependencies")
+    elif not has_body_field(body, "Open dependencies") and markdown_section_items(body, "Dependencies"):
+        reasons.append("dependencies section without Open dependencies field")
+
+    if has_nonempty_body_field(body, "Manual gates remaining"):
+        reasons.append("manual gates remaining")
+    elif not has_body_field(body, "Manual gates remaining") and markdown_section_items(
+        body,
+        "Deployed / Manual Validation Requirements",
+    ):
+        reasons.append("manual validation requirements without Manual gates remaining field")
+
+    if markdown_section_items(body, "Blockers"):
+        reasons.append("blockers section")
+    if markdown_section_items(body, "Dispatch Guardrails"):
+        reasons.append("dispatch guardrails")
+    if has_nonempty_body_field(body, "Automation blockers"):
+        reasons.append("automation blockers")
+
+    reasons.extend(issue_point_blockers(issue, require_one_point=require_one_point))
+    return reasons
+
+
 def dependency_refs_from_body(repo: str, body: str) -> list[tuple[str, int, str]]:
     refs: list[tuple[str, int, str]] = []
     lowered = body.lower()
-    if "open dependencies:" not in lowered:
+    if not has_nonempty_body_field(body, "Open dependencies"):
         return refs
     header = r"(?:-\s*)?open dependencies"
-    if re.search(rf"(?im)^\s*{header}:\s*`?none`?\s*$", body):
-        return refs
 
     match = re.search(rf"(?ims)^\s*{header}:\s*(.*?)(?:\n\s*\n|\n\s*(?:-\s*)?[A-Z][A-Za-z ]+:\s*|$)", body)
     block = match.group(1) if match else body
@@ -276,9 +456,7 @@ def dependency_refs_from_body(repo: str, body: str) -> list[tuple[str, int, str]
 
 def issue_dependency_blockers(repo: str, issue: dict[str, Any]) -> list[str]:
     body = str(issue.get("body") or "")
-    lowered = body.lower()
-    header = r"(?:-\s*)?open dependencies"
-    if "open dependencies:" not in lowered or re.search(rf"(?im)^\s*{header}:\s*`?none`?\s*$", body):
+    if not has_nonempty_body_field(body, "Open dependencies"):
         return []
     refs = dependency_refs_from_body(repo, body)
     if not refs:
@@ -369,6 +547,13 @@ def podman_cmd() -> list[str]:
     raise RuntimeError("Missing podman and distrobox-host-exec")
 
 
+def podman_userns_args() -> list[str]:
+    cmd = podman_cmd()
+    if cmd and cmd[0] == "sudo":
+        return []
+    return ["--userns=keep-id"]
+
+
 def codex_image() -> str:
     return read_config().get("AGENT_CODEX_IMAGE", "localhost/codex-agent:latest")
 
@@ -404,7 +589,10 @@ def codex_profile_shell_args(kind: str) -> str:
 
 def codex_home_copy(job_dir: pathlib.Path) -> pathlib.Path:
     cfg = read_config()
-    source = pathlib.Path(os.path.expandvars(cfg["AGENT_CODEX_HOME"]))
+    raw_source = os.environ.get("AGENT_CODEX_HOME") or cfg.get("AGENT_CODEX_HOME")
+    if not raw_source:
+        raise RuntimeError("AGENT_CODEX_HOME is not configured.")
+    source = pathlib.Path(os.path.expandvars(raw_source)).expanduser()
     target = pathlib.Path(tempfile.mkdtemp(prefix="codex-home-", dir=job_dir))
     shutil.copytree(source, target, dirs_exist_ok=True)
     for path in [target, *target.rglob("*")]:

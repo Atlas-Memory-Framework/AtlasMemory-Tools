@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import shutil
@@ -51,6 +52,34 @@ SCAN_PATHS = (
     ".cursor",
 )
 
+LOCAL_ARTIFACT_DIR_NAMES = {
+    ".git",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+}
+
+RUNTIME_LOCAL_ARTIFACT_DIRS = (
+    "templates/local-automation-runtime/codex-home",
+    "templates/local-automation-runtime/repo-env",
+    "templates/local-automation-runtime/jobs",
+    "templates/local-automation-runtime/logs",
+    "templates/local-automation-runtime/repos",
+    "templates/local-automation-runtime/state",
+)
+
+RUNTIME_LOCAL_ARTIFACT_FILES = {
+    "templates/local-automation-runtime/config.env",
+    "templates/local-automation-runtime/repos.txt",
+    "templates/local-automation-runtime/projects.txt",
+}
+
+RUNTIME_LOCAL_ARTIFACT_FILE_PATTERNS = (
+    "templates/local-automation-runtime/local-validation*.json",
+    "templates/local-automation-runtime/deployed-validation*.json",
+)
+
 REQUIRED_COPY_PATHS = (
     "skills",
     "agents",
@@ -82,6 +111,7 @@ PY_COMPILE_FILES = (
     "scripts/enforce_local_ssot.py",
     "scripts/install_harness.py",
     "scripts/runtime_control.py",
+    "scripts/sync_runtime_template.py",
     "scripts/verify_harness.py",
     "scripts/verify_repo.py",
     "skills/github-project/scripts/create_project.py",
@@ -99,6 +129,40 @@ def rel(path: Path) -> str:
         return path.relative_to(ROOT).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def is_under(relative: str, roots: tuple[str, ...]) -> bool:
+    return any(relative == root or relative.startswith(root + "/") for root in roots)
+
+
+def is_runtime_local_file(relative: str) -> bool:
+    if relative in RUNTIME_LOCAL_ARTIFACT_FILES:
+        return True
+    return any(fnmatch.fnmatchcase(relative, pattern) for pattern in RUNTIME_LOCAL_ARTIFACT_FILE_PATTERNS)
+
+
+def is_pruned_dir(path: Path) -> bool:
+    relative = rel(path)
+    return path.name in LOCAL_ARTIFACT_DIR_NAMES or is_under(relative, RUNTIME_LOCAL_ARTIFACT_DIRS)
+
+
+def should_scan_file(path: Path) -> bool:
+    relative = rel(path)
+    return path.suffix != ".pyc" and not is_under(relative, RUNTIME_LOCAL_ARTIFACT_DIRS) and not is_runtime_local_file(relative)
+
+
+def iter_tree_files(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path] if should_scan_file(path) else []
+    files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(path):
+        current = Path(dirpath)
+        dirnames[:] = [dirname for dirname in dirnames if not is_pruned_dir(current / dirname)]
+        for filename in filenames:
+            item = current / filename
+            if item.is_file() and should_scan_file(item):
+                files.append(item)
+    return sorted(files)
 
 
 def run(args: list[str], *, env: dict[str, str] | None = None) -> None:
@@ -161,16 +225,7 @@ def iter_scanned_files() -> list[Path]:
     files: list[Path] = []
     for relative in SCAN_PATHS:
         path = ROOT / relative
-        if path.is_file():
-            files.append(path)
-        elif path.is_dir():
-            files.extend(
-                item
-                for item in path.rglob("*")
-                if item.is_file()
-                and "__pycache__" not in item.parts
-                and item.suffix != ".pyc"
-            )
+        files.extend(iter_tree_files(path))
     return sorted(files)
 
 
@@ -235,13 +290,37 @@ def find_ignored_artifacts() -> list[str]:
         path = ROOT / dirname
         if path.exists():
             offenders.append(f"{dirname}/" if path.is_dir() else dirname)
-    for path in ROOT.rglob("__pycache__"):
-        if ".git" in path.parts or ".venv" in path.parts:
-            continue
-        offenders.append(rel(path) + "/")
-    for path in ROOT.rglob("*.pyc"):
-        if ".git" not in path.parts and ".venv" not in path.parts and "__pycache__" not in path.parts:
-            offenders.append(rel(path))
+
+    for relative in RUNTIME_LOCAL_ARTIFACT_DIRS:
+        path = ROOT / relative
+        if path.exists():
+            offenders.append(f"{relative}/" if path.is_dir() else relative)
+    for relative in RUNTIME_LOCAL_ARTIFACT_FILES:
+        path = ROOT / relative
+        if path.exists():
+            offenders.append(relative)
+    runtime_root = ROOT / "templates" / "local-automation-runtime"
+    if runtime_root.exists():
+        for pattern in RUNTIME_LOCAL_ARTIFACT_FILE_PATTERNS:
+            for path in runtime_root.glob(Path(pattern).name):
+                if path.exists():
+                    offenders.append(rel(path))
+
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        current = Path(dirpath)
+        pruned: list[str] = []
+        for dirname in dirnames:
+            path = current / dirname
+            if dirname == "__pycache__":
+                offenders.append(rel(path) + "/")
+                continue
+            if is_pruned_dir(path):
+                continue
+            pruned.append(dirname)
+        dirnames[:] = pruned
+        for filename in filenames:
+            if filename.endswith(".pyc"):
+                offenders.append(rel(current / filename))
     return sorted(set(offenders))
 
 
@@ -256,7 +335,9 @@ def check_strict_copy_artifacts() -> None:
 
 def check_executable_helpers() -> None:
     failures: list[str] = []
-    for path in (ROOT / "templates" / "local-automation-runtime").rglob("*.sh"):
+    for path in iter_tree_files(ROOT / "templates" / "local-automation-runtime"):
+        if path.suffix != ".sh":
+            continue
         if not os.access(path, os.X_OK):
             failures.append(rel(path))
     for path in (ROOT / "templates" / "local-automation-runtime").glob("atlas-agent-*"):

@@ -218,6 +218,12 @@ def load_review(chain_dir: Path, cycle: int) -> list[dict]:
     return decisions if isinstance(decisions, list) else []
 
 
+def load_dependency_promotions(chain_dir: Path, cycle: int) -> list[dict]:
+    data = read_json(chain_dir / f"dependency-promote-cycle-{cycle}.json")
+    decisions = data.get("decisions") or []
+    return decisions if isinstance(decisions, list) else []
+
+
 def load_stage_failures(chain_dir: Path, cycle: int) -> list[dict]:
     failures: list[dict] = []
     for stage in ("local-validate", "semantic-review", "deployed-validate", "repair"):
@@ -239,6 +245,7 @@ def load_stage_failures(chain_dir: Path, cycle: int) -> list[dict]:
 def summarize(chain_dir: Path, cycle: int) -> dict:
     build_results = load_build_results(chain_dir, cycle)
     triage_blockers = load_triage_blockers(chain_dir, cycle)
+    dependency_promotions = load_dependency_promotions(chain_dir, cycle)
     review = load_review(chain_dir, cycle)
     finalizer = load_finalizer(chain_dir, cycle)
     stage_failures = load_stage_failures(chain_dir, cycle)
@@ -250,6 +257,10 @@ def summarize(chain_dir: Path, cycle: int) -> dict:
     for item in finalizer:
         action = str(item.get("action") or "unknown")
         finalizer_counts[action] = finalizer_counts.get(action, 0) + 1
+    promotion_counts: dict[str, int] = {}
+    for item in dependency_promotions:
+        action = str(item.get("action") or "unknown")
+        promotion_counts[action] = promotion_counts.get(action, 0) + 1
     return {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "chain_id": chain_dir.name.replace("e2e-chain-", ""),
@@ -263,6 +274,11 @@ def summarize(chain_dir: Path, cycle: int) -> dict:
         "triage": {
             "blocker_count": len(triage_blockers),
             "blockers": triage_blockers[:25],
+        },
+        "dependency_promote": {
+            "counts": promotion_counts,
+            "promoted": [item for item in dependency_promotions if item.get("action") == "promote"][:25],
+            "blocked": [item for item in dependency_promotions if item.get("action") == "blocked"][:25],
         },
         "review": {
             "counts": review_counts,
@@ -285,6 +301,7 @@ def message_card(summary: dict) -> dict:
         f"**Chain:** `{summary['chain_id']}` cycle `{summary['cycle']}`",
         f"**Build:** {summary['build']['ok']} ok, {summary['build']['failed']} failed",
         f"**Triage blockers:** {summary['triage']['blocker_count']}",
+        f"**Dependency promote:** {summary.get('dependency_promote', {}).get('counts', {})}",
         f"**Review:** {summary.get('review', {}).get('counts', {})}",
         f"**Automation stage failures:** {len(summary.get('automation', {}).get('failed_stages', []))}",
         f"**Finalizer:** {summary['finalizer']['counts']}",

@@ -31,6 +31,7 @@ class RuntimeTemplateTests(unittest.TestCase):
         cls.finalize = load_script("template_finalize", "atlas-agent-finalize")
         cls.cycle = load_script("template_cycle_summary", "atlas-agent-cycle-summary")
         cls.bridge = load_script("template_plan_queue", "atlas-agent-plan-queue")
+        cls.local_validate = load_script("template_local_validate", "atlas-agent-local-validate")
         cls.deployed_validate = load_script("template_deployed_validate", "atlas-agent-deployed-validate")
 
     def test_finalizer_summary_serializes_decisions(self) -> None:
@@ -155,6 +156,58 @@ class RuntimeTemplateTests(unittest.TestCase):
         }
 
         self.assertIn("dependencies: owner/repo#1", self.bridge.child_blockers(child))
+        self.assertIn("missing Open dependencies execution field", self.bridge.child_blockers(child))
+
+    def test_plan_queue_blocks_oversized_ready_children(self) -> None:
+        child = {
+            "labels": ["status:ready", "points:5"],
+            "dispatch_recommendation": "auto-dispatch",
+            "suggested_points": 5,
+            "dependencies": [],
+            "blockers": [],
+            "dependency_issue_refs": [],
+            "blocker_issue_refs": [],
+            "automation_blockers": [],
+            "body": "## Execution State\n- Open dependencies: `none`\n- Manual gates remaining: `none`\n",
+        }
+
+        self.assertIn("points:5 requires decomposition before dispatch", self.bridge.child_blockers(child))
+
+    def test_plan_queue_blocks_manual_gates_and_dispatch_guardrails(self) -> None:
+        child = {
+            "labels": ["status:ready"],
+            "dispatch_recommendation": "auto-dispatch",
+            "dependencies": [],
+            "blockers": [],
+            "dependency_issue_refs": [],
+            "blocker_issue_refs": [],
+            "automation_blockers": [],
+            "body": (
+                "## Execution State\n"
+                "- Open dependencies: `none`\n"
+                "- Manual gates remaining: `hosted smoke`\n\n"
+                "## Dispatch Guardrails\n"
+                "- Requires decomposition\n"
+            ),
+        }
+
+        blockers = self.bridge.child_blockers(child)
+        self.assertIn("manual gates remaining", blockers)
+        self.assertIn("dispatch guardrails", blockers)
+
+    def test_plan_queue_allows_unbackticked_manual_gate_none(self) -> None:
+        child = {
+            "labels": ["status:ready"],
+            "dispatch_recommendation": "auto-dispatch",
+            "dependencies": [],
+            "blockers": [],
+            "dependency_issue_refs": [],
+            "blocker_issue_refs": [],
+            "automation_blockers": [],
+            "body": "## Execution State\n- Open dependencies: none\n- Manual gates remaining: none\n",
+        }
+
+        self.assertNotIn("manual gates remaining", self.bridge.child_blockers(child))
 
     def test_plan_queue_allows_clean_ready_child(self) -> None:
         child = {
@@ -210,20 +263,54 @@ class RuntimeTemplateTests(unittest.TestCase):
 
     def test_durable_template_contains_local_validation_example(self) -> None:
         source = ROOT / "local-validation.json"
+        expected = (TEMPLATE_ROOT / "config" / "local-validation.example.json").read_text(encoding="utf-8")
+        if source.exists() and source.read_text(encoding="utf-8") != expected:
+            self.skipTest("installed runtime has customized local-validation.json")
         if not source.exists():
             source = ROOT / "config" / "local-validation.example.json"
         self.assertEqual(
             source.read_text(encoding="utf-8"),
-            (TEMPLATE_ROOT / "config" / "local-validation.example.json").read_text(encoding="utf-8"),
+            expected,
         )
+
+    def test_local_validation_supports_legacy_command_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "local-validation.json"
+            path.write_text(json.dumps({"owner/repo": ["npm test"]}), encoding="utf-8")
+
+            commands = self.local_validate.configured_commands("owner/repo", str(path))
+
+        self.assertEqual(commands, ["npm test"])
+
+    def test_local_validation_runs_install_commands_before_targeted_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "local-validation.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "owner/repo": {
+                            "install_commands": ["npm ci"],
+                            "commands": ["npm test -- --run", "npm run build"],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            commands = self.local_validate.configured_commands("owner/repo", str(path))
+
+        self.assertEqual(commands, ["npm ci", "npm test -- --run", "npm run build"])
 
     def test_durable_template_contains_deployed_validation_example(self) -> None:
         source = ROOT / "deployed-validation.json"
+        expected = (TEMPLATE_ROOT / "config" / "deployed-validation.example.json").read_text(encoding="utf-8")
+        if source.exists() and source.read_text(encoding="utf-8") != expected:
+            self.skipTest("installed runtime has customized deployed-validation.json")
         if not source.exists():
             source = ROOT / "config" / "deployed-validation.example.json"
         self.assertEqual(
             source.read_text(encoding="utf-8"),
-            (TEMPLATE_ROOT / "config" / "deployed-validation.example.json").read_text(encoding="utf-8"),
+            expected,
         )
 
     def test_deployed_validation_example_uses_workflows_schema(self) -> None:
@@ -236,6 +323,12 @@ class RuntimeTemplateTests(unittest.TestCase):
         workflows = self.deployed_validate.configured_workflows(entry)
         self.assertEqual(len(workflows), 1)
         self.assertEqual(workflows[0]["workflow"], "deployed-validation.yml")
+
+    def test_deployed_validation_supports_install_commands(self) -> None:
+        entry = {"install_commands": ["npm ci"], "commands": ["npm run build"]}
+
+        self.assertEqual(self.deployed_validate.configured_install_commands(entry), ["npm ci"])
+        self.assertEqual(self.deployed_validate.configured_commands(entry), ["npm run build"])
 
 
 if __name__ == "__main__":

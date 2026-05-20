@@ -1164,7 +1164,8 @@ def build_registry_story_drafts(
             validation_scope=validation_scope,
             gates=gates,
         )
-        automation_blockers: list[str] = []
+        points = suggest_points(title, repo_targets, gates)
+        automation_blockers: list[str] = point_dispatch_guardrails(points)
         dispatch_recommendation = infer_dispatch_recommendation(
             issue_ready=issue_ready,
             azure_closeout_only=False,
@@ -1175,7 +1176,6 @@ def build_registry_story_drafts(
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
         )
-        points = suggest_points(title, repo_targets, gates)
         labels = infer_labels(
             title,
             title,
@@ -1213,6 +1213,14 @@ def build_registry_story_drafts(
             body_lines.append(f"- Base branch: `{base_branch}`")
         if gates:
             body_lines.extend(["## Named Gates", *[f"- `{g}`" for g in gates], ""])
+        body_lines.extend(
+            build_execution_state_lines(
+                open_dependencies=[],
+                manual_gates_remaining=[],
+            )
+        )
+        if automation_blockers:
+            body_lines.extend(["## Dispatch Guardrails", *[f"- {item}" for item in automation_blockers], ""])
         body_lines.extend(
             [
                 "## Registry Story Record",
@@ -1921,11 +1929,37 @@ def dispatch_recommendation_for_manifest_mode(
     mode: str,
     inferred: str,
 ) -> str:
+    if inferred == "tracking-only":
+        return "tracking-only"
     if mode == "agent-ready":
         return inferred
     if mode == "manual-review":
         return "review-before-dispatch"
     return "tracking-only"
+
+
+def point_dispatch_guardrails(points: int | None) -> list[str]:
+    if points is not None and points > 1:
+        return [f"Decompose `points:{points}` issue into one-point child issues before local automation dispatch."]
+    return []
+
+
+def runtime_field_value(values: list[str]) -> str:
+    cleaned = ordered_unique([value.replace("`", "").strip() for value in values if value.strip()])
+    return "none" if not cleaned else "; ".join(cleaned)
+
+
+def build_execution_state_lines(
+    *,
+    open_dependencies: list[str],
+    manual_gates_remaining: list[str],
+) -> list[str]:
+    return [
+        "## Execution State",
+        f"- Open dependencies: `{runtime_field_value(open_dependencies)}`",
+        f"- Manual gates remaining: `{runtime_field_value(manual_gates_remaining)}`",
+        "",
+    ]
 
 
 def parse_int_value(value: str | None) -> int | None:
@@ -3266,6 +3300,8 @@ def build_children(
                 ),
             ]
         )
+        points = points_for_issue(title, repo_targets, gates, lines)
+        automation_blockers = ordered_unique([*automation_blockers, *point_dispatch_guardrails(points)])
         dispatch_recommendation = infer_dispatch_recommendation(
             issue_ready=issue_ready,
             azure_closeout_only=azure_closeout_only,
@@ -3276,7 +3312,6 @@ def build_children(
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
         )
-        points = points_for_issue(title, repo_targets, gates, lines)
         labels = infer_labels(
             title,
             excerpt,
@@ -3318,6 +3353,12 @@ def build_children(
         if repo_note:
             body_lines.append(f"- Repo note: {repo_note}")
         body_lines.append("")
+        body_lines.extend(
+            build_execution_state_lines(
+                open_dependencies=dependencies,
+                manual_gates_remaining=blockers,
+            )
+        )
         if dependencies:
             body_lines.extend(["## Dependencies", *[f"- {item}" for item in dependencies], ""])
         if blockers:
@@ -3500,6 +3541,7 @@ def build_manifest_leaf_children(
             default_base_branch=plan_base_branch or frontmatter.get("tracking.baseBranch"),
         )
         blockers = explicit_blockers
+        points = points_for_issue(title, repo_targets, gates, lines)
         automation_blockers = ordered_unique(
             [
                 *(
@@ -3520,6 +3562,7 @@ def build_manifest_leaf_children(
                 azure_closeout_only=False,
                 explicit_blockers=[],
             )
+        automation_blockers = ordered_unique([*automation_blockers, *point_dispatch_guardrails(points)])
         risk_tags = infer_risk_tags(
             title=title,
             excerpt=excerpt,
@@ -3545,7 +3588,6 @@ def build_manifest_leaf_children(
             requested_dispatch_mode,
             dispatch_recommendation,
         )
-        points = points_for_issue(title, repo_targets, gates, lines)
         labels = infer_labels(
             title,
             excerpt,
@@ -3586,6 +3628,12 @@ def build_manifest_leaf_children(
         if repo_note:
             body_lines.append(f"- Repo note: {repo_note}")
         body_lines.append("")
+        body_lines.extend(
+            build_execution_state_lines(
+                open_dependencies=dependencies,
+                manual_gates_remaining=blockers,
+            )
+        )
         if write_scope:
             body_lines.extend(["## Write Scope", *[f"- `{item}`" for item in write_scope], ""])
         if dependencies:
@@ -3877,6 +3925,8 @@ def automation_state_project_value(draft: IssueDraft) -> str:
     if draft.dispatch_recommendation == "tracking-only":
         return "Manual"
     if draft.dispatch_recommendation == "review-before-dispatch":
+        return "Manual"
+    if draft.suggested_points and draft.suggested_points > 1:
         return "Manual"
     if draft.dispatch_recommendation in {"auto-dispatch", "auto-dispatch-pilot"}:
         return "Ready"

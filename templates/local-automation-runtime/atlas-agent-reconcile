@@ -101,9 +101,9 @@ def queue_blockers(issue: dict[str, Any], labels_after_cleanup: set[str]) -> lis
         blockers.append(f"{RUNNING_LABEL} present")
     if FAILED_LABEL in labels_after_cleanup:
         blockers.append(f"{FAILED_LABEL} present")
-    if "open dependencies:" in lowered and "open dependencies: `none`" not in lowered:
+    if common.has_nonempty_body_field(body, "Open dependencies"):
         blockers.append("open dependencies")
-    if "manual gates remaining:" in lowered and "manual gates remaining: `none`" not in lowered:
+    if common.has_nonempty_body_field(body, "Manual gates remaining"):
         blockers.append("manual gates remaining")
     if (
         "dispatch recommendation: `review-before-dispatch`" in lowered
