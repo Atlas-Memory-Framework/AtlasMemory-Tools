@@ -87,8 +87,10 @@ Use the plan's existing identifiers wherever possible:
    - blockers, merge points, named gates, repo-boundary hints, and deployed/manual validation requirements
 8. If the user explicitly approves apply mode, run:
    - `python skills/plan-to-issues/scripts/plan_to_issues.py --plan "<path>" --repo "<owner/repo>" --apply`
-9. For the local Codex automation lane, prefer the template bridge:
-   - `templates/local-automation-runtime/atlas-agent-plan-queue --plan "<path>" --repo "<owner/repo>" --apply --queue`
+9. For the local Codex automation lane, use the installed runtime, not the source template:
+   - `python scripts/runtime_control.py queue --plan "<path>" --repo "<owner/repo>" --max-queue 1 --yes`
+   - Set `ATLAS_RUNTIME_DIR` or pass `--runtime-dir "<runtime-path>"` before the subcommand when the target runtime is not the default Atlas runtime.
+   - Do not run `templates/local-automation-runtime/atlas-agent-*` directly; those files are source material and direct execution writes `jobs/`, `repos/`, and local config into the template tree.
    - Add `--publish` only when eligible queued issues should immediately run local workers and publish draft PRs.
 10. If a project is provided, add the created issues to the project using `gh` after issue creation.
 11. Report the created or updated issues back to the user.
@@ -100,6 +102,8 @@ Use the plan's existing identifiers wherever possible:
 - Manifest leaves should be bullets shaped as `- LEAF-001: Short executable title` with nested metadata for `Dispatch`, `Points`, `Target repo`, `Files in scope`, `Validation`, `Depends on`, `External blockers`, `Manual blockers`, and `Required gates`.
 - For unattended local automation, prefer one-point manifest leaves (`Points: 1`). Larger leaves should stay tracking/manual until decomposed into one-point child issues.
 - Manifest leaf issues emit automation metadata in dry-run JSON and issue bodies: `dispatch_mode`, `write_scope`, `validation_commands`, dependencies, gates, repo/base-branch routing, and dispatch guardrails.
+- Generated executable issues must include runtime execution-state fields: `Open dependencies:` and `Manual gates remaining:`. These are the local automation dispatch contract; `## Dependencies` and Project fields are human/operator context.
+- `Dispatch: agent-ready` with `Points` greater than `1` is not unattended-ready. Treat it as tracking/manual until decomposed, even if other metadata looks queueable.
 - Leaf dependencies may be GitHub issue refs or sibling manifest leaf ids. Opaque text, merge points, gate ids, decisions, assumptions, and risks are treated as guardrails and force `tracking-only` dispatch until converted into explicit issue refs or runnable leaf ids.
 - Cross-walk subsections whose titles contain `->` (for example `### WS2 -> WS3 -> WS4 Status Mapping`) are not treated as workstreams even if they match a loose `WS*` prefix.
 - `WS3` plans use local `G-WS3-*` / `ws3_*` validation messaging for children and epic closeout text; generic deployed workflow parity gates are not injected onto the WS3 epic solely because the plan key matches the epic scope.

@@ -24,6 +24,7 @@ DEFAULT_STAGES = (
     "reconcile",
     "project-reconcile",
     "decompose",
+    "dependency-promote",
     "dispatch",
     "review",
     "semantic-review",
@@ -90,6 +91,7 @@ def parse_stages(raw: str | None) -> list[str]:
         "reconcile",
         "project-reconcile",
         "decompose",
+        "dependency-promote",
         "dispatch",
         "review",
         "semantic-review",
@@ -116,11 +118,7 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
             cmd = [
                 str(common.RUNTIME_DIR / "atlas-agent-orchestrator"),
                 "--once",
-                "--inspect-failed",
-                "--auto-create-missing-base",
                 "--triage-needs-human",
-                "--triage-apply-stale",
-                "--triage-approve-review-before-dispatch",
                 "--triage-summary",
                 str(summary_file),
                 "--auto-queue-label",
@@ -134,6 +132,17 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
                 "--repos-file",
                 str(shard_file),
             ]
+            if args.publish:
+                cmd.extend(
+                    [
+                        "--inspect-failed",
+                        "--auto-create-missing-base",
+                        "--triage-apply-stale",
+                        "--triage-approve-review-before-dispatch",
+                    ]
+                )
+            else:
+                cmd.append("--dry-run")
             if args.require_one_point:
                 cmd.append("--require-one-point")
             if args.publish:
@@ -218,29 +227,74 @@ def decompose_apply_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "apply", False) or getattr(args, "review_apply", False))
 
 
+def decompose_create_subissues_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "decompose_create_subissues", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "apply", False))
+
+
 def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
     summary_file = chain_dir / f"decompose-cycle-{cycle}.json"
     cmd = [
         str(common.RUNTIME_DIR / "atlas-agent-issue-decompose"),
         "--repos-file",
         str(args.repos_file),
-        "--candidate-label",
-        args.auto_queue_label,
         "--max",
         str(args.decompose_max),
         "--summary",
         str(summary_file),
     ]
+    candidate_labels = list(dict.fromkeys([args.auto_queue_label, *args.decompose_candidate_label]))
+    for label in candidate_labels:
+        cmd.extend(["--candidate-label", label])
     if decompose_apply_enabled(args):
         cmd.append("--apply")
     else:
         cmd.append("--dry-run")
-    if args.decompose_create_subissues:
+    if decompose_create_subissues_enabled(args):
         cmd.append("--create-subissues")
     return CommandSpec(
         name="decompose",
         args=cmd,
         log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-decompose-cycle-{cycle}.log",
+        summary_file=summary_file,
+    )
+
+
+def dependency_promote_apply_enabled(args: argparse.Namespace) -> bool:
+    configured = getattr(args, "dependency_promote_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "apply", False) or getattr(args, "review_apply", False))
+
+
+def build_dependency_promote_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    summary_file = chain_dir / f"dependency-promote-cycle-{cycle}.json"
+    if args.projects_file:
+        projects_file = Path(args.projects_file)
+    else:
+        projects_file = chain_dir / f"dependency-promote-projects-cycle-{cycle}.txt"
+        projects_file.write_text(f"{args.project_owner}/{args.project_number}\n", encoding="utf-8")
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-dependency-promote"),
+        "--repos-file",
+        str(args.repos_file),
+        "--projects-file",
+        str(projects_file),
+        "--limit",
+        str(args.project_item_limit),
+        "--summary",
+        str(summary_file),
+    ]
+    if dependency_promote_apply_enabled(args):
+        cmd.append("--apply")
+    else:
+        cmd.append("--dry-run")
+    return CommandSpec(
+        name="dependency-promote",
+        args=cmd,
+        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-dependency-promote-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -272,6 +326,8 @@ def build_finalize_command(args: argparse.Namespace, chain_dir: Path, chain_id: 
     summary_file = chain_dir / f"finalize-cycle-{cycle}.json"
     cmd = [
         str(common.RUNTIME_DIR / "atlas-agent-finalize"),
+        "--repos-file",
+        str(args.repos_file),
         "--required-checks-file",
         str(args.required_checks_file),
         "--summary",
@@ -890,6 +946,12 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
             results = [run_command(command)]
             print_stage_report(stage, results)
             print_decision_counts(stage, command.summary_file, "action")
+        elif stage == "dependency-promote":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: dependency promote ===", flush=True)
+            command = build_dependency_promote_command(args, chain_dir, chain_id, cycle)
+            results = [run_command(command)]
+            print_stage_report(stage, results)
+            print_decision_counts(stage, command.summary_file, "action")
         elif stage == "dispatch":
             print(f"=== unattended cycle {cycle}/{args.cycles}: dispatch ===", flush=True)
             results = run_parallel("dispatch", build_dispatch_commands(args, chain_dir, chain_id, cycle))
@@ -981,6 +1043,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-queue-label", default="status:ready")
     parser.add_argument("--decompose-max", type=int, default=10)
     parser.add_argument(
+        "--decompose-candidate-label",
+        action="append",
+        default=["status:draft", "agent:decomposition-required"],
+        help="Additional label to scan for oversized decomposition candidates. Repeatable.",
+    )
+    parser.add_argument(
         "--decompose-apply",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -989,8 +1057,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--decompose-create-subissues",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use the planning Codex profile to create one-point child issues for oversized parents.",
+        default=None,
+        help="Use the planning Codex profile to create one-point child issues for oversized parents. Defaults to enabled when --apply is used.",
+    )
+    parser.add_argument(
+        "--dependency-promote-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply dependency promotion body, label, and Project field updates. Defaults to enabled when --review-apply or --apply is used.",
     )
     parser.add_argument(
         "--require-one-point",

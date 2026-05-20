@@ -1,6 +1,11 @@
 {
-  "OWNER/REPO": [
-    "python3 -m compileall -q src tests",
-    "python3 -m unittest discover"
-  ]
+  "OWNER/REPO": {
+    "install_commands": [
+      "npm ci"
+    ],
+    "commands": [
+      "npm test",
+      "npm run build"
+    ]
+  }
 }

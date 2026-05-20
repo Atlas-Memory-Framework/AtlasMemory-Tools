@@ -96,6 +96,7 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("reconcile", names)
         self.assertIn("project-reconcile", names)
         self.assertIn("decompose", names)
+        self.assertIn("dependency-promote", names)
         self.assertIn("repair", names)
         self.assertIn("local-validate", names)
         self.assertIn("deployed-validate", names)
@@ -105,6 +106,7 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertLess(names.index("reconcile"), names.index("dispatch"))
         self.assertLess(names.index("project-reconcile"), names.index("dispatch"))
         self.assertLess(names.index("decompose"), names.index("dispatch"))
+        self.assertLess(names.index("dependency-promote"), names.index("dispatch"))
         self.assertLess(names.index("review"), names.index("local-validate"))
         self.assertLess(names.index("review"), names.index("semantic-review"))
         self.assertLess(names.index("local-validate"), names.index("deployed-validate"))
@@ -131,10 +133,70 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("repos.txt", command.args)
         self.assertIn("--candidate-label", command.args)
         self.assertIn("status:ready", command.args)
+        self.assertIn("status:draft", command.args)
+        self.assertIn("agent:decomposition-required", command.args)
         self.assertIn("--dry-run", command.args)
         self.assertIsNotNone(command.summary_file)
         assert command.summary_file is not None
         self.assertEqual(command.summary_file.name, "decompose-cycle-1.json")
+
+    def test_dry_run_dispatch_command_cannot_launch_mutating_orchestrator_path(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            ["--dry-run", "--repos-file", "repos.txt", "--auto-queue-label", "status:ready"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repos = Path(tmp) / "repos.txt"
+            repos.write_text("owner/repo\n", encoding="utf-8")
+            args.repos_file = str(repos)
+            commands = self.loop.build_dispatch_commands(args, Path(tmp), "chain", 1)
+
+        self.assertEqual(len(commands), 1)
+        command = commands[0].args
+        self.assertIn("atlas-agent-orchestrator", command[0])
+        self.assertIn("--dry-run", command)
+        self.assertNotIn("--publish", command)
+        self.assertNotIn("--auto-create-missing-base", command)
+        self.assertNotIn("--triage-apply-stale", command)
+        self.assertNotIn("--triage-approve-review-before-dispatch", command)
+
+    def test_dependency_promote_uses_owner_number_when_projects_file_is_absent(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            ["--dry-run", "--repos-file", "repos.txt", "--project-owner", "Instablinds", "--project-number", "1"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_dependency_promote_command(args, Path(tmp), "chain", 1)
+            projects_index = command.args.index("--projects-file") + 1
+            projects_file = Path(command.args[projects_index])
+
+            self.assertEqual(projects_file.read_text(encoding="utf-8"), "Instablinds/1\n")
+            self.assertNotIn("None", command.args)
+
+    def test_finalize_command_receives_repos_file(self) -> None:
+        args = self.loop.build_parser().parse_args(["--dry-run", "--repos-file", "repos.txt"])
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_finalize_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("--repos-file", command.args)
+        repos_index = command.args.index("--repos-file") + 1
+        self.assertEqual(command.args[repos_index], "repos.txt")
+
+    def test_decompose_command_creates_subissues_by_default_when_apply_is_used(self) -> None:
+        args = self.loop.build_parser().parse_args(["--apply", "--repos-file", "repos.txt"])
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_decompose_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("--apply", command.args)
+        self.assertIn("--create-subissues", command.args)
+
+    def test_decompose_create_subissues_can_be_disabled(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            ["--apply", "--no-decompose-create-subissues", "--repos-file", "repos.txt"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_decompose_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("--apply", command.args)
+        self.assertNotIn("--create-subissues", command.args)
 
     def test_chain_continues_to_summary_when_no_pr_is_approved(self) -> None:
         if hasattr(self.loop, "should_continue_to_summary"):
@@ -508,6 +570,50 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("--projects-file", command.args)
         self.assertIn(str(projects_file), command.args)
         self.assertNotIn("--owner", command.args)
+
+    def test_dependency_promote_apply_defaults_to_apply_or_review_apply(self) -> None:
+        self.assertTrue(
+            self.loop.dependency_promote_apply_enabled(
+                types.SimpleNamespace(apply=True, review_apply=False, dependency_promote_apply=None)
+            )
+        )
+        self.assertTrue(
+            self.loop.dependency_promote_apply_enabled(
+                types.SimpleNamespace(apply=False, review_apply=True, dependency_promote_apply=None)
+            )
+        )
+        self.assertFalse(
+            self.loop.dependency_promote_apply_enabled(
+                types.SimpleNamespace(apply=True, review_apply=True, dependency_promote_apply=False)
+            )
+        )
+
+    def test_dependency_promote_command_runs_before_dispatch_with_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repos_file = Path(tmp) / "repos.txt"
+            projects_file = Path(tmp) / "projects.txt"
+            repos_file.write_text("owner/repo\n", encoding="utf-8")
+            projects_file.write_text("owner/2\n", encoding="utf-8")
+            args = types.SimpleNamespace(
+                repos_file=str(repos_file),
+                projects_file=str(projects_file),
+                project_item_limit=50,
+                dependency_promote_apply=False,
+                apply=True,
+                review_apply=True,
+            )
+
+            command = self.loop.build_dependency_promote_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("atlas-agent-dependency-promote", command.args[0])
+        self.assertIn("--repos-file", command.args)
+        self.assertIn(str(repos_file), command.args)
+        self.assertIn("--projects-file", command.args)
+        self.assertIn(str(projects_file), command.args)
+        self.assertIn("--dry-run", command.args)
+        self.assertIsNotNone(command.summary_file)
+        assert command.summary_file is not None
+        self.assertEqual(command.summary_file.name, "dependency-promote-cycle-1.json")
 
 
 if __name__ == "__main__":

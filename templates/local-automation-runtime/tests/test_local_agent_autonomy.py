@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -49,6 +50,7 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         cls.worker = load_script("atlas_agent_worker_test", "atlas-agent-worker")
         cls.admin = load_script("atlas_agent_admin_test", "atlas-agent-admin")
         cls.finalize = load_script("atlas_agent_finalize_test", "atlas-agent-finalize")
+        cls.review = load_script("atlas_agent_review_test", "atlas-agent-review")
         cls.reconcile = load_script("atlas_agent_reconcile_test", "atlas-agent-reconcile")
         cls.project_reconcile = load_script("atlas_agent_project_reconcile_test", "atlas-agent-project-reconcile")
         cls.semantic_review = load_script("atlas_agent_semantic_review_test", "atlas-agent-semantic-review")
@@ -103,6 +105,10 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         body = "Manual gates remaining: `none`\nManual gates remaining: `review interrupted job`"
 
         self.assertTrue(self.triage.body_has_nonempty_field(body, "Manual gates remaining"))
+
+    def test_review_does_not_treat_unbackticked_manual_gate_none_as_manual_validation(self) -> None:
+        self.assertFalse(self.review.issue_has_manual_validation(issue(body="Manual gates remaining: none")))
+        self.assertFalse(self.review.issue_has_manual_validation(issue(body="Manual gates remaining: `none`")))
 
     def test_approve_review_before_dispatch_removes_human_and_terminal_labels(self) -> None:
         calls: list[list[str]] = []
@@ -195,6 +201,59 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertIn("missing one-point metadata", reasons)
 
+    def test_orchestrator_blocks_dependencies_section_without_runtime_field(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(body="## Dependencies\n- owner/repo#2\n")
+        )
+
+        self.assertIn("dependencies section without Open dependencies field", reasons)
+
+    def test_orchestrator_blocks_later_nonempty_open_dependencies_after_none(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(body="- Open dependencies: `none`\n- Open dependencies: `owner/repo#2`")
+        )
+
+        self.assertIn("open dependencies", reasons)
+
+    def test_orchestrator_blocks_multiline_open_dependencies_field(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(body="- Open dependencies:\n  - owner/repo#2\n")
+        )
+
+        self.assertIn("open dependencies", reasons)
+
+    def test_orchestrator_blocks_dispatch_mode_blocked(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(issue(body="- Dispatch mode: `blocked`"))
+
+        self.assertIn("blocked dispatch mode", reasons)
+
+    def test_orchestrator_blocks_issue_ready_false(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(issue(body="- Issue ready: `false`"))
+
+        self.assertIn("issue ready false", reasons)
+
+    def test_orchestrator_blocks_dispatch_guardrails_section(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(body="## Dispatch Guardrails\n- Requires decomposition\n")
+        )
+
+        self.assertIn("dispatch guardrails", reasons)
+
+    def test_orchestrator_blocks_manual_validation_requirements_without_runtime_field(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(body="## Deployed / Manual Validation Requirements\n- Run hosted smoke\n")
+        )
+
+        self.assertIn("manual validation requirements without Manual gates remaining field", reasons)
+
+    def test_orchestrator_blocks_conflicting_point_metadata(self) -> None:
+        reasons = self.orchestrator.hard_non_execution_reasons(
+            issue(labels=["points:1", "points:5"]),
+            require_one_point=True,
+        )
+
+        self.assertIn("conflicting point metadata (points:1, points:5)", reasons)
+
     def test_worker_marks_published_issue_as_pr_open_not_done(self) -> None:
         calls: list[str] = []
         original_run = self.worker.run
@@ -218,6 +277,51 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertTrue(any('--add-label "agent:pr-open"' in call for call in calls))
         self.assertFalse(any('--add-label "agent:done"' in call for call in calls))
+
+    def test_worker_changed_paths_include_staged_untracked_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (repo / "new-file.txt").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            paths, statuses = self.worker.changed_paths(repo)
+
+        self.assertEqual(paths, ["new-file.txt"])
+        self.assertEqual(statuses, ["A"])
+
+    def test_worker_executable_paths_include_staged_untracked_executables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            script = repo / "run.sh"
+            script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            script.chmod(0o755)
+            subprocess.run(["git", "add", "-A"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            paths = self.worker.executable_paths(repo)
+
+        self.assertEqual(paths, ["run.sh"])
+
+    def test_repo_env_overlay_copies_secret_files_into_worktree(self) -> None:
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            overlay = root / "repo-env" / "owner__repo" / "server"
+            overlay.mkdir(parents=True)
+            (overlay / ".env").write_text("SHOPIFY_SHOP=example\n", encoding="utf-8")
+            worktree = root / "worktree"
+            worktree.mkdir()
+            os.environ["AGENT_REPO_ENV_OVERLAY_DIR"] = str(root / "repo-env")
+            try:
+                copied = self.worker.common.apply_repo_env_overlay("owner/repo", worktree)
+                copied_text = (worktree / "server" / ".env").read_text(encoding="utf-8")
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertEqual(copied, ["server/.env"])
+        self.assertEqual(copied_text, "SHOPIFY_SHOP=example\n")
 
     def test_worker_builds_descriptive_pr_body_with_validation_evidence(self) -> None:
         body = self.worker.build_pr_body(
@@ -495,6 +599,15 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertEqual(review_reasons, ["review-before-dispatch requires explicit queueing"])
         self.assertEqual(gate_reasons, ["manual gates remaining"])
+
+    def test_reconcile_allows_unbackticked_none_execution_fields(self) -> None:
+        blockers = self.reconcile.queue_blockers(
+            issue(body="Open dependencies: none\nManual gates remaining: none"),
+            set(),
+        )
+
+        self.assertNotIn("open dependencies", blockers)
+        self.assertNotIn("manual gates remaining", blockers)
 
     def test_finalizer_blocks_pr_linked_to_epic_issue(self) -> None:
         original_issue_view = self.finalize.issue_view

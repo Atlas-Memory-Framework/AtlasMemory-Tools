@@ -26,7 +26,14 @@ HARD_BLOCK_REASONS = {
     "tracking_or_epic",
     "tracker_or_epic_title",
     "tracking_only",
+    "automation_blockers",
+    "blocked_dispatch_mode",
+    "blockers_section",
+    "dependency_projection_mismatch",
     "dependencies_open",
+    "dispatch_guardrails",
+    "issue_ready_false",
+    "manual_validation_requirements",
     "open_dependencies",
     "manual_gates_remaining",
     "untrusted_author",
@@ -37,6 +44,18 @@ BLOCKING_BODY_MARKERS = {
     "wait_human": "next action: `wait_human`",
     "wait_human_live": "live next action: `wait_human`",
     "dependencies_open": "action reason: `dependencies_open`",
+}
+EXECUTION_BLOCKER_REASON_MAP = {
+    "automation blockers": "automation_blockers",
+    "blocked dispatch mode": "blocked_dispatch_mode",
+    "blockers section": "blockers_section",
+    "dependencies section without Open dependencies field": "dependency_projection_mismatch",
+    "dispatch guardrails": "dispatch_guardrails",
+    "issue ready false": "issue_ready_false",
+    "manual gates remaining": "manual_gates_remaining",
+    "manual validation requirements without Manual gates remaining field": "manual_validation_requirements",
+    "manual-review dispatch mode requires explicit queueing": "review_before_dispatch",
+    "open dependencies": "open_dependencies",
 }
 
 
@@ -105,10 +124,13 @@ def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
             continue
         if marker in lowered:
             reasons.append(reason)
-    if body_has_nonempty_field(body, "Open dependencies"):
-        reasons.append("open_dependencies")
-    if body_has_nonempty_field(body, "Manual gates remaining"):
-        reasons.append("manual_gates_remaining")
+    for blocker in common.issue_execution_metadata_blockers(issue):
+        reason = EXECUTION_BLOCKER_REASON_MAP.get(
+            blocker,
+            re.sub(r"[^a-z0-9]+", "_", blocker.lower()).strip("_"),
+        )
+        if reason not in reasons:
+            reasons.append(reason)
     if author not in common.trusted_authors():
         reasons.append("untrusted_author")
     if "agent:failed" in labels and "needs-human" in labels:

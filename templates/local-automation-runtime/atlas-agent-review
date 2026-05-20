@@ -560,9 +560,8 @@ def issue_has_manual_validation(issue: dict[str, Any] | None) -> bool:
     body = str(issue.get("body") or "")
     lowered = body.lower()
     labels = common.label_names(issue)
-    manual_gate = re.search(r"(?im)^\s*(?:-\s*)?manual gates remaining:\s*(?!`?none`?\s*$).+", body)
     return bool(
-        manual_gate
+        common.has_nonempty_body_field(body, "Manual gates remaining")
         or "needs-deployed-validation" in labels
         or "needs-deployed-validation" in lowered
         or "validation scope: `deployed`" in lowered

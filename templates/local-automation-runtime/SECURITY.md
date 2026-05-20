@@ -2,6 +2,7 @@
 
 - Never commit `config.env`; it may contain webhook URLs and account policy.
 - Never commit `codex-home/`; it contains local Codex authentication.
+- Never commit `repo-env/`; it contains local repo-specific environment overlays.
 - Never commit generated `jobs/`, `logs/`, `repos/`, or `state/`.
 - Keep `AGENT_TRUSTED_AUTHORS` narrow.
 - High-risk changes are gated by labels such as `agent:allow-workflows`, `agent:allow-infra`, and `agent:allow-large`.

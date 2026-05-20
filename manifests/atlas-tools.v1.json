@@ -48,6 +48,10 @@
       "path": "skills/plan-to-issues"
     },
     {
+      "name": "project-queue-audit",
+      "path": "skills/project-queue-audit"
+    },
+    {
       "name": "planning-reviews",
       "path": "skills/planning-reviews"
     },
@@ -113,6 +117,10 @@
     "plan-to-issues": [
       "issues-from-plan",
       "github-issue-projection"
+    ],
+    "project-queue-audit": [
+      "manual-dispatch-resolution",
+      "queue-safety-audit"
     ],
     "local-automation-runtime-setup": [
       "runtime-setup"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -41,13 +42,41 @@ def pr_json(repo: str, number: int) -> dict:
     )
 
 
-def configured_commands(repo: str, path: str | None) -> list[str]:
+def config_entry(repo: str, path: str | None) -> dict:
     config_path = Path(path) if path else common.RUNTIME_DIR / "local-validation.json"
     if not config_path.exists():
-        return []
+        return {}
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    commands = data.get(repo) or data.get("*") or []
-    return [str(command) for command in commands if str(command).strip()]
+    raw = data.get(repo) or data.get("*") or []
+    if isinstance(raw, list):
+        return {"commands": raw}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def command_list(entry: dict, *keys: str) -> list[str]:
+    commands: list[str] = []
+    for key in keys:
+        raw = entry.get(key) or []
+        if isinstance(raw, str):
+            raw = [raw]
+        if isinstance(raw, list):
+            commands.extend(str(command) for command in raw if str(command).strip())
+    return commands
+
+
+def configured_install_commands(entry: dict) -> list[str]:
+    return command_list(entry, "install_commands", "setup_commands")
+
+
+def configured_validation_commands(entry: dict) -> list[str]:
+    return command_list(entry, "commands")
+
+
+def configured_commands(repo: str, path: str | None) -> list[str]:
+    entry = config_entry(repo, path)
+    return configured_install_commands(entry) + configured_validation_commands(entry)
 
 
 def inferred_commands(worktree: Path) -> list[str]:
@@ -70,11 +99,25 @@ def clean_worktree(repo: str, pr: dict, job_dir: Path) -> Path:
     fetch = common.run(["git", "fetch", "origin", f"+refs/pull/{number}/head:{pr_ref}"], cwd=repo_path, check=False)
     ref = pr_ref if fetch.returncode == 0 else f"origin/{pr['headRefName']}"
     common.run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_path)
+    overlay_paths = common.apply_repo_env_overlay(repo, worktree)
+    if overlay_paths:
+        (job_dir / "repo-env-overlay.txt").write_text("\n".join(overlay_paths) + "\n", encoding="utf-8")
     (job_dir / "worktree.txt").write_text(str(worktree) + "\n", encoding="utf-8")
     return worktree
 
 
-def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path) -> list[dict]:
+def command_env(repo: str, pr: dict) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(common.read_config())
+    env["REPO"] = repo
+    env["PR_NUMBER"] = str(pr["number"])
+    env["PR_HEAD_SHA"] = str(pr.get("headRefOid") or "")
+    env["PR_HEAD_BRANCH"] = str(pr.get("headRefName") or "")
+    env["PR_BASE_BRANCH"] = str(pr.get("baseRefName") or "")
+    return env
+
+
+def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path, env: dict[str, str]) -> list[dict]:
     results: list[dict] = []
     with (job_dir / "commands.log").open("w", encoding="utf-8") as log:
         for command in commands:
@@ -87,6 +130,7 @@ def run_validation_commands(worktree: Path, commands: list[str], job_dir: Path) 
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                env=env,
             )
             output = proc.stdout or ""
             log.write(output)
@@ -135,7 +179,7 @@ def validate(args: argparse.Namespace) -> int:
             apply_result(repo, number, False, job_dir, str(pr.get("headRefOid") or "unknown"))
         print(f"No local validation commands configured. Artifacts: {job_dir}")
         return 1
-    results = run_validation_commands(worktree, commands, job_dir)
+    results = run_validation_commands(worktree, commands, job_dir, command_env(repo, pr))
     passed = bool(results) and all(result["returncode"] == 0 for result in results)
     common.write_json(job_dir / "validation.json", {"passed": passed, "results": results})
     if args.apply:

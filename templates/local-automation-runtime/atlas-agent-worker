@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -113,8 +114,13 @@ def podman_command():
     return configured or "podman"
 
 
+def podman_userns_segment():
+    parts = shlex.split(podman_command())
+    return "" if parts and parts[0] == "sudo" else "--userns=keep-id "
+
+
 def changed_paths(repo_dir):
-    rows = run("git diff --name-status --diff-filter=ACMRTUXB", cwd=repo_dir).splitlines()
+    rows = run("git diff --cached --name-status --diff-filter=ACDMRTUXB", cwd=repo_dir).splitlines()
     paths = []
     statuses = []
     for row in rows:
@@ -130,7 +136,7 @@ def changed_paths(repo_dir):
 
 
 def executable_paths(repo_dir):
-    out = run("git diff --summary", cwd=repo_dir)
+    out = run("git diff --cached --summary", cwd=repo_dir)
     paths = []
     for line in out.splitlines():
         marker = "create mode 100755 "
@@ -363,7 +369,7 @@ def process_issue(issue, publish):
     base_branch = os.environ.get("AGENT_BASE_BRANCH", "main")
     repos_dir = pathlib.Path(require_env("AGENT_REPOS")).expanduser()
     jobs_dir = pathlib.Path(require_env("AGENT_JOBS")).expanduser()
-    codex_home = pathlib.Path(require_env("AGENT_CODEX_HOME")).expanduser()
+    require_env("AGENT_CODEX_HOME")
     image = require_env("AGENT_CODEX_IMAGE")
 
     number = issue["number"]
@@ -406,31 +412,39 @@ def process_issue(issue, publish):
 
         base_sha = run("git rev-parse HEAD", cwd=worktree_dir).strip()
         run(f"git checkout -B {shlex.quote(branch)}", cwd=worktree_dir)
+        overlay_paths = common.apply_repo_env_overlay(repo, worktree_dir)
+        if overlay_paths:
+            (job_dir / "repo-env-overlay.txt").write_text("\n".join(overlay_paths) + "\n", encoding="utf-8")
 
         profile_args = common.codex_profile_shell_args("implementation")
         profile_segment = f"{profile_args} " if profile_args else ""
-        codex_cmd = (
-            f"{podman_command()} run --rm "
-            "--userns=keep-id "
-            "--network=slirp4netns "
-            f"-v {quote_path(codex_home)}:/home/agent/.codex:ro,Z "
-            f"-v {quote_path(worktree_dir)}:/work:Z "
-            f"-v {quote_path(job_dir)}:/job:Z "
-            f"{shlex.quote(image)} "
-            "bash -lc "
-            + shlex.quote(
-                "cd /work && "
-                f"codex exec {profile_segment}--ephemeral --skip-git-repo-check "
-                "--dangerously-bypass-approvals-and-sandbox - < /job/prompt.md"
+        run_home = common.codex_home_copy(job_dir)
+        try:
+            codex_cmd = (
+                f"{podman_command()} run --rm "
+                f"{podman_userns_segment()}"
+                "--network=slirp4netns "
+                f"-v {quote_path(run_home)}:/home/agent/.codex:Z "
+                f"-v {quote_path(worktree_dir)}:/work:Z "
+                f"-v {quote_path(job_dir)}:/job:Z "
+                f"{shlex.quote(image)} "
+                "bash -lc "
+                + shlex.quote(
+                    "cd /work && "
+                    f"codex exec {profile_segment}--ephemeral --skip-git-repo-check "
+                    "--dangerously-bypass-approvals-and-sandbox - < /job/prompt.md"
+                )
             )
-        )
 
-        codex_log = run(codex_cmd, cwd=worktree_dir, check=False)
+            codex_log = run(codex_cmd, cwd=worktree_dir, check=False)
+        finally:
+            shutil.rmtree(run_home, ignore_errors=True)
         (job_dir / "codex.log").write_text(codex_log, encoding="utf-8")
 
+        run("git add -A", cwd=worktree_dir)
         status = run("git status --short", cwd=worktree_dir)
-        diff_stat = run("git diff --stat", cwd=worktree_dir)
-        diff_text = run("git diff", cwd=worktree_dir)
+        diff_stat = run("git diff --cached --stat", cwd=worktree_dir)
+        diff_text = run("git diff --cached", cwd=worktree_dir)
         (job_dir / "status.txt").write_text(status, encoding="utf-8")
         (job_dir / "diff.stat.txt").write_text(diff_stat, encoding="utf-8")
         (job_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
@@ -445,7 +459,7 @@ def process_issue(issue, publish):
         new_execs = executable_paths(worktree_dir)
         if new_execs:
             policy_errors.extend(f"{path} is a new executable file" for path in new_execs)
-        if any("160000" in line for line in run("git diff --summary", cwd=worktree_dir).splitlines()):
+        if any("160000" in line for line in run("git diff --cached --summary", cwd=worktree_dir).splitlines()):
             policy_errors.append("submodule changes are blocked")
 
         too_large = (len(paths) > max_files or diff_lines > max_lines) and not allow_large

@@ -185,7 +185,7 @@ def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> st
         *common.podman_cmd(),
         "run",
         "--rm",
-        "--userns=keep-id",
+        *common.podman_userns_args(),
         "--network=slirp4netns",
         "-v",
         f"{run_home}:/home/agent/.codex:Z",
