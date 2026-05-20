@@ -142,7 +142,7 @@ class UnattendedLoopTests(unittest.TestCase):
 
     def test_dry_run_dispatch_command_cannot_launch_mutating_orchestrator_path(self) -> None:
         args = self.loop.build_parser().parse_args(
-            ["--dry-run", "--repos-file", "repos.txt", "--auto-queue-label", "status:ready"]
+            ["--dry-run", "--publish", "--repos-file", "repos.txt", "--auto-queue-label", "status:ready"]
         )
         with tempfile.TemporaryDirectory() as tmp:
             repos = Path(tmp) / "repos.txt"
@@ -158,6 +158,43 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertNotIn("--auto-create-missing-base", command)
         self.assertNotIn("--triage-apply-stale", command)
         self.assertNotIn("--triage-approve-review-before-dispatch", command)
+
+    def test_dry_run_overrides_mutating_stage_apply_flags(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            [
+                "--dry-run",
+                "--apply",
+                "--review-apply",
+                "--merge",
+                "--close-issues",
+                "--project-reconcile-apply",
+                "--dependency-promote-apply",
+                "--decompose-apply",
+                "--decompose-create-subissues",
+                "--local-validation-apply",
+                "--semantic-review-apply",
+                "--deployed-validation-apply",
+            ]
+        )
+
+        self.assertFalse(self.loop.reconcile_apply_enabled(args))
+        self.assertFalse(self.loop.project_reconcile_apply_enabled(args))
+        self.assertFalse(self.loop.decompose_apply_enabled(args))
+        self.assertFalse(self.loop.decompose_create_subissues_enabled(args))
+        self.assertFalse(self.loop.dependency_promote_apply_enabled(args))
+        self.assertFalse(self.loop.local_validation_apply_enabled(args))
+        self.assertFalse(self.loop.semantic_review_apply_enabled(args))
+        self.assertFalse(self.loop.deployed_validation_apply_enabled(args))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            chain_dir = Path(tmp)
+            review = self.loop.build_review_command(args, chain_dir, "chain", 1, "dry")
+            finalize = self.loop.build_finalize_command(args, chain_dir, "chain", 1)
+
+        self.assertNotIn("--apply", review.args)
+        self.assertNotIn("--apply", finalize.args)
+        self.assertNotIn("--merge", finalize.args)
+        self.assertNotIn("--close-issues", finalize.args)
 
     def test_dependency_promote_uses_owner_number_when_projects_file_is_absent(self) -> None:
         args = self.loop.build_parser().parse_args(

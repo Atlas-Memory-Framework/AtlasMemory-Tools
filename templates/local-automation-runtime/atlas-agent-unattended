@@ -132,7 +132,7 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
                 "--repos-file",
                 str(shard_file),
             ]
-            if args.publish:
+            if args.publish and not args.dry_run:
                 cmd.extend(
                     [
                         "--inspect-failed",
@@ -145,7 +145,7 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
                 cmd.append("--dry-run")
             if args.require_one_point:
                 cmd.append("--require-one-point")
-            if args.publish:
+            if args.publish and not args.dry_run:
                 cmd.insert(2, "--publish")
             if args.post_triage_teams_per_repo:
                 cmd.extend(["--triage-teams-preview", "--triage-post-teams"])
@@ -163,6 +163,8 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
 
 
 def reconcile_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "reconcile_apply", None)
     if configured is not None:
         return bool(configured)
@@ -191,6 +193,8 @@ def build_reconcile_command(args: argparse.Namespace, chain_dir: Path, chain_id:
 
 
 def project_reconcile_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "project_reconcile_apply", None)
     if configured is not None:
         return bool(configured)
@@ -221,6 +225,8 @@ def build_project_reconcile_command(args: argparse.Namespace, chain_dir: Path, c
 
 
 def decompose_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "decompose_apply", None)
     if configured is not None:
         return bool(configured)
@@ -228,6 +234,8 @@ def decompose_apply_enabled(args: argparse.Namespace) -> bool:
 
 
 def decompose_create_subissues_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "decompose_create_subissues", None)
     if configured is not None:
         return bool(configured)
@@ -263,6 +271,8 @@ def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id:
 
 
 def dependency_promote_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "dependency_promote_apply", None)
     if configured is not None:
         return bool(configured)
@@ -310,7 +320,7 @@ def build_review_command(args: argparse.Namespace, chain_dir: Path, chain_id: st
         "--summary",
         str(summary_file),
     ]
-    if args.review_apply:
+    if args.review_apply and not args.dry_run:
         cmd.append("--apply")
     if args.allow_no_checks:
         cmd.append("--allow-no-checks")
@@ -333,11 +343,11 @@ def build_finalize_command(args: argparse.Namespace, chain_dir: Path, chain_id: 
         "--summary",
         str(summary_file),
     ]
-    if args.apply:
+    if args.apply and not args.dry_run:
         cmd.append("--apply")
-    if args.merge:
+    if args.merge and not args.dry_run:
         cmd.append("--merge")
-    if args.close_issues:
+    if args.close_issues and not args.dry_run:
         cmd.append("--close-issues")
     if args.allow_no_checks:
         cmd.append("--allow-no-checks")
@@ -386,6 +396,8 @@ def semantic_review_targets_from_summary(path: Path, limit: int) -> list[str]:
 
 
 def semantic_review_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "semantic_review_apply", None)
     if configured is not None:
         return bool(configured)
@@ -478,6 +490,8 @@ def build_local_validate_commands(
 
 
 def local_validation_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "local_validation_apply", None)
     if configured is not None:
         return bool(configured)
@@ -522,6 +536,8 @@ def build_deployed_validate_commands(
 
 
 def deployed_validation_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
     configured = getattr(args, "deployed_validation_apply", None)
     if configured is not None:
         return bool(configured)
@@ -860,7 +876,7 @@ def build_repair_commands(
     for target in targets:
         repo, number = common.pr_ref_parts(target)
         cmd = [str(common.RUNTIME_DIR / "atlas-agent-pr-repair"), target]
-        if not args.apply or args.repair_dry_run:
+        if args.dry_run or not args.apply or args.repair_dry_run:
             cmd.append("--dry-run")
         commands.append(
             CommandSpec(
