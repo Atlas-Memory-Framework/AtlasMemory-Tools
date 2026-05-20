@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -229,11 +230,47 @@ def child_labels(parent: dict[str, Any], child: dict[str, Any]) -> list[str]:
     return sorted(labels)
 
 
+def inferred_write_scope(body: str) -> list[str]:
+    if common.markdown_section_items(body, "Write Scope"):
+        return []
+    match = re.search(r"(?im)^Scope:\s*(?P<scope>.+?)\s*$", body)
+    if not match:
+        return []
+    scope = match.group("scope").strip().strip("`")
+    scope = re.sub(r"\s+only$", "", scope, flags=re.IGNORECASE).strip()
+    return [scope] if scope else []
+
+
+def inferred_validation_commands(body: str) -> list[str]:
+    if common.markdown_section_items(body, "Validation Commands"):
+        return []
+    match = re.search(r"(?ims)^Validation:\s*\n(?P<body>.*?)(?=^\w[^:\n]*:\s*$|^##\s+|\Z)", body)
+    if not match:
+        return []
+    commands: list[str] = []
+    for raw in match.group("body").splitlines():
+        line = raw.strip()
+        if not line:
+            break
+        if line.startswith("-"):
+            line = line.lstrip("-").strip()
+        if line:
+            commands.append(line)
+    return commands
+
+
 def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
     dependencies = parent_field_text(parent, "Open dependencies")
     manual_gates = parent_field_text(parent, "Manual gates remaining")
     blocked = dependencies != "none" or manual_gates != "none"
     body = str(child.get("body") or "").rstrip()
+    inferred_sections: list[str] = []
+    scope = inferred_write_scope(body)
+    if scope:
+        inferred_sections.extend(["## Write Scope", *[f"- `{item}`" for item in scope], ""])
+    validation = inferred_validation_commands(body)
+    if validation:
+        inferred_sections.extend(["## Validation Commands", *[f"- {item}" for item in validation], ""])
     metadata = [
         "## Automation Manifest Metadata",
         "- Suggested points: `1`",
@@ -245,6 +282,7 @@ def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
         f"- Open dependencies: `{dependencies}`",
         f"- Manual gates remaining: `{manual_gates}`",
         "",
+        *inferred_sections,
     ]
     return "\n".join(
         [

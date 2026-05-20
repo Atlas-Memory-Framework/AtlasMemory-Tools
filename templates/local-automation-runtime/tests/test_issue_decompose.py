@@ -115,6 +115,30 @@ class IssueDecomposeTests(unittest.TestCase):
         self.assertIn("- Open dependencies: `#7; #9`", body)
         self.assertIn("- Dispatch recommendation: `dependency-gated`", body)
 
+    def test_child_body_infers_canonical_scope_and_validation_sections(self) -> None:
+        parent = issue(
+            body="""## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            labels=["points:5"],
+        )
+        child = {
+            "body": """Parent: #13
+Scope: package.json only
+
+Validation:
+- Run npm test
+- Confirm git diff is limited
+""",
+            "labels": ["points:1", "status:ready"],
+        }
+
+        body = self.decompose.child_body(parent, "owner/repo", child)
+
+        self.assertIn("## Write Scope\n- `package.json`", body)
+        self.assertIn("## Validation Commands\n- Run npm test\n- Confirm git diff is limited", body)
+
     def test_dry_run_writes_summary_without_mutations(self) -> None:
         original_candidates = self.decompose.candidate_issues
         self.decompose.candidate_issues = lambda _repo, _label, _limit: [
