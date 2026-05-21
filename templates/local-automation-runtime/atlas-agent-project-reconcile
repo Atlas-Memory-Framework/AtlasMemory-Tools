@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ class ProjectConfig:
     status_options: dict[str, str]
     execution_state_field_id: str | None
     execution_state_options: dict[str, str]
+    fields: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -41,6 +42,7 @@ class ProjectDecision:
     status_to: str
     reasons: list[str]
     child_refs: list[str]
+    field_updates: dict[str, str] | None = None
 
 
 def project_targets(path: str | None, owner: str, project_number: int) -> list[tuple[str, int]]:
@@ -84,6 +86,7 @@ def project_fields(owner: str, project_number: int) -> list[dict[str, Any]]:
 def project_config(owner: str, project_number: int) -> ProjectConfig:
     info = project_info(owner, project_number)
     fields = project_fields(owner, project_number)
+    fields_by_name = {str(field.get("name")): field for field in fields}
     status_field = next((field for field in fields if field.get("name") == "Status"), None)
     if not status_field:
         raise RuntimeError("Project Status field was not found")
@@ -96,6 +99,7 @@ def project_config(owner: str, project_number: int) -> ProjectConfig:
         execution_state_options={
             str(option["name"]): str(option["id"]) for option in (execution_field or {}).get("options") or []
         },
+        fields=fields_by_name,
     )
 
 
@@ -120,6 +124,266 @@ def issue_ref(item: dict[str, Any]) -> str:
     if not key:
         return "unknown"
     return f"{key[0]}#{key[1]}"
+
+
+def item_value(item: dict[str, Any], field: str) -> str:
+    key = field[:1].lower() + field[1:]
+    value = item.get(key)
+    if value is None:
+        value = item.get(field)
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(str(part) for part in value if str(part).strip())
+    return str(value)
+
+
+def first_body_field(body: str, *fields: str) -> str:
+    for field in fields:
+        for value in common.body_field_values(body, field):
+            cleaned = value.strip().strip("`").strip()
+            if cleaned and cleaned.lower() not in common.NONE_FIELD_VALUES:
+                return cleaned
+    return ""
+
+
+def labels_for_item(item: dict[str, Any]) -> set[str]:
+    labels: set[str] = set()
+    for label in item.get("labels") or []:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            labels.add(str(name))
+    return labels
+
+
+def issue_title(item: dict[str, Any]) -> str:
+    return str((item.get("content") or {}).get("title") or item.get("title") or "")
+
+
+def bracket_source_id(title: str) -> str:
+    match = re.match(r"^\[([^\]]+)\]", title.strip())
+    return match.group(1).strip() if match else ""
+
+
+def normalized_workstream(labels: set[str], title: str) -> str:
+    for label in sorted(labels):
+        if label.startswith("workstream:"):
+            return label.split(":", 1)[1].strip().upper()
+    source_id = bracket_source_id(title)
+    if source_id:
+        parts = source_id.split("-")
+        if len(parts) >= 3 and parts[0].upper().startswith("WS"):
+            return "-".join(parts[:3]).upper()
+    return ""
+
+
+def item_type_from(labels: set[str], title: str) -> str:
+    if "type:epic" in labels or title.startswith("[Epic]"):
+        return "Epic"
+    if "type:tracker" in labels or title.startswith("[Tracker]"):
+        return "Tracker"
+    if "type:spike" in labels:
+        return "Spike"
+    if "type:story" in labels or bracket_source_id(title):
+        return "Story"
+    return ""
+
+
+def gate_tier_from(labels: set[str]) -> str:
+    for label in sorted(labels):
+        if label.startswith("tier:t"):
+            return label.split(":", 1)[1].upper()
+    return ""
+
+
+def section_text(body: str, heading: str) -> str:
+    pattern = rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(?P<body>.*?)(?=^##\s+|\Z)"
+    match = re.search(pattern, body)
+    if not match:
+        return ""
+    items: list[str] = []
+    for raw in match.group("body").splitlines():
+        line = raw.strip()
+        if not line:
+            if items:
+                break
+            continue
+        if not line.startswith("-"):
+            if items:
+                break
+            continue
+        item = line.lstrip("-").strip().strip("`").strip()
+        if item and item.lower() not in common.NONE_FIELD_VALUES:
+            items.append(item)
+    return "\n".join(items)
+
+
+def issue_ready_from(body: str, labels: set[str]) -> str:
+    raw = first_body_field(body, "Issue ready").lower()
+    if raw == "true":
+        return "Ready"
+    if raw == "false":
+        return "Blocked"
+    if "status:ready" in labels or "agent:ready" in labels:
+        return "Ready"
+    if "status:blocked" in labels:
+        return "Blocked"
+    return ""
+
+
+def latest_pr_for_issue(repo: str, number: int) -> dict[str, Any] | None:
+    prs = common.gh_json_or_none(
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "all",
+            "--search",
+            f"#{number}",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,url,state,isDraft,mergedAt,labels,updatedAt,headRefName",
+        ],
+        retries=2,
+    ) or []
+    title_prefix = f"agent: #{number} "
+    head_prefix = f"agent/issue-{number}/"
+    for pr in prs:
+        title = str(pr.get("title") or "")
+        head = str(pr.get("headRefName") or "")
+        if title.startswith(title_prefix) or head.startswith(head_prefix):
+            return pr
+    return None
+
+
+def pr_label_names(pr: dict[str, Any] | None) -> set[str]:
+    labels: set[str] = set()
+    for label in (pr or {}).get("labels") or []:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            labels.add(str(name))
+    return labels
+
+
+def desired_metadata(item: dict[str, Any], issue_state_value: str, pr: dict[str, Any] | None) -> dict[str, str]:
+    content = item.get("content") or {}
+    body = str(content.get("body") or "")
+    title = issue_title(item)
+    labels = labels_for_item(item)
+    repo = str(content.get("repository") or "")
+    points = common.issue_points({"body": body, "labels": [{"name": label} for label in labels]})
+    dispatch_mode = first_body_field(body, "Dispatch mode")
+    dispatch_recommendation = first_body_field(body, "Dispatch recommendation")
+    target_repo = first_body_field(body, "Target repo(s)", "Target repo") or repo
+    execution_repo = first_body_field(body, "Execution repo") or target_repo
+    pr_state = str((pr or {}).get("state") or "").upper()
+    pr_labels = pr_label_names(pr)
+    is_closed = issue_state_value == "CLOSED"
+    has_pr = bool(pr)
+    has_open_pr = pr_state == "OPEN"
+    updates: dict[str, str] = {
+        "ItemType": item_type_from(labels, title),
+        "ExecutionState": item_type_from(labels, title),
+        "Workstream": normalized_workstream(labels, title),
+        "TargetRepo": target_repo,
+        "ExecutionRepo": execution_repo,
+        "BaseBranch": first_body_field(body, "Base branch"),
+        "SourceId": bracket_source_id(title),
+        "GateTier": gate_tier_from(labels),
+        "DispatchMode": dispatch_mode,
+        "DispatchRecommendation": dispatch_recommendation,
+        "IssueReady": issue_ready_from(body, labels),
+        "WriteScope": section_text(body, "Write Scope"),
+        "Validation": section_text(body, "Validation Commands"),
+    }
+    if points is not None:
+        updates["Size"] = str(points)
+        if points == 1 or "agent:one-point" in labels:
+            updates["OnePRContract"] = "Yes"
+    if is_closed:
+        updates["Status"] = "Done"
+        updates["AutomationState"] = "Done"
+        if has_pr:
+            updates["ReviewVerdict"] = "Merged" if pr_state == "MERGED" else "Validated"
+    elif has_open_pr:
+        updates["Status"] = "In Progress"
+        updates["AutomationState"] = "PR Open"
+        updates["ReviewVerdict"] = "Approved" if "agent:review-approved" in pr_labels else "Pending"
+    elif "agent:failed" in labels:
+        updates["AutomationState"] = "Failed"
+    elif "agent:running" in labels:
+        updates["Status"] = "In Progress"
+        updates["AutomationState"] = "Running"
+    elif "status:blocked" in labels or issue_ready_from(body, labels) == "Blocked":
+        updates["AutomationState"] = "Blocked"
+    elif issue_ready_from(body, labels) == "Ready":
+        updates["AutomationState"] = "Ready"
+    if has_pr:
+        updates["ActivePR"] = str(pr.get("url") or "")
+    return {field: value for field, value in updates.items() if value}
+
+
+ALWAYS_RECONCILE_FIELDS = {"Status", "AutomationState", "ActivePR", "ReviewVerdict"}
+
+
+def metadata_decisions(
+    owner: str,
+    project_number: int,
+    config: ProjectConfig,
+    items: list[dict[str, Any]],
+    issue_states: dict[tuple[str, int], str],
+    *,
+    hydrate_metadata: bool,
+) -> list[ProjectDecision]:
+    if not hydrate_metadata or not config.fields:
+        return []
+    decisions: list[ProjectDecision] = []
+    for item in items:
+        key = issue_key(item)
+        if not key:
+            continue
+        repo, number = key
+        pr = latest_pr_for_issue(repo, number)
+        desired = desired_metadata(item, issue_states.get(key, "UNKNOWN"), pr)
+        field_updates: dict[str, str] = {}
+        for field, value in desired.items():
+            if field not in config.fields:
+                continue
+            current = item_value(item, field)
+            if field in ALWAYS_RECONCILE_FIELDS:
+                if current != value:
+                    field_updates[field] = value
+            elif not current:
+                field_updates[field] = value
+        if not field_updates:
+            continue
+        decisions.append(
+            ProjectDecision(
+                owner=owner,
+                project_number=project_number,
+                project_id=config.project_id,
+                item_id=str(item["id"]),
+                repo=repo,
+                number=number,
+                title=issue_title(item),
+                action="hydrate-metadata",
+                status_from=str(item.get("status") or ""),
+                status_to=str(field_updates.get("Status") or item.get("status") or ""),
+                reasons=["Project issue row metadata is missing or stale"],
+                child_refs=[],
+                field_updates=field_updates,
+            )
+        )
+    return decisions
 
 
 def issue_url(item: dict[str, Any]) -> str:
@@ -171,7 +435,14 @@ def target_status_for_children(children: list[dict[str, Any]], issue_states: dic
     return "Todo"
 
 
-def decide(owner: str, project_number: int, config: ProjectConfig, items: list[dict[str, Any]]) -> list[ProjectDecision]:
+def decide(
+    owner: str,
+    project_number: int,
+    config: ProjectConfig,
+    items: list[dict[str, Any]],
+    *,
+    hydrate_metadata: bool = True,
+) -> list[ProjectDecision]:
     issue_states: dict[tuple[str, int], str] = {}
     for item in items:
         key = issue_key(item)
@@ -184,7 +455,14 @@ def decide(owner: str, project_number: int, config: ProjectConfig, items: list[d
         for url in parent_urls(item):
             children_by_parent.setdefault(url, []).append(item)
 
-    decisions: list[ProjectDecision] = []
+    decisions: list[ProjectDecision] = metadata_decisions(
+        owner,
+        project_number,
+        config,
+        items,
+        issue_states,
+        hydrate_metadata=hydrate_metadata,
+    )
     for parent_url, children in children_by_parent.items():
         parent = by_url.get(parent_url)
         if not parent or not is_epic_item(parent) or parent.get("status") != "Done":
@@ -212,29 +490,50 @@ def decide(owner: str, project_number: int, config: ProjectConfig, items: list[d
                 status_to=target_status,
                 reasons=[f"{len(incomplete)} child item(s) are not complete"],
                 child_refs=[issue_ref(child) for child in incomplete],
+                field_updates={"Status": target_status},
             )
         )
     return decisions
 
 
-def apply_decision(decision: ProjectDecision, config: ProjectConfig) -> None:
-    option_id = config.status_options[decision.status_to]
+def project_field_value_args(field_name: str, field: dict[str, Any], value: str) -> list[str]:
+    if not value:
+        return ["--clear"]
+    if field_name == "Size":
+        return ["--number", value]
+    options = {str(option.get("name")): str(option.get("id")) for option in field.get("options") or []}
+    if options:
+        option_id = options.get(value)
+        if not option_id:
+            raise RuntimeError(f"Project field {field_name} has no option {value!r}")
+        return ["--single-select-option-id", option_id]
+    return ["--text", value]
+
+
+def apply_project_field(config: ProjectConfig, item_id: str, field_name: str, value: str) -> None:
+    field = config.fields.get(field_name)
+    if not field:
+        return
     common.run(
         [
             "gh",
             "project",
             "item-edit",
             "--id",
-            decision.item_id,
+            item_id,
             "--project-id",
-            decision.project_id,
+            config.project_id,
             "--field-id",
-            config.status_field_id,
-            "--single-select-option-id",
-            option_id,
+            str(field["id"]),
+            *project_field_value_args(field_name, field, value),
         ],
         retries=3,
     )
+
+
+def apply_decision(decision: ProjectDecision, config: ProjectConfig) -> None:
+    for field_name, value in (decision.field_updates or {}).items():
+        apply_project_field(config, decision.item_id, field_name, value)
 
 
 def write_summary(path: str, decisions: list[ProjectDecision]) -> None:
@@ -254,6 +553,7 @@ def write_summary(path: str, decisions: list[ProjectDecision]) -> None:
                     "status_to": decision.status_to,
                     "reasons": decision.reasons,
                     "child_refs": decision.child_refs,
+                    "field_updates": decision.field_updates or {},
                 }
                 for decision in decisions
             ],
@@ -270,6 +570,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional file of project targets, one per line as OWNER/NUMBER or 'OWNER NUMBER'.",
     )
     parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument(
+        "--hydrate-metadata",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Populate missing/stale issue row metadata such as ItemType, repos, Workstream, ActivePR, and lifecycle fields.",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument(
         "--dry-run",
@@ -289,7 +595,15 @@ def main() -> None:
     for owner, project_number in project_targets(args.projects_file, args.owner, args.project_number):
         config = project_config(owner, project_number)
         configs[(owner, project_number)] = config
-        decisions.extend(decide(owner, project_number, config, project_items(owner, project_number, args.limit)))
+        decisions.extend(
+            decide(
+                owner,
+                project_number,
+                config,
+                project_items(owner, project_number, args.limit),
+                hydrate_metadata=args.hydrate_metadata,
+            )
+        )
     if args.summary:
         write_summary(args.summary, decisions)
     for decision in decisions:
