@@ -36,6 +36,8 @@ def run(
     retries: int = 1,
     backoff_seconds: float = 3.0,
 ) -> subprocess.CompletedProcess[str]:
+    if args[:1] == ["git"]:
+        env = git_env(env)
     last: subprocess.CompletedProcess[str] | None = None
     for attempt in range(1, max(retries, 1) + 1):
         print("+ " + " ".join(shlex.quote(arg) for arg in args), flush=True)
@@ -65,6 +67,19 @@ def run(
             + (last.stdout or "")
         )
     return last
+
+
+def git_env(env: dict[str, str] | None = None) -> dict[str, str] | None:
+    gh_path = shutil.which("gh")
+    if not gh_path:
+        return env
+    result = os.environ.copy() if env is None else dict(env)
+    result["GIT_CONFIG_COUNT"] = "2"
+    result["GIT_CONFIG_KEY_0"] = "credential.https://github.com.helper"
+    result["GIT_CONFIG_VALUE_0"] = ""
+    result["GIT_CONFIG_KEY_1"] = "credential.https://github.com.helper"
+    result["GIT_CONFIG_VALUE_1"] = f"!{gh_path} auth git-credential"
+    return result
 
 
 def is_transient_github_error(output: str) -> bool:
@@ -223,6 +238,11 @@ def apply_repo_env_overlay(repo: str, worktree: pathlib.Path) -> list[str]:
 def jobs_dir() -> pathlib.Path:
     cfg = read_config()
     return pathlib.Path(os.path.expandvars(cfg.get("AGENT_JOBS", str(RUNTIME_DIR / "jobs"))))
+
+
+def logs_dir() -> pathlib.Path:
+    cfg = read_config()
+    return pathlib.Path(os.path.expandvars(cfg.get("AGENT_LOGS", str(RUNTIME_DIR / "logs"))))
 
 
 def local_worker() -> pathlib.Path:

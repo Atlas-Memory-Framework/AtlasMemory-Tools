@@ -16,6 +16,8 @@ import atlas_agent_common as common
 
 def run(cmd, cwd=None, check=True, capture=True, env=None):
     print(f"+ {cmd}", flush=True)
+    if cmd.strip().startswith("git "):
+        env = common.git_env(env)
     p = subprocess.run(
         cmd,
         cwd=cwd,

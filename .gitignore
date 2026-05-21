@@ -4,3 +4,4 @@ __pycache__/
 .ruff_cache/
 .venv/
 ssot-projects.local.json
+local-automation-runtime-state/

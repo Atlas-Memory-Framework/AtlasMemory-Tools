@@ -153,9 +153,7 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
                 CommandSpec(
                     name=f"{repo}/lane-{lane}",
                     args=cmd,
-                    log_file=common.RUNTIME_DIR
-                    / "logs"
-                    / f"unattended-{chain_id}-{safe_name}-cycle-{cycle}-lane-{lane}.log",
+                    log_file=common.logs_dir() / f"unattended-{chain_id}-{safe_name}-cycle-{cycle}-lane-{lane}.log",
                     summary_file=summary_file,
                 )
             )
@@ -187,7 +185,7 @@ def build_reconcile_command(args: argparse.Namespace, chain_dir: Path, chain_id:
     return CommandSpec(
         name="reconcile",
         args=cmd,
-        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-reconcile-cycle-{cycle}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-reconcile-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -219,7 +217,7 @@ def build_project_reconcile_command(args: argparse.Namespace, chain_dir: Path, c
     return CommandSpec(
         name="project-reconcile",
         args=cmd,
-        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-project-reconcile-cycle-{cycle}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-project-reconcile-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -265,7 +263,7 @@ def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id:
     return CommandSpec(
         name="decompose",
         args=cmd,
-        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-decompose-cycle-{cycle}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-decompose-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -304,7 +302,7 @@ def build_dependency_promote_command(args: argparse.Namespace, chain_dir: Path, 
     return CommandSpec(
         name="dependency-promote",
         args=cmd,
-        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-dependency-promote-cycle-{cycle}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-dependency-promote-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -327,7 +325,7 @@ def build_review_command(args: argparse.Namespace, chain_dir: Path, chain_id: st
     return CommandSpec(
         name=f"review-{pass_name}",
         args=cmd,
-        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-review-cycle-{cycle}-{pass_name}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-review-cycle-{cycle}-{pass_name}.log",
         summary_file=summary_file,
     )
 
@@ -356,7 +354,7 @@ def build_finalize_command(args: argparse.Namespace, chain_dir: Path, chain_id: 
     return CommandSpec(
         name="finalize",
         args=cmd,
-        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-finalize-cycle-{cycle}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-finalize-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -422,8 +420,7 @@ def build_semantic_review_commands(
             CommandSpec(
                 name=target,
                 args=cmd,
-                log_file=common.RUNTIME_DIR
-                / "logs"
+                log_file=common.logs_dir()
                 / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-semantic-review-cycle-{cycle}.log",
             )
         )
@@ -481,8 +478,7 @@ def build_local_validate_commands(
             CommandSpec(
                 name=target,
                 args=cmd,
-                log_file=common.RUNTIME_DIR
-                / "logs"
+                log_file=common.logs_dir()
                 / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-local-validate-cycle-{cycle}.log",
             )
         )
@@ -527,8 +523,7 @@ def build_deployed_validate_commands(
             CommandSpec(
                 name=target,
                 args=cmd,
-                log_file=common.RUNTIME_DIR
-                / "logs"
+                log_file=common.logs_dir()
                 / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-deployed-validate-cycle-{cycle}.log",
             )
         )
@@ -578,7 +573,7 @@ def build_summary_command(args: argparse.Namespace, chain_dir: Path, chain_id: s
     return CommandSpec(
         name="summary",
         args=cmd,
-        log_file=common.RUNTIME_DIR / "logs" / f"unattended-{chain_id}-summary-cycle-{cycle}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-summary-cycle-{cycle}.log",
         summary_file=output_file,
     )
 
@@ -882,8 +877,7 @@ def build_repair_commands(
             CommandSpec(
                 name=target,
                 args=cmd,
-                log_file=common.RUNTIME_DIR
-                / "logs"
+                log_file=common.logs_dir()
                 / f"unattended-{chain_id}-{safe_repo_name(repo)}-pr-{number}-repair-cycle-{cycle}.log",
             )
         )
