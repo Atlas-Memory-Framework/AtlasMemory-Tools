@@ -1,6 +1,6 @@
 ---
 name: review
-description: Perform planning-phase document reviews for the current plan artifact. Use when running /review with mode=zero-context, mode=expert-tech, mode=implementer-readiness, or mode=automation-readiness.
+description: Perform planning-phase document reviews for the current plan artifact. Use when running /review with mode=zero-context, mode=expert-tech, mode=implementer-readiness, mode=human-readability, or mode=automation-readiness.
 ---
 
 # /review
@@ -22,6 +22,11 @@ Read `PlanTier` in the plan's Plan State and calibrate strictness:
 ## Finding severity labeling
 - If a finding is optional and does not block correct implementation, prefix the finding text with `Non-blocker:` (keep the schema and ids unchanged).
 
+## Human meaning standard
+- A plan can be structurally complete and still fail review if it does not explain the real product/system problem, why the work exists now, or how future implementers can verify the result.
+- Product/problem and technical narrative sections should not read like validator output. Authority, projection, dispatch, and source-of-truth mechanics should be confined to execution sections/appendices unless those mechanics are the actual system being changed.
+- Treat "future agents can ask the user" as false. Flag any implementation-critical ambiguity that would require user interaction later.
+
 ## User experience rule (no "go read the plan")
 - When pointing to a problem, include the minimum necessary excerpt in the chat response (copy the relevant line(s) or subsection) so the user can evaluate the finding without opening the plan file.
 - Patch suggestions should cite the section name and quote the line(s) they refer to when practical.
@@ -40,6 +45,18 @@ Return findings using this exact schema (with stable ids):
   - F-004: ...
 - What I would screw up implementing tomorrow:
   - F-005: ...
+
+When the plan being updated is already at `CurrentStage: Reviews` or any approved/complete status, treat this pass as a re-entry audit. Do not trust existing pass claims. Add a compact `Re-entry audit answers` block before findings and answer each item from the plan text:
+
+- What is being built:
+- Why now:
+- Repos involved:
+- What changes first:
+- What must not happen:
+- How work is validated:
+- What remains blocked:
+
+If any answer is missing, generic, contradictory, or only describes planning machinery, emit a finding that points to the section that must be patched before pass/approval state can be preserved.
 
 ### mode=expert-tech
 - Triggered by infra/deploy, auth/identity, data contracts/versioning, concurrency/perf correctness, regulatory/compliance, or high-stakes customer impact
@@ -64,6 +81,29 @@ Return findings using this exact schema (with stable ids):
   - F-002: ...
 - Pass/fail readiness statement:
   - F-003: ...
+
+### mode=human-readability
+Review whether a maintainer can understand the real work without knowing the planning framework. Prefer reviewing rendered HTML if available; otherwise review the markdown directly and say HTML was not run.
+
+Fail the review for:
+- first Problem Definition paragraphs that describe creating/updating a plan rather than a real product/system failure or opportunity
+- missing current broken workflow, desired workflow, why-now, or concrete current-state facts
+- Technical Plan intro that jumps straight to execution/projection mechanics without explaining what changes and why
+- authority-contract, registry, projection, dispatch, or issue-manifest language leaking into product/problem narrative sections
+- vague implementation intent that would make a zero-contact build agent ask what the user wanted
+
+Return findings using this exact schema (with stable ids):
+
+- Product/system clarity:
+  - F-001: ...
+- Technical narrative clarity:
+  - F-002: ...
+- Execution-mechanics leakage:
+  - F-003: ...
+- Strongest remaining ambiguity:
+  - F-004: ...
+- Pass/fail readability statement:
+  - F-005: ...
 
 ### mode=automation-readiness
 Use when `AutomationTarget != none`. Review whether the plan can be projected into bounded issues or consumed by unattended issue-to-PR automation.

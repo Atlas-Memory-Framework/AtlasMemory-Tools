@@ -5,7 +5,7 @@ echo "HOME=$HOME"
 echo "PWD=$PWD"
 echo
 
-for cmd in gh git python3 node npm codex podman distrobox-host-exec; do
+for cmd in gh git python3 node npm playwright codex podman distrobox-host-exec; do
   if command -v "$cmd" >/dev/null 2>&1; then
     printf '%-20s %s\n' "$cmd" "$(command -v "$cmd")"
   else

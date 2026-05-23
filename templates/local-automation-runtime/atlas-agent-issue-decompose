@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -212,6 +213,23 @@ def parent_field_text(parent: dict[str, Any], field: str) -> str:
     return "; ".join(concrete) if concrete else "none"
 
 
+def parent_field_or(parent: dict[str, Any], field: str, fallback: str) -> str:
+    value = parent_field_text(parent, field)
+    return fallback if value == "none" else value
+
+
+def parent_section_text(parent: dict[str, Any], heading: str) -> str:
+    pattern = rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(?P<body>.*?)(?=^##\s+|\Z)"
+    match = re.search(pattern, str(parent.get("body") or ""))
+    if not match:
+        return ""
+    return match.group("body").strip()
+
+
+def parent_source_plan(parent: dict[str, Any]) -> str:
+    return parent_section_text(parent, "Source Plan")
+
+
 def child_blocked_by_parent(parent: dict[str, Any]) -> bool:
     return parent_field_text(parent, "Open dependencies") != "none" or parent_field_text(parent, "Manual gates remaining") != "none"
 
@@ -263,6 +281,21 @@ def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
     dependencies = parent_field_text(parent, "Open dependencies")
     manual_gates = parent_field_text(parent, "Manual gates remaining")
     blocked = dependencies != "none" or manual_gates != "none"
+    dispatch_recommendation = "auto-dispatch"
+    if dependencies != "none":
+        dispatch_recommendation = "dependency-gated"
+    elif manual_gates != "none":
+        dispatch_recommendation = "review-before-dispatch"
+    base_branch = parent_base_branch(parent)
+    target_repo = parent_field_or(parent, "Target repo(s)", repo)
+    execution_repo = parent_field_or(parent, "Execution repo", target_repo)
+    validation_scope = parent_field_or(parent, "Validation scope", "ci")
+    risk_tags = parent_field_text(parent, "Risk tags")
+    highest_tier = parent_field_text(parent, "Highest tier")
+    priority = parent_field_text(parent, "Priority")
+    source_plan = parent_source_plan(parent)
+    parent_epic = parent_section_text(parent, "Parent Epic")
+    named_gates = parent_section_text(parent, "Named Gates")
     body = str(child.get("body") or "").rstrip()
     inferred_sections: list[str] = []
     scope = inferred_write_scope(body)
@@ -271,18 +304,32 @@ def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
     validation = inferred_validation_commands(body)
     if validation:
         inferred_sections.extend(["## Validation Commands", *[f"- {item}" for item in validation], ""])
+    source_plan_section = ["## Source Plan", source_plan, ""] if source_plan else []
+    parent_epic_section = ["## Parent Epic", parent_epic, ""] if parent_epic else []
+    named_gates_section = ["## Named Gates", named_gates, ""] if named_gates else []
     metadata = [
+        *source_plan_section,
         "## Automation Manifest Metadata",
         "- Suggested points: `1`",
         f"- Issue ready: `{'false' if blocked else 'true'}`",
         f"- Dispatch mode: `{'blocked' if blocked else 'agent-ready'}`",
-        f"- Dispatch recommendation: `{'dependency-gated' if blocked else 'auto-dispatch'}`",
+        f"- Dispatch recommendation: `{dispatch_recommendation}`",
+        f"- Validation scope: `{validation_scope}`",
+        f"- Target repo(s): `{target_repo}`",
+        f"- Execution repo: `{execution_repo}`",
+        *([f"- Base branch: `{base_branch}`"] if base_branch else []),
+        *([f"- Risk tags: `{risk_tags}`"] if risk_tags != "none" else []),
+        *([f"- Highest tier: `{highest_tier}`"] if highest_tier != "none" else []),
+        *([f"- Priority: `{priority}`"] if priority != "none" else []),
+        "- One PR contract: `yes`",
         "",
         "## Execution State",
         f"- Open dependencies: `{dependencies}`",
         f"- Manual gates remaining: `{manual_gates}`",
         "",
         *inferred_sections,
+        *parent_epic_section,
+        *named_gates_section,
     ]
     return "\n".join(
         [
@@ -290,12 +337,137 @@ def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
             body,
             "",
             "## Parent Issue",
+            f"Parent issue: #{parent.get('number')}",
             str(parent.get("url") or f"{repo}#{parent.get('number')}"),
             "",
             "## Suggested Draft Metadata",
             "- Suggested points: `1`",
         ]
     )
+
+
+def parent_goal(parent: dict[str, Any]) -> str:
+    body = str(parent.get("body") or "")
+    match = re.search(r"(?ims)^Goal:\s*\n(?P<body>.*?)(?=^\w[^:\n]*:\s*$|^##\s+|\Z)", body)
+    if not match:
+        return str(parent.get("title") or "").strip()
+    lines = [line.strip() for line in match.group("body").splitlines() if line.strip()]
+    return " ".join(lines) or str(parent.get("title") or "").strip()
+
+
+def parent_base_branch(parent: dict[str, Any]) -> str:
+    values = common.body_field_values(str(parent.get("body") or ""), "Base branch")
+    for value in values:
+        branch = value.strip().strip("`")
+        if branch and branch.lower() not in common.NONE_FIELD_VALUES:
+            return branch
+    return os.environ.get("AGENT_BASE_BRANCH") or common.read_config().get("AGENT_BASE_BRANCH", "")
+
+
+def parent_validation(parent: dict[str, Any]) -> list[str]:
+    body = str(parent.get("body") or "")
+    commands = common.markdown_section_items(body, "Validation Commands")
+    if commands:
+        return commands
+    match = re.search(r"(?ims)^Validation:\s*\n(?P<body>.*?)(?=^\w[^:\n]*:\s*$|^##\s+|\Z)", body)
+    if not match:
+        return ["Run the parent issue validation commands applicable to this scope."]
+    parsed: list[str] = []
+    for raw in match.group("body").splitlines():
+        line = raw.strip()
+        if not line:
+            break
+        if line.startswith("-"):
+            line = line.lstrip("-").strip()
+        if line:
+            parsed.append(line)
+    return parsed or ["Run the parent issue validation commands applicable to this scope."]
+
+
+def parent_child_labels(parent: dict[str, Any]) -> list[str]:
+    excluded_prefixes = ("points:", "status:", "agent:")
+    labels: list[str] = []
+    for label in common.label_names(parent):
+        if label.startswith(excluded_prefixes):
+            continue
+        labels.append(label)
+    labels.extend(["points:1", ONE_POINT_LABEL])
+    if not child_blocked_by_parent(parent):
+        labels.append("status:ready")
+    return sorted(set(labels))
+
+
+def chunked_scopes(scopes: list[str], max_children: int) -> list[list[str]]:
+    if len(scopes) <= max_children:
+        return [[scope] for scope in scopes]
+    chunks: list[list[str]] = [[] for _ in range(max_children)]
+    for index, scope in enumerate(scopes):
+        chunks[index % max_children].append(scope)
+    return [chunk for chunk in chunks if chunk]
+
+
+def fallback_children_from_write_scope(parent: dict[str, Any], max_children: int) -> list[dict[str, Any]]:
+    scopes = common.markdown_section_items(str(parent.get("body") or ""), "Write Scope")
+    if not scopes:
+        return []
+    goal = parent_goal(parent)
+    base_branch = parent_base_branch(parent)
+    validation = parent_validation(parent)
+    children: list[dict[str, Any]] = []
+    for chunk in chunked_scopes(scopes, max_children):
+        scope_text = ", ".join(f"`{scope}`" for scope in chunk)
+        first_scope = chunk[0].strip("`")
+        title = f"{parent.get('title')}: {first_scope}"
+        body_lines = [
+            "Goal:",
+            f"Implement the parent issue slice for {scope_text}.",
+            "",
+            *([f"Base branch: `{base_branch}`", ""] if base_branch else []),
+            "Parent context:",
+            goal,
+            "",
+            "## Write Scope",
+            *[f"- `{scope.strip('`')}`" for scope in chunk],
+            "",
+            "Acceptance criteria:",
+            "- Changes are limited to the listed write scope.",
+            "- The implementation satisfies the relevant parent issue contract for this scope.",
+            "- No unrelated behavior, dependency, workflow, or formatting changes are included.",
+            "",
+            "## Validation Commands",
+            *[f"- {item}" for item in validation],
+            "- Confirm git diff is limited to the listed write scope.",
+        ]
+        children.append(
+            {
+                "title": title,
+                "body": "\n".join(body_lines),
+                "labels": parent_child_labels(parent),
+            }
+        )
+    return children
+
+
+def codex_timeout_seconds() -> int:
+    cfg = common.read_config()
+    raw = (
+        os.environ.get("AGENT_CODEX_PLANNING_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_PLANNING_TIMEOUT_SECONDS")
+        or os.environ.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or "900"
+    )
+    try:
+        seconds = int(str(raw).strip().strip('"'))
+    except ValueError:
+        return 900
+    return max(seconds, 1)
+
+
+def with_timeout(cmd: list[str]) -> list[str]:
+    if shutil.which("timeout"):
+        return ["timeout", str(codex_timeout_seconds()), *cmd]
+    return cmd
 
 
 def run_planning_codex(issue: dict[str, Any], job_dir: Path, max_children: int) -> dict[str, Any]:
@@ -305,23 +477,56 @@ def run_planning_codex(issue: dict[str, Any], job_dir: Path, max_children: int) 
     run_home = common.codex_home_copy(job_dir)
     profile_args = common.codex_profile_shell_args("planning")
     profile_segment = f"{profile_args} " if profile_args else ""
-    cmd = [
-        *common.podman_cmd(),
-        "run",
-        "--rm",
-        *common.podman_userns_args(),
-        "--network=slirp4netns",
-        "-v",
-        f"{run_home}:/home/agent/.codex:Z",
-        "-v",
-        f"{job_dir}:/job:Z",
-        common.codex_image(),
-        "bash",
-        "-lc",
-        f"cd /job && codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < decompose-prompt.md",
-    ]
-    proc = common.run(cmd, check=False)
-    shutil.rmtree(run_home, ignore_errors=True)
+    shell_command = (
+        f"cd /job && codex exec {profile_segment}"
+        "--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < decompose-prompt.md"
+    )
+
+    def run_local_codex() -> Any:
+        if not shutil.which("codex"):
+            return None
+        env = os.environ.copy()
+        env["CODEX_HOME"] = str(run_home)
+        return common.run(
+            with_timeout([
+                "bash",
+                "-lc",
+                f"codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < decompose-prompt.md",
+            ]),
+            cwd=job_dir,
+            check=False,
+            env=env,
+        )
+
+    try:
+        cmd = [
+            *common.podman_cmd(),
+            "run",
+            "--rm",
+            *common.podman_userns_args(),
+            "--network=slirp4netns",
+            "-v",
+            f"{run_home}:/home/agent/.codex:Z",
+            "-v",
+            f"{job_dir}:/job:Z",
+            common.codex_image(),
+            "bash",
+            "-lc",
+            shell_command,
+        ]
+        proc = common.run(with_timeout(cmd), check=False)
+        if proc.returncode != 0 and "podman: command not found" in (proc.stdout or "").lower():
+            fallback = run_local_codex()
+            if fallback is not None:
+                proc = fallback
+    except RuntimeError as exc:
+        fallback = run_local_codex()
+        if fallback is None:
+            shutil.rmtree(run_home, ignore_errors=True)
+            return {"children": [], "notes": [str(exc), "local codex fallback is unavailable"]}
+        proc = fallback
+    finally:
+        shutil.rmtree(run_home, ignore_errors=True)
     raw = proc.stdout or ""
     (job_dir / "codex.log").write_text(raw, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
@@ -345,9 +550,95 @@ def create_child_issue(repo: str, parent: dict[str, Any], child: dict[str, Any])
         tmp.unlink(missing_ok=True)
 
 
+def project_targets(path: str | None) -> list[tuple[str, int]]:
+    if not path:
+        return []
+    target_file = Path(path)
+    targets: list[tuple[str, int]] = []
+    for raw in target_file.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "/" in line:
+            owner, raw_number = line.rsplit("/", 1)
+        else:
+            parts = line.split()
+            if len(parts) != 2:
+                raise ValueError(f"Project target must look like OWNER/NUMBER or 'OWNER NUMBER': {raw}")
+            owner, raw_number = parts
+        targets.append((owner.strip(), int(raw_number.strip())))
+    return targets
+
+
+def add_issue_to_projects(issue_url: str, projects_file: str | None) -> list[str]:
+    added: list[str] = []
+    for owner, project_number in project_targets(projects_file):
+        proc = common.run(
+            [
+                "gh",
+                "project",
+                "item-add",
+                str(project_number),
+                "--owner",
+                owner,
+                "--url",
+                issue_url,
+            ],
+            check=False,
+            retries=3,
+        )
+        if proc.returncode == 0:
+            added.append(f"{owner}/{project_number}")
+    return added
+
+
+def record_decomposition_accounting(repo: str, parent: dict[str, Any], created: list[str]) -> dict[str, Any]:
+    parent_points = common.issue_points(parent)
+    child_count = len(created)
+    result = {
+        "parent_points": parent_points,
+        "child_count": child_count,
+        "child_points_total": child_count,
+        "matches_parent_points": parent_points is None or parent_points == child_count,
+    }
+    if parent_points is None:
+        return result
+    body = (
+        "<!-- atlas-agent-decomposition-accounting -->\n"
+        f"Decomposition accounting for issue #{parent.get('number')}.\n\n"
+        f"- Parent suggested points: `{parent_points}`\n"
+        f"- Created one-point children: `{child_count}`\n"
+        f"- Child point total: `{child_count}`\n"
+        f"- Accounting status: `{'matched' if parent_points == child_count else 'mismatch'}`\n\n"
+        "Note: current decomposition slices by bounded write scope, not by forcing child count to equal parent point total. "
+        "A mismatch means operator/planning review should decide whether the parent estimate or child breakdown needs adjustment."
+    )
+    common.run(
+        ["gh", "issue", "comment", str(parent["number"]), "--repo", repo, "--body", body],
+        check=False,
+    )
+    return result
+
+
 def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     ensure_labels(repo)
     number = int(issue["number"])
+    if record["action"] == "already-decomposed":
+        common.run(
+            [
+                "gh",
+                "issue",
+                "edit",
+                str(number),
+                "--repo",
+                repo,
+                "--remove-label",
+                DECOMPOSITION_REQUIRED_LABEL,
+            ],
+            check=False,
+        )
+        record["applied"] = "cleared-stale-decomposition-required"
+        return record
     if record["action"] == "mark-one-point":
         mark_one_point(repo, number)
         record["applied"] = "marked-one-point"
@@ -363,9 +654,18 @@ def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any],
     job_dir = common.jobs_dir() / f"issue-{number}-decompose-{common.now_id()}"
     plan = run_planning_codex(issue, job_dir, args.max_children)
     children = [child for child in plan.get("children") or [] if isinstance(child, dict)]
+    if not children:
+        children = fallback_children_from_write_scope(issue, args.max_children)
+        if children:
+            plan.setdefault("notes", []).append("used deterministic write-scope decomposition fallback")
     created: list[str] = []
+    project_additions: dict[str, list[str]] = {}
     for child in children[: args.max_children]:
-        created.append(create_child_issue(repo, issue, child))
+        child_url = create_child_issue(repo, issue, child)
+        created.append(child_url)
+        added_projects = add_issue_to_projects(child_url, args.projects_file)
+        if added_projects:
+            project_additions[child_url] = added_projects
     if created:
         cmd = [
             "gh",
@@ -384,6 +684,9 @@ def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any],
         common.run(cmd, check=False)
         record["applied"] = "created-subissues"
         record["children"] = created
+        record["decomposition_accounting"] = record_decomposition_accounting(repo, issue, created)
+        if project_additions:
+            record["project_additions"] = project_additions
     else:
         mark_decomposition_required(repo, number, args.candidate_label)
         record["applied"] = "marked-decomposition-required"
@@ -425,6 +728,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max", type=int, default=10)
     parser.add_argument("--max-children", type=int, default=8)
     parser.add_argument("--summary", default=str(common.RUNTIME_DIR / "jobs" / "decompose-summary.json"))
+    parser.add_argument(
+        "--projects-file",
+        help="Optional project targets to add created child issues to, one per line as OWNER/NUMBER.",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(

@@ -31,10 +31,10 @@ The standard execution Project uses these saved view names:
 - `Done Audit`
 
 Saved Project v2 views are a template/UI concern. The helper can verify these names and readable
-configuration through GraphQL with `--ensure-views`, `--check-views`, or `--views-only --apply`.
-GitHub REST can create missing views with layout, filter, and visible fields, but it does not
-document saved-view update, group-by, or sort mutation parameters. The supported full setup path is
-still to configure the canonical template in GitHub UI once, then copy it.
+configuration through GraphQL with `--check-views`. `--ensure-views` is intentionally conservative:
+when saved views are missing it fails with template-copy guidance instead of mutating view layout,
+grouping, or sort state. The supported full setup path is still to configure the canonical template
+in GitHub UI once, then copy it.
 
 Do not treat the canonical Project as a complete reusable template until view verification passes.
 A Project with the standard fields and only `View 1`, or with blank tabs using the standard names,
@@ -56,7 +56,7 @@ Then verify the copied Project:
 python3 skills/github-project/scripts/create_project.py \
   --owner OWNER \
   --title "TITLE" \
-  --ensure-views
+  --check-views
 ```
 
 The same copy path can be used directly through the skill:
@@ -70,6 +70,9 @@ python3 skills/github-project/scripts/create_project.py \
   --template-number 4 \
   --ensure-views
 ```
+
+Use `--apply --ensure-views` only as part of field/template setup. Use `--check-views` for read-only
+verification of an existing copied Project.
 
 Projected issues should be added through `plan-to-issues` with `--project-url` or project
 owner/number arguments. The projection path adds each issue to the Project and then syncs the

@@ -127,4 +127,4 @@ Use the plan's existing identifiers wherever possible:
 
 - Tracking conventions and examples: [reference.md](reference.md)
 - Human workflow notes: [README.md](README.md)
-- Parser and sync script: `scripts/plan_to_issues.py`
+- Parser and sync script: `skills/plan-to-issues/scripts/plan_to_issues.py`

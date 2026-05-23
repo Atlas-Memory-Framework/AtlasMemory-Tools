@@ -115,6 +115,7 @@ PY_COMPILE_FILES = (
     "scripts/verify_harness.py",
     "scripts/verify_repo.py",
     "skills/github-project/scripts/create_project.py",
+    "skills/plan-to-html/scripts/plan_to_html.py",
     "skills/plan-to-issues/scripts/plan_to_issues.py",
     "skills/plan-to-issues/scripts/test_plan_to_issues.py",
     "templates/local-automation-runtime/atlas_agent_common.py",

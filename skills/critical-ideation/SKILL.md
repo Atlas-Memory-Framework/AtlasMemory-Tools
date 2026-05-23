@@ -20,7 +20,7 @@ Challenge the idea to surface hidden risks, weak assumptions, and better alterna
 - Alternatives considered (include one disliked alternative)
 - At least 1 measurable milestone
 - Decision boundary if a real fork exists
- - Draft section content for `## Challenge Artifacts`
+- Draft section content for `## Challenge Artifacts`
 
 ## Sub-agent output contract
 Return a single block in this shape:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -88,6 +89,12 @@ def current_head_semantic_review(pr: dict) -> str:
     return ""
 
 
+def has_merge_conflict(pr: dict) -> bool:
+    merge_state = str(pr.get("mergeStateStatus") or "").upper()
+    mergeable = str(pr.get("mergeable") or "").upper()
+    return merge_state in {"DIRTY", "BLOCKED"} or mergeable == "CONFLICTING"
+
+
 def requested_change_reviews(pr: dict) -> list[dict]:
     requested: list[dict] = []
     for review in pr.get("latestReviews") or []:
@@ -151,6 +158,7 @@ Failed workflow log excerpt:
 
 Instructions:
 - Repair this PR branch only.
+- If the worktree contains merge conflicts with the base branch, resolve them while preserving the PR intent.
 - Keep the change focused on the failing checks, semantic review findings, requested changes, or inline review comments.
 - Do not change secrets, credentials, deployment settings, or unrelated workflows.
 - Run the most relevant local tests you can.
@@ -164,7 +172,15 @@ def verify_repairable_pr(repo: str, pr: dict) -> None:
     head_repo = head_repository_full_name(pr)
     if head_repo and head_repo != repo:
         raise SystemExit(f"Refusing cross-repo PR repair: head repository is {head_repo}, base repository is {repo}.")
-    if pr.get("isDraft") and not current_head_semantic_review(pr) and not requested_change_reviews(pr):
+    labels = common.label_names(pr)
+    has_repair_route = "agent:needs-repair" in labels
+    if (
+        pr.get("isDraft")
+        and not has_repair_route
+        and not has_merge_conflict(pr)
+        and not current_head_semantic_review(pr)
+        and not requested_change_reviews(pr)
+    ):
         checks = pr.get("statusCheckRollup") or []
         failed_checks = [
             check
@@ -175,35 +191,106 @@ def verify_repairable_pr(repo: str, pr: dict) -> None:
             raise SystemExit("Refusing to repair draft/no-evidence PR; route through validation/finalizer first.")
 
 
+def codex_timeout_seconds() -> int:
+    cfg = common.read_config()
+    raw = (
+        os.environ.get("AGENT_CODEX_REPAIR_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_REPAIR_TIMEOUT_SECONDS")
+        or os.environ.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or "1800"
+    )
+    try:
+        seconds = int(str(raw).strip().strip('"'))
+    except ValueError:
+        return 1800
+    return max(seconds, 1)
+
+
+def with_timeout(cmd: list[str]) -> list[str]:
+    if shutil.which("timeout"):
+        return ["timeout", str(codex_timeout_seconds()), *cmd]
+    return cmd
+
+
 def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> str:
     prompt_path = job_dir / "prompt.md"
     prompt_path.write_text(prompt, encoding="utf-8")
     run_home = common.codex_home_copy(job_dir)
     profile_args = common.codex_profile_shell_args("repair")
     profile_segment = f"{profile_args} " if profile_args else ""
-    cmd = [
-        *common.podman_cmd(),
-        "run",
-        "--rm",
-        *common.podman_userns_args(),
-        "--network=slirp4netns",
-        "-v",
-        f"{run_home}:/home/agent/.codex:Z",
-        "-v",
-        f"{repo_path}:/work:Z",
-        "-v",
-        f"{job_dir}:/job:Z",
-        common.codex_image(),
-        "bash",
-        "-lc",
-        f"cd /work && codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < /job/prompt.md",
-    ]
-    proc = common.run(cmd, cwd=repo_path, check=False)
-    shutil.rmtree(run_home, ignore_errors=True)
+    shell_command = (
+        f"cd /work && codex exec {profile_segment}"
+        "--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < /job/prompt.md"
+    )
+
+    def run_local_codex():
+        if not shutil.which("codex"):
+            return None
+        env = os.environ.copy()
+        env["CODEX_HOME"] = str(run_home)
+        return common.run(
+            with_timeout([
+                "bash",
+                "-lc",
+                f"codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < {prompt_path}",
+            ]),
+            cwd=repo_path,
+            check=False,
+            env=env,
+        )
+
+    try:
+        cmd = [
+            *common.podman_cmd(),
+            "run",
+            "--rm",
+            *common.podman_userns_args(),
+            "--network=slirp4netns",
+            "-v",
+            f"{run_home}:/home/agent/.codex:Z",
+            "-v",
+            f"{repo_path}:/work:Z",
+            "-v",
+            f"{job_dir}:/job:Z",
+            common.codex_image(),
+            "bash",
+            "-lc",
+            shell_command,
+        ]
+        proc = common.run(with_timeout(cmd), cwd=repo_path, check=False)
+        if proc.returncode != 0 and "podman: command not found" in (proc.stdout or "").lower():
+            fallback = run_local_codex()
+            if fallback is not None:
+                proc = fallback
+    except RuntimeError:
+        fallback = run_local_codex()
+        if fallback is None:
+            raise
+        proc = fallback
+    finally:
+        shutil.rmtree(run_home, ignore_errors=True)
     (job_dir / "codex.log").write_text(proc.stdout or "", encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError(f"Codex repair failed with status {proc.returncode}; see {job_dir}/codex.log")
     return proc.stdout or ""
+
+
+def reconcile_base_if_needed(pr: dict, repo_path: pathlib.Path, repair_path: pathlib.Path, job_dir: pathlib.Path) -> None:
+    if not has_merge_conflict(pr):
+        return
+    base = str(pr.get("baseRefName") or "").strip()
+    if not base:
+        raise SystemExit("Refusing merge-conflict repair without a base branch.")
+    common.run(["git", "fetch", "origin", base], cwd=repo_path)
+    proc = common.run(["git", "merge", "--no-edit", f"origin/{base}"], cwd=repair_path, check=False)
+    (job_dir / "base-reconcile.log").write_text(proc.stdout or "", encoding="utf-8", errors="replace")
+    if proc.returncode == 0:
+        return
+    unresolved = common.run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=repair_path).stdout.strip()
+    if not unresolved:
+        raise RuntimeError(f"Base reconciliation failed without merge conflicts; see {job_dir}/base-reconcile.log")
+    (job_dir / "merge-conflicts.txt").write_text(unresolved + "\n", encoding="utf-8")
 
 
 def repair(args: argparse.Namespace) -> None:
@@ -217,27 +304,33 @@ def repair(args: argparse.Namespace) -> None:
 
     repo_path = common.ensure_repo(repo)
     head = pr["headRefName"]
-    common.run(["git", "checkout", "-B", head, f"origin/{head}"], cwd=repo_path)
-    checked_out = common.run(["git", "rev-parse", "HEAD"], cwd=repo_path).stdout.strip()
+    repair_path = common.jobs_dir() / "checkouts" / common.safe_repo_name(repo) / f"pr-{number}-repair-{common.now_id()}"
+    repair_path.parent.mkdir(parents=True, exist_ok=True)
+    common.run(["git", "worktree", "add", "--detach", str(repair_path), f"origin/{head}"], cwd=repo_path)
+    checked_out = common.run(["git", "rev-parse", "HEAD"], cwd=repair_path).stdout.strip()
     expected = str(pr.get("headRefOid") or "").strip()
     if expected and checked_out != expected:
         raise SystemExit(f"Refusing to repair wrong checkout: HEAD is {checked_out}, PR head is {expected}")
-    status = common.run(["git", "status", "--short"], cwd=repo_path).stdout.strip()
+    original_head = checked_out
+    status = common.run(["git", "status", "--short"], cwd=repair_path).stdout.strip()
     if status:
         raise SystemExit(f"Refusing to repair with dirty worktree:\n{status}")
+    common.ensure_git_identity(repair_path)
+    reconcile_base_if_needed(pr, repo_path, repair_path, job_dir)
 
     checks = collect_checks(repo, number, job_dir)
     failed_log = collect_failed_run_log(repo, head, job_dir)
     review_comments = collect_review_comments(repo, number, job_dir)
-    run_codex(repo_path, job_dir, build_prompt(pr, checks, failed_log, review_comments, current_head_semantic_review(pr)))
+    run_codex(repair_path, job_dir, build_prompt(pr, checks, failed_log, review_comments, current_head_semantic_review(pr)))
 
-    status = common.run(["git", "status", "--short"], cwd=repo_path).stdout
-    diff_stat = common.run(["git", "diff", "--stat"], cwd=repo_path).stdout
+    status = common.run(["git", "status", "--short"], cwd=repair_path).stdout
+    current_head = common.run(["git", "rev-parse", "HEAD"], cwd=repair_path).stdout.strip()
+    diff_stat = common.run(["git", "diff", "--stat"], cwd=repair_path).stdout
     (job_dir / "status.txt").write_text(status, encoding="utf-8")
     (job_dir / "diff.stat.txt").write_text(diff_stat, encoding="utf-8")
-    (job_dir / "diff.patch").write_text(common.run(["git", "diff"], cwd=repo_path).stdout, encoding="utf-8")
+    (job_dir / "diff.patch").write_text(common.run(["git", "diff"], cwd=repair_path).stdout, encoding="utf-8")
 
-    if not status.strip():
+    if not status.strip() and current_head == original_head:
         common.run(
             [
                 "gh",
@@ -258,9 +351,13 @@ def repair(args: argparse.Namespace) -> None:
         print(diff_stat)
         return
 
-    common.run(["git", "add", "-A"], cwd=repo_path)
-    common.run(["git", "commit", "-m", f"agent: repair PR #{number}"], cwd=repo_path)
-    common.run(["git", "push", "origin", f"HEAD:{head}"], cwd=repo_path)
+    if status.strip():
+        unresolved = common.run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=repair_path).stdout.strip()
+        if unresolved:
+            raise RuntimeError(f"Repair left unresolved merge conflicts:\n{unresolved}")
+        common.run(["git", "add", "-A"], cwd=repair_path)
+        common.run(["git", "commit", "-m", f"agent: repair PR #{number}"], cwd=repair_path)
+    common.run(["git", "push", "origin", f"HEAD:{head}"], cwd=repair_path)
     common.run(
         [
             "gh",

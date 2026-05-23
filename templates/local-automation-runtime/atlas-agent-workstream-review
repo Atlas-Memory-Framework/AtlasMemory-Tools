@@ -1,0 +1,493 @@
+#!/usr/bin/env python3
+"""Review a completed workstream before downstream dependency promotion."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+COMMENT_MARKER = "<!-- atlas-agent-workstream-review -->"
+LABELS = {
+    "agent:workstream-review-required": "5319E7",
+    "agent:workstream-review-passed": "0E8A16",
+    "agent:workstream-review-failed": "D93F0B",
+    "agent:workstream-needs-human": "D93F0B",
+    "agent:workstream-followup": "FBCA04",
+    "agent:one-point": "0E8A16",
+    "points:1": "EDEDED",
+    "status:ready": "D4C5F9",
+    "status:blocked": "D4C5F9",
+}
+
+
+def ensure_labels(repo: str) -> None:
+    for label, color in LABELS.items():
+        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+
+
+def issue_json(repo: str, number: int) -> dict[str, Any]:
+    return common.gh_json(
+        [
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,body,state,labels,url,comments",
+        ],
+        retries=2,
+    )
+
+
+def workstream_labels(issue: dict[str, Any]) -> list[str]:
+    return sorted(label["name"] for label in issue.get("labels") or [] if str(label.get("name") or "").startswith("workstream:"))
+
+
+def child_issues(repo: str, parent: dict[str, Any]) -> list[dict[str, Any]]:
+    labels = workstream_labels(parent)
+    issues: list[dict[str, Any]] = []
+    seen: set[int] = {int(parent["number"])}
+    for label in labels:
+        rows = common.gh_json_or_none(
+            [
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--label",
+                label,
+                "--limit",
+                "100",
+                "--json",
+                "number,title,state,closedAt,labels,url,body",
+            ],
+            retries=2,
+        ) or []
+        for row in rows:
+            number = int(row.get("number") or 0)
+            if number in seen:
+                continue
+            seen.add(number)
+            issues.append(row)
+    return sorted(issues, key=lambda item: int(item.get("number") or 0))
+
+
+def prs_for_issue(repo: str, number: int) -> list[dict[str, Any]]:
+    return common.gh_json_or_none(
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "all",
+            "--search",
+            f"#{number}",
+            "--limit",
+            "20",
+            "--json",
+            "number,title,url,state,isDraft,mergedAt,labels,headRefName,headRefOid,updatedAt",
+        ],
+        retries=2,
+    ) or []
+
+
+def body_write_scope(issue: dict[str, Any]) -> list[str]:
+    return common.markdown_section_items(str(issue.get("body") or ""), "Write Scope")
+
+
+def compact(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 20].rstrip() + "\n... [truncated]"
+
+
+def git_file_at(repo: str, base: str, path: str) -> str:
+    repo_path = common.ensure_repo(repo)
+    common.run(["git", "fetch", "origin", base], cwd=repo_path, check=False)
+    proc = common.run(["git", "show", f"origin/{base}:{path}"], cwd=repo_path, check=False)
+    if proc.returncode != 0:
+        return f"[missing or unreadable: {path}]"
+    return proc.stdout or ""
+
+
+def file_evidence(repo: str, base: str, paths: list[str], max_files: int = 12) -> str:
+    chunks: list[str] = []
+    for path in paths[:max_files]:
+        content = git_file_at(repo, base, path)
+        chunks.append(f"### {path}\n```\n{compact(content, 5000)}\n```")
+    return "\n\n".join(chunks)
+
+
+def extract_json(raw: str) -> dict[str, Any]:
+    text = raw.strip()
+    candidates: list[dict[str, Any]] = []
+    for fenced in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL):
+        try:
+            payload = json.loads(fenced.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            candidates.append(payload)
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            payload, _ = decoder.raw_decode(text[match.start() :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            candidates.append(payload)
+    shaped = [item for item in candidates if "result" in item and "followups" in item]
+    if shaped:
+        return shaped[-1]
+    if candidates:
+        return candidates[-1]
+    raise ValueError("no JSON object found in workstream review output")
+
+
+def codex_timeout_seconds() -> int:
+    cfg = common.read_config()
+    raw = (
+        os.environ.get("AGENT_CODEX_WORKSTREAM_REVIEW_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_WORKSTREAM_REVIEW_TIMEOUT_SECONDS")
+        or os.environ.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or "1800"
+    )
+    try:
+        return max(int(str(raw).strip().strip('"')), 1)
+    except ValueError:
+        return 1800
+
+
+def with_timeout(cmd: list[str]) -> list[str]:
+    if shutil.which("timeout"):
+        return ["timeout", str(codex_timeout_seconds()), *cmd]
+    return cmd
+
+
+def run_codex(job_dir: Path, prompt: str) -> dict[str, Any]:
+    prompt_path = job_dir / "workstream-review-prompt.md"
+    prompt_path.write_text(prompt, encoding="utf-8")
+    run_home = common.codex_home_copy(job_dir)
+    profile_args = common.codex_profile_shell_args("review")
+    profile_segment = f"{profile_args} " if profile_args else ""
+
+    def run_local_codex() -> Any:
+        if not shutil.which("codex"):
+            return None
+        env = os.environ.copy()
+        env["CODEX_HOME"] = str(run_home)
+        return common.run(
+            with_timeout([
+                "bash",
+                "-lc",
+                f"codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < workstream-review-prompt.md",
+            ]),
+            cwd=job_dir,
+            check=False,
+            env=env,
+        )
+
+    try:
+        cmd = [
+            *common.podman_cmd(),
+            "run",
+            "--rm",
+            *common.podman_userns_args(),
+            "--network=slirp4netns",
+            "-v",
+            f"{run_home}:/home/agent/.codex:Z",
+            "-v",
+            f"{job_dir}:/job:Z",
+            common.codex_image(),
+            "bash",
+            "-lc",
+            f"cd /job && codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < workstream-review-prompt.md",
+        ]
+        proc = common.run(with_timeout(cmd), check=False)
+        if proc.returncode != 0 and "podman: command not found" in (proc.stdout or "").lower():
+            fallback = run_local_codex()
+            if fallback is not None:
+                proc = fallback
+    except RuntimeError as exc:
+        fallback = run_local_codex()
+        if fallback is None:
+            raw = str(exc)
+            (job_dir / "codex.log").write_text(raw, encoding="utf-8", errors="replace")
+            return {
+                "result": "needs-human",
+                "summary": "Workstream review runner failed before producing a review.",
+                "blocking_findings": [raw],
+                "followups": [],
+            }
+        proc = fallback
+    finally:
+        shutil.rmtree(run_home, ignore_errors=True)
+    raw = proc.stdout or ""
+    (job_dir / "codex.log").write_text(raw, encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        return {
+            "result": "needs-human",
+            "summary": f"Workstream review command exited {proc.returncode}.",
+            "blocking_findings": [compact(raw, 2000)],
+            "followups": [],
+        }
+    try:
+        parsed = extract_json(raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        parsed = {
+            "result": "needs-human",
+            "summary": "Workstream review output was not parseable JSON.",
+            "blocking_findings": [str(exc), compact(raw, 2000)],
+            "followups": [],
+        }
+    return parsed
+
+
+def build_prompt(
+    repo: str,
+    parent: dict[str, Any],
+    children: list[dict[str, Any]],
+    prs: dict[int, list[dict[str, Any]]],
+    files: str,
+    feedback: str,
+) -> str:
+    child_summary = []
+    for child in children:
+        number = int(child.get("number") or 0)
+        child_summary.append(
+            {
+                "number": number,
+                "title": child.get("title"),
+                "state": child.get("state"),
+                "closedAt": child.get("closedAt"),
+                "write_scope": body_write_scope(child),
+                "prs": prs.get(number, []),
+            }
+        )
+    return f"""You are reviewing a completed automation workstream before downstream work is unblocked.
+
+Decide whether the workstream is safe for downstream dependency promotion.
+Focus on aggregate architecture, duplicated authorities, incomplete handoff contracts, missing follow-up tests, and whether the child PRs collectively satisfy the parent.
+Do not block on style nits. Create one-point follow-up issues for blocking work that can be handled before downstream work.
+
+Return ONLY JSON with this exact shape:
+{{
+  "result": "pass|fail|needs-human",
+  "summary": "...",
+  "blocking_findings": ["..."],
+  "followups": [
+    {{
+      "title": "...",
+      "body": "...",
+      "write_scope": ["path"],
+      "ready": true,
+      "manual_gates": "none"
+    }}
+  ]
+}}
+
+Rules:
+- Use "pass" only if downstream work can safely depend on this workstream.
+- Use "fail" when code follow-up work is required before downstream work should proceed.
+- Use "needs-human" when product/back-end judgment is required before unblocking.
+- Each follow-up must be one PR, one point, and include explicit write_scope.
+- Prefer follow-up issues over vague findings when a concrete fix is possible.
+
+Repository: {repo}
+Parent issue #{parent.get('number')}: {parent.get('title')}
+Parent state: {parent.get('state')}
+Parent body:
+{compact(str(parent.get('body') or ''), 8000)}
+
+Child issues and PRs:
+{json.dumps(child_summary, indent=2)}
+
+Additional reviewer feedback:
+{feedback or "none"}
+
+Current base file evidence:
+{files}
+"""
+
+
+def comment_body(parent: dict[str, Any], result: str, review: dict[str, Any], job_dir: Path, created: list[str]) -> str:
+    findings = "\n".join(f"- {item}" for item in review.get("blocking_findings") or []) or "- none"
+    followups = "\n".join(f"- {url}" for url in created) or "- none"
+    return (
+        f"{COMMENT_MARKER}\n"
+        f"Workstream review for issue #{parent.get('number')}.\n\n"
+        f"Result: {result}\n"
+        f"Artifacts: `{job_dir}`\n\n"
+        f"Summary:\n{review.get('summary') or ''}\n\n"
+        f"Blocking findings:\n{findings}\n\n"
+        f"Created follow-up issues:\n{followups}\n"
+    )
+
+
+def add_to_projects(issue_url: str, projects_file: str | None) -> None:
+    if not projects_file:
+        return
+    for raw in Path(projects_file).read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        owner, number = line.rsplit("/", 1) if "/" in line else line.split(None, 1)
+        common.run(["gh", "project", "item-add", number, "--owner", owner, "--url", issue_url], check=False)
+
+
+def followup_labels(parent: dict[str, Any], ready: bool) -> list[str]:
+    labels = {"points:1", "agent:one-point", "agent:workstream-followup", "status:ready" if ready else "status:blocked"}
+    for label in common.label_names(parent):
+        if label.startswith(("workstream:", "area:", "owner:", "tier:", "type:", "repo:")):
+            labels.add(label)
+    return sorted(labels)
+
+
+def followup_base_branch(repo: str, parent: dict[str, Any]) -> str:
+    return common.issue_body_base_branch(parent) or common.default_base_branch(repo)
+
+
+def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any], projects_file: str | None) -> str:
+    ready = bool(followup.get("ready"))
+    scope = [str(item).strip().strip("`") for item in followup.get("write_scope") or [] if str(item).strip()]
+    manual = str(followup.get("manual_gates") or "none").strip() or "none"
+    base_branch = followup_base_branch(repo, parent)
+    body = "\n".join(
+        [
+            "## Automation Manifest Metadata",
+            "- Suggested points: `1`",
+            f"- Issue ready: `{'true' if ready else 'false'}`",
+            f"- Dispatch mode: `{'agent-ready' if ready else 'blocked'}`",
+            f"- Dispatch recommendation: `{'auto-dispatch' if ready else 'review-before-dispatch'}`",
+            "- Validation scope: `ci`",
+            f"- Target repo(s): `{repo}`",
+            f"- Execution repo: `{repo}`",
+            f"- Base branch: `{base_branch}`",
+            "- One PR contract: `yes`",
+            "",
+            "## Execution State",
+            "- Open dependencies: `none`",
+            f"- Manual gates remaining: `{manual}`",
+            "",
+            str(followup.get("body") or "").strip(),
+            "",
+            "## Write Scope",
+            *[f"- `{item}`" for item in scope],
+            "",
+            "## Validation Commands",
+            "- Run the parent issue validation commands applicable to this scope.",
+            "- Confirm git diff is limited to the listed write scope.",
+            "",
+            "## Parent Issue",
+            str(parent.get("url") or ""),
+        ]
+    )
+    tmp = common.jobs_dir() / f"workstream-followup-{repo.replace('/', '__')}-{parent.get('number')}.md"
+    tmp.write_text(body, encoding="utf-8")
+    cmd = ["gh", "issue", "create", "--repo", repo, "--title", str(followup.get("title") or "Workstream follow-up"), "--body-file", str(tmp)]
+    for label in followup_labels(parent, ready):
+        cmd.extend(["--label", label])
+    proc = common.run(cmd)
+    tmp.unlink(missing_ok=True)
+    url = (proc.stdout or "").strip()
+    add_to_projects(url, projects_file)
+    return url
+
+
+def apply_review(repo: str, parent: dict[str, Any], result: str, body: str) -> None:
+    number = str(parent["number"])
+    ensure_labels(repo)
+    for label in ("agent:workstream-review-required", "agent:workstream-review-passed", "agent:workstream-review-failed", "agent:workstream-needs-human"):
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", label], check=False)
+    if result == "pass":
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:workstream-review-passed"], check=False)
+    elif result == "fail":
+        common.run(["gh", "issue", "reopen", number, "--repo", repo], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:workstream-review-failed"], check=False)
+    else:
+        common.run(["gh", "issue", "reopen", number, "--repo", repo], check=False)
+        common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", "agent:workstream-needs-human"], check=False)
+    common.run(["gh", "issue", "comment", number, "--repo", repo, "--body", body], check=False)
+
+
+def review_one(repo: str, number: int, args: argparse.Namespace) -> dict[str, Any]:
+    parent = issue_json(repo, number)
+    children = child_issues(repo, parent)
+    prs = {int(child["number"]): prs_for_issue(repo, int(child["number"])) for child in children}
+    base = common.issue_body_base_branch(parent) or common.default_base_branch(repo)
+    paths = body_write_scope(parent)
+    evidence = file_evidence(repo, base, paths)
+    feedback = Path(args.feedback_file).read_text(encoding="utf-8") if args.feedback_file else ""
+    job_dir = common.jobs_dir() / f"issue-{number}-workstream-review-{common.now_id()}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    common.write_json(job_dir / "parent.json", parent)
+    common.write_json(job_dir / "children.json", children)
+    common.write_json(job_dir / "prs.json", prs)
+    prompt = build_prompt(repo, parent, children, prs, evidence, feedback)
+    review = run_codex(job_dir, prompt)
+    result = str(review.get("result") or "needs-human").strip().lower()
+    if result not in {"pass", "fail", "needs-human"}:
+        result = "needs-human"
+    created: list[str] = []
+    if args.apply and result != "pass":
+        for followup in review.get("followups") or []:
+            if isinstance(followup, dict):
+                created.append(create_followup(repo, parent, followup, args.projects_file))
+    body = comment_body(parent, result, review, job_dir, created)
+    (job_dir / "workstream-review.json").write_text(json.dumps(review, indent=2), encoding="utf-8")
+    (job_dir / "comment.md").write_text(body, encoding="utf-8")
+    if args.apply:
+        apply_review(repo, parent, result, body)
+    return {"repo": repo, "number": number, "result": result, "created": created, "artifacts": str(job_dir)}
+
+
+def scan_targets(args: argparse.Namespace) -> list[tuple[str, int]]:
+    targets: list[tuple[str, int]] = []
+    for repo in [line for line in Path(args.repos_file).read_text(encoding="utf-8").splitlines() if line.strip() and not line.strip().startswith("#")]:
+        rows = common.gh_json_or_none(
+            ["issue", "list", "--repo", repo.strip(), "--state", "all", "--label", args.scan_label, "--limit", str(args.max), "--json", "number"],
+            retries=2,
+        ) or []
+        for row in rows:
+            targets.append((repo.strip(), int(row["number"])))
+    return targets[: args.max]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("issue", nargs="?", help="OWNER/REPO#ISSUE_NUMBER")
+    parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
+    parser.add_argument("--projects-file")
+    parser.add_argument("--scan-label", default="agent:workstream-review-required")
+    parser.add_argument("--max", type=int, default=4)
+    parser.add_argument("--feedback-file")
+    parser.add_argument("--summary", default=str(common.RUNTIME_DIR / "jobs" / "workstream-review-summary.json"))
+    parser.add_argument("--apply", action="store_true")
+    args = parser.parse_args()
+    if args.issue:
+        repo, number = common.issue_ref_parts(args.issue)
+        targets = [(repo, number)]
+    else:
+        targets = scan_targets(args)
+    records = [review_one(repo, number, args) for repo, number in targets]
+    common.write_json(Path(args.summary), {"records": records, "counts": {result: sum(1 for row in records if row["result"] == result) for result in {"pass", "fail", "needs-human"}}})
+    print(json.dumps({"records": records}, indent=2))
+    return 0 if all(row["result"] == "pass" for row in records) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

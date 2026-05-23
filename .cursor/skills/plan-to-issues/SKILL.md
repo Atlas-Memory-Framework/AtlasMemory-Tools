@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:4190ed179e8a8f9a35770168acce9be39d97d87dbe16a32eecda839d66af2220
+# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:d7627b956ce7ce18252a470145120deddeabee2589c4c85811ac164cb4189f3c
 # atlas-tools-generated-end
 name: plan-to-issues
 description: Sync or materialize GitHub issues and optional project tracking from the current plan artifact. Use when the user asks to create or update issues from a plan, wants a dry-run issue breakdown, or wants to project workstreams into a GitHub Project without replacing planning authority.
@@ -129,4 +129,4 @@ Use the plan's existing identifiers wherever possible:
 
 - Tracking conventions and examples: [reference.md](reference.md)
 - Human workflow notes: [README.md](README.md)
-- Parser and sync script: `scripts/plan_to_issues.py`
+- Parser and sync script: `skills/plan-to-issues/scripts/plan_to_issues.py`

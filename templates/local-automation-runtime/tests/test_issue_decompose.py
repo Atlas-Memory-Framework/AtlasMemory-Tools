@@ -139,6 +139,47 @@ Validation:
         self.assertIn("## Write Scope\n- `package.json`", body)
         self.assertIn("## Validation Commands\n- Run npm test\n- Confirm git diff is limited", body)
 
+    def test_child_body_inherits_parent_project_metadata(self) -> None:
+        parent = issue(
+            number=5,
+            body="""## Source Plan
+- Plan key: `PLAN-1`
+- Source section: `Automation Issue Manifest` / `WS2-QUOTE`
+
+## Automation Manifest Metadata
+- Suggested points: `5`
+- Risk tags: `needs-ci-validation, migration`
+- Highest tier: `T0`
+- Priority: `P1`
+- Validation scope: `ci`
+- Target repo(s): `owner/repo`
+- Execution repo: `owner/repo`
+- Base branch: `main`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+
+## Named Gates
+- G-BACKEND-BUILD
+
+## Parent Epic
+https://github.com/owner/repo/issues/1
+""",
+            labels=["points:5", "tier:t0"],
+        )
+        child = {"body": "Scope: server/src/app.py", "labels": ["points:1"]}
+
+        body = self.decompose.child_body(parent, "owner/repo", child)
+
+        self.assertIn("## Source Plan\n- Plan key: `PLAN-1`", body)
+        self.assertIn("- Risk tags: `needs-ci-validation, migration`", body)
+        self.assertIn("- Highest tier: `T0`", body)
+        self.assertIn("- Priority: `P1`", body)
+        self.assertIn("## Named Gates\n- G-BACKEND-BUILD", body)
+        self.assertIn("## Parent Epic\nhttps://github.com/owner/repo/issues/1", body)
+        self.assertIn("Parent issue: #5", body)
+
     def test_dry_run_writes_summary_without_mutations(self) -> None:
         original_candidates = self.decompose.candidate_issues
         self.decompose.candidate_issues = lambda _repo, _label, _limit: [

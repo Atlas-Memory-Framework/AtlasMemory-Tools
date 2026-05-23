@@ -313,16 +313,21 @@ class RuntimeTemplateTests(unittest.TestCase):
             expected,
         )
 
-    def test_deployed_validation_example_uses_workflows_schema(self) -> None:
+    def test_deployed_validation_example_uses_supported_schema(self) -> None:
         entry = self.deployed_validate.config_entry(
             "OWNER/REPO",
             str(ROOT / "config" / "deployed-validation.example.json"),
         )
 
-        self.assertEqual(self.deployed_validate.configured_commands(entry), [])
+        self.assertEqual(
+            self.deployed_validate.configured_install_commands(entry),
+            ["python3 -m pip install -r requirements-dev.txt"],
+        )
+        self.assertEqual(self.deployed_validate.configured_commands(entry), ["python3 -m pytest tests/deployed"])
         workflows = self.deployed_validate.configured_workflows(entry)
         self.assertEqual(len(workflows), 1)
         self.assertEqual(workflows[0]["workflow"], "deployed-validation.yml")
+        self.assertEqual(entry["env"], {"DEPLOYED_VALIDATION_DRY_RUN": "true"})
 
     def test_deployed_validation_supports_install_commands(self) -> None:
         entry = {"install_commands": ["npm ci"], "commands": ["npm run build"]}

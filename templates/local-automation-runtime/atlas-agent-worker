@@ -18,6 +18,7 @@ def run(cmd, cwd=None, check=True, capture=True, env=None):
     print(f"+ {cmd}", flush=True)
     if cmd.strip().startswith("git "):
         env = common.git_env(env)
+    gh_parts = common.github_throttle_shell_command(cmd)
     p = subprocess.run(
         cmd,
         cwd=cwd,
@@ -27,9 +28,34 @@ def run(cmd, cwd=None, check=True, capture=True, env=None):
         stderr=subprocess.STDOUT if capture else None,
         env=env,
     )
+    common.github_throttle_after(gh_parts, p.stdout or "", p.returncode)
     if check and p.returncode != 0:
         raise RuntimeError(f"Command failed: {cmd}\n{p.stdout or ''}")
     return p.stdout or ""
+
+
+def codex_timeout_seconds():
+    try:
+        return max(int(os.environ.get("AGENT_CODEX_TIMEOUT_SECONDS", "1800")), 1)
+    except ValueError:
+        return 1800
+
+
+def with_timeout(cmd):
+    if shutil.which("timeout"):
+        return f"timeout {codex_timeout_seconds()} {cmd}"
+    return cmd
+
+
+def run_codex(codex_cmd, local_cmd, cwd, run_home):
+    codex_log = run(with_timeout(codex_cmd), cwd=cwd, check=False)
+    if "podman: command not found" not in codex_log.lower():
+        return codex_log
+    if not shutil.which("codex"):
+        return codex_log + "\nlocal codex fallback is unavailable\n"
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(run_home)
+    return run(with_timeout(local_cmd), cwd=cwd, check=False, env=env)
 
 
 def gh_json(cmd):
@@ -364,6 +390,12 @@ def clear_running_labels(repo, number, done=False, failed=False, pr_open=False):
             f'--add-label "{os.environ["AGENT_FAILED_LABEL"]}"',
             check=False,
         )
+    if pr_open:
+        common.update_issue_automation_state(repo, int(number), "PR Open", status="In Progress")
+    elif failed:
+        common.update_issue_automation_state(repo, int(number), "Failed")
+    elif done:
+        common.update_issue_automation_state(repo, int(number), "Done", status="Done")
 
 
 def process_issue(issue, publish):
@@ -385,6 +417,7 @@ def process_issue(issue, publish):
             f'gh issue edit {number} --repo {shlex.quote(repo)} '
             f'--add-label "{os.environ["AGENT_RUNNING_LABEL"]}"'
         )
+        common.update_issue_automation_state(repo, int(number), "Running", status="In Progress")
 
         issue_full = gh_json(
             f"gh issue view {number} --repo {shlex.quote(repo)} "
@@ -437,8 +470,12 @@ def process_issue(issue, publish):
                     "--dangerously-bypass-approvals-and-sandbox - < /job/prompt.md"
                 )
             )
-
-            codex_log = run(codex_cmd, cwd=worktree_dir, check=False)
+            local_codex_cmd = (
+                f"codex exec {profile_segment}--ephemeral --skip-git-repo-check "
+                "--dangerously-bypass-approvals-and-sandbox - < "
+                f"{quote_path(job_dir / 'prompt.md')}"
+            )
+            codex_log = run_codex(codex_cmd, local_codex_cmd, worktree_dir, run_home)
         finally:
             shutil.rmtree(run_home, ignore_errors=True)
         (job_dir / "codex.log").write_text(codex_log, encoding="utf-8")

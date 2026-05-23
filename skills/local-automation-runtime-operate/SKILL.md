@@ -36,7 +36,7 @@ template tree.
    - `./run_e2e_chain.sh --cycles 1`
    - Add mutating flags only after preview looks correct.
 6. Run unattended cycles when the lane is stable:
-   - `./atlas-agent-unattended --cycles 3 --max-per-repo 2 --review-apply --post-cycle-summary`
+   - `./atlas-agent-unattended --cycles 3 --dispatch-max-per-repo 2 --review-apply --post-cycle-summary`
 7. Review blockers:
    - `./atlas-agent-review --summary review.json`
    - `./atlas-agent-semantic-review OWNER/REPO#PR --apply`
@@ -49,7 +49,7 @@ template tree.
 
 ## Guardrails
 
-- Keep cycles bounded with `--cycles`, `--max-per-repo`, and repair/validation max flags.
+- Keep cycles bounded with `--cycles`, `--dispatch-max-per-repo`, and per-stage repair/review/validation max and concurrency flags.
 - Treat `Open dependencies:` and `Manual gates remaining:` as the runtime dispatch contract; Project fields are advisory unless they match the issue body.
 - Keep unattended dispatch one-point only. Larger `points:N` issues must be decomposed or explicitly handled outside unattended dispatch.
 - Treat no-check PRs as blocked unless local validation and required-check policy explicitly allow them.

@@ -8,9 +8,11 @@ This README explains the *human workflow* for using `/plan` day-to-day.
 
 `/plan` creates or updates a **single plan artifact** (a markdown file in the active harness planning directory) and moves it through:
 
-- **Problem → Feature → Technical → Implementation → Reviews**
+- **Problem → Feature → Technical → Human Readability → Implementation → Automation (when targeted) → Reviews**
 
 It uses deterministic “gate” checks to decide what to do next, and it logs decisions in the plan’s **Decision Log**.
+Human Readability is enforced as a gate between Technical and Implementation, even though the persisted
+`CurrentStage` remains one of the plan state stages.
 
 Authority model:
 
@@ -91,8 +93,12 @@ Update the implementation plan to align to that and include tenant onboarding/pr
 - **ProblemDefinitionComplete**
 - **FeatureClarity**
 - **TechnicalClarity**
+- **HumanReadabilityReview**
 - **PlanReadiness**
+- **AutomationReadiness**
+- **PlanStateSanity**
 - **PlanningReviewsComplete**
+- **ReviewsApprovedReentryAudit**
 
 If a gate fails, `/plan` will:
 
@@ -132,6 +138,9 @@ Expectation when using `/plan`:
 - **Orchestrator rules**: `SKILL.md`
 - **Plan template**: `reference.md`
 - **Issue/project projection**: `../plan-to-issues/SKILL.md`
+- **Automation decomposition**: `../automation-decomposition/SKILL.md`
+- **HTML review artifacts**: `../plan-to-html/SKILL.md`
+- **Session handoffs**: `../handoff/SKILL.md`
 
 ## Optional external tracking
 
