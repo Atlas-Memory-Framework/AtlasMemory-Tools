@@ -82,6 +82,47 @@ The verifier also checks committed harness freshness, adapter CLI generation, ex
 
 For full planning details, see `skills/plan/README.md`.
 
+## Planning with Agentic Review Mode
+
+Use `$plan` with agentic review mode.
+
+That phrase is the preferred Codex-facing wrapper for the planning system. `$plan` remains the public workflow and the only authority that writes the selected plan artifact, updates decision logs, and changes gate or approval state. Agentic review mode is an optional review layer inside `$plan`: it snapshots the selected markdown plan, runs independent reviewer personas against the snapshot, collects structured findings or patch proposals, reconciles conflicts, asks the user for intent decisions, and routes accepted edits back through `$plan`.
+
+Use it for all planning entrypoints:
+
+- New work: `Use $plan with agentic review mode to plan <feature/goal>.`
+- Old or messy plans: `Use $plan with agentic review mode to review @path/to/old.plan.md before trusting any existing pass/approval claims.`
+- Previously planned plans: `Use $plan with agentic review mode to re-enter @path/to/plan.md, audit stale assumptions, and refresh the plan before projection or build.`
+- Focused hardening: `Use $plan with agentic review mode to check CLI/UI separation, contract boundaries, integrity, evidence policy, and automation readiness in @path/to/plan.md.`
+
+For Codex, the intended shape is:
+
+```text
+$plan
+  -> selects or creates exactly one AuthoringArtifact
+  -> runs normal planning gates and user Q/A
+  -> optionally invokes agentic review mode
+      -> local-plan-agent-runtime snapshots the plan
+      -> independent personas review the snapshot
+      -> proposals are validated and reconciled
+      -> human-agency decisions are returned to the user
+  -> $plan applies accepted edits
+  -> $plan reruns affected gates/reviews
+```
+
+This works for new plans, old plans that are not in the current shape, and previously approved or reviewed plans. For old plans, `$plan` should not trust existing `Pass`, `Approved`, projection, or dispatch claims. It should perform a re-entry audit, identify which sections are missing or stale, and either repair the plan or keep the relevant gates failing.
+
+Agentic review mode should interrogate the user when the plan is missing implementation-critical intent. It should ask targeted questions about the current workflow, desired workflow, scope, anti-scope, repo facts, file ownership, validation evidence, rollback, trust boundaries, and dispatch/projection policy. If the user does not answer a decision-bearing question, the plan should remain blocked instead of letting agents invent the answer.
+
+The simplified skill hierarchy is:
+
+- `$plan`: the single user-facing planning command and canonical writer.
+- `local-plan-agent-runtime`: the internal agentic review mode used by `$plan` when parallel/local-file review is requested.
+- `plan-execution-readiness`: the critical review checklist/persona used standalone or inside the runtime.
+- `plan-stress-review`: compatibility alias only; prefer `plan-execution-readiness`.
+
+Keep these systems repo-first. Source skills, scripts, references, and runtime protocol files belong under this repo's `skills/` tree. Local Codex copies are install artifacts used for execution. Update the repo-native source first, then install or sync into the local Codex skill directory.
+
 ## Local Automation Runtime
 
 The runtime template now supports the full unattended loop:
