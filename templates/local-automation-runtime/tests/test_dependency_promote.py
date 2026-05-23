@@ -3,11 +3,13 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +98,12 @@ class DependencyPromoteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.promote = load_script("atlas_agent_dependency_promote_test", "atlas-agent-dependency-promote")
+
+    def test_limit_defaults_from_runtime_config(self) -> None:
+        with mock.patch.dict(os.environ, {"AGENT_PROJECT_ITEM_LIMIT": "750"}):
+            args = self.promote.build_parser().parse_args([])
+
+        self.assertEqual(args.limit, 750)
 
     def setUp(self) -> None:
         self.original_gh = self.promote.common.gh_json_or_none

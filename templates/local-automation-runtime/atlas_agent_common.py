@@ -28,6 +28,338 @@ def now_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def config_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name) or read_config().get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().strip('"').strip("'").lower() not in {"0", "false", "no", "off"}
+
+
+def config_float(name: str, default: float) -> float:
+    raw = os.environ.get(name) or read_config().get(name)
+    if raw is None:
+        return default
+    try:
+        return float(str(raw).strip().strip('"').strip("'"))
+    except ValueError:
+        return default
+
+
+def config_int(name: str, default: int) -> int:
+    raw = os.environ.get(name) or read_config().get(name)
+    if raw is None:
+        return default
+    try:
+        return int(str(raw).strip().strip('"').strip("'"))
+    except ValueError:
+        return default
+
+
+def gh_command_parts(args: list[str]) -> list[str] | None:
+    if not args or args[0] != "gh":
+        return None
+    return args[1:]
+
+
+def gh_shell_command_parts(command: str) -> list[str] | None:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    if not parts or parts[0] != "gh":
+        return None
+    return parts[1:]
+
+
+def gh_command_is_mutating(parts: list[str]) -> bool:
+    if not parts:
+        return False
+    if parts[0] == "api":
+        if "graphql" in parts and any("mutation" in part.lower() for part in parts):
+            return True
+        for index, part in enumerate(parts):
+            if part in {"-X", "--method"} and index + 1 < len(parts):
+                return parts[index + 1].upper() in {"POST", "PATCH", "PUT", "DELETE"}
+        return False
+    mutating_prefixes = (
+        ("issue", "edit"),
+        ("issue", "comment"),
+        ("issue", "close"),
+        ("issue", "reopen"),
+        ("label", "create"),
+        ("pr", "comment"),
+        ("pr", "create"),
+        ("pr", "merge"),
+        ("pr", "ready"),
+        ("project", "item-add"),
+        ("workflow", "run"),
+        ("run", "rerun"),
+    )
+    return any(tuple(parts[: len(prefix)]) == prefix for prefix in mutating_prefixes)
+
+
+def gh_command_is_graphql_heavy(parts: list[str]) -> bool:
+    if not parts:
+        return False
+    if parts[0] == "project":
+        return True
+    if parts[:2] == ["api", "graphql"]:
+        return True
+    return "--json" in parts and parts[0] in {"issue", "pr", "repo", "run"}
+
+
+def gh_command_is_project(parts: list[str]) -> bool:
+    return bool(parts and parts[0] == "project")
+
+
+def gh_command_interval(parts: list[str]) -> float:
+    if not config_bool("AGENT_GITHUB_THROTTLE", True):
+        return 0.0
+    if gh_command_is_project(parts):
+        return config_float("AGENT_GITHUB_PROJECT_INTERVAL_SECONDS", 5.0)
+    if gh_command_is_mutating(parts):
+        return config_float("AGENT_GITHUB_MUTATION_INTERVAL_SECONDS", 2.0)
+    if gh_command_is_graphql_heavy(parts):
+        return config_float("AGENT_GITHUB_GRAPHQL_INTERVAL_SECONDS", 2.0)
+    return config_float("AGENT_GITHUB_MIN_INTERVAL_SECONDS", 0.75)
+
+
+def github_throttle_paths() -> tuple[pathlib.Path, pathlib.Path]:
+    root = jobs_dir() / "github-api-throttle"
+    return root / "state.json", root / "state.lock"
+
+
+def acquire_json_lock(path: pathlib.Path, stale_seconds: float = 120.0, wait_seconds: float = 300.0) -> pathlib.Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + wait_seconds
+    while True:
+        if path.exists() and time.time() - path.stat().st_mtime > stale_seconds:
+            path.unlink(missing_ok=True)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            if time.time() >= deadline:
+                raise RuntimeError(f"Timed out waiting for lock: {path}")
+            time.sleep(0.25)
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"pid": os.getpid(), "created_at": now_id()}) + "\n")
+        return path
+
+
+def read_json_file(path: pathlib.Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def project_targets(path: str | pathlib.Path | None = None) -> list[tuple[str, int]]:
+    source = pathlib.Path(path) if path else RUNTIME_DIR / "projects.txt"
+    if not source.exists():
+        return []
+    targets: list[tuple[str, int]] = []
+    for raw in source.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "/" in line:
+            owner, number = line.rsplit("/", 1)
+        else:
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            owner, number = parts
+        try:
+            targets.append((owner.strip(), int(number.strip())))
+        except ValueError:
+            continue
+    return targets
+
+
+def project_info(owner: str, project_number: int) -> dict[str, Any] | None:
+    projects = gh_json_or_none(
+        ["project", "list", "--owner", owner, "--format", "json", "--limit", "100"],
+        retries=2,
+    )
+    for project in (projects or {}).get("projects") or []:
+        if int(project.get("number") or 0) == project_number:
+            return project
+    return None
+
+
+def project_fields(owner: str, project_number: int) -> list[dict[str, Any]]:
+    payload = gh_json_or_none(
+        ["project", "field-list", str(project_number), "--owner", owner, "--format", "json", "--limit", "100"],
+        retries=2,
+    )
+    return (payload or {}).get("fields") or []
+
+
+def project_items(owner: str, project_number: int, limit: int | None = None) -> list[dict[str, Any]]:
+    item_limit = limit if limit is not None else config_int("AGENT_PROJECT_ITEM_LIMIT", 500)
+    payload = gh_json_or_none(
+        [
+            "project",
+            "item-list",
+            str(project_number),
+            "--owner",
+            owner,
+            "--format",
+            "json",
+            "--limit",
+            str(item_limit),
+        ],
+        retries=2,
+    )
+    return (payload or {}).get("items") or []
+
+
+def issue_project_item(items: list[dict[str, Any]], repo: str, number: int) -> dict[str, Any] | None:
+    for item in items:
+        content = item.get("content") or {}
+        if str(content.get("repository") or "") == repo and int(content.get("number") or 0) == int(number):
+            return item
+    return None
+
+
+def project_field_value_args(field: dict[str, Any], value: str) -> list[str] | None:
+    options = {str(option.get("name")): str(option.get("id")) for option in field.get("options") or []}
+    if options:
+        option_id = options.get(value)
+        if not option_id:
+            return None
+        return ["--single-select-option-id", option_id]
+    return ["--text", value]
+
+
+def update_issue_project_fields(
+    repo: str,
+    number: int,
+    fields: dict[str, str],
+    *,
+    projects_file: str | pathlib.Path | None = None,
+) -> None:
+    updates = {name: value for name, value in fields.items() if value}
+    if not updates:
+        return
+    for owner, project_number in project_targets(projects_file):
+        try:
+            info = project_info(owner, project_number)
+            if not info:
+                continue
+            field_configs = {str(field.get("name")): field for field in project_fields(owner, project_number)}
+            item = issue_project_item(project_items(owner, project_number), repo, number)
+            if not item:
+                continue
+            for name, value in updates.items():
+                field = field_configs.get(name)
+                if not field:
+                    continue
+                value_args = project_field_value_args(field, value)
+                if not value_args:
+                    continue
+                run(
+                    [
+                        "gh",
+                        "project",
+                        "item-edit",
+                        "--id",
+                        str(item["id"]),
+                        "--project-id",
+                        str(info["id"]),
+                        "--field-id",
+                        str(field["id"]),
+                        *value_args,
+                    ],
+                    check=False,
+                    retries=2,
+                )
+        except Exception as exc:
+            print(f"Project state update skipped for {repo}#{number} in {owner}/{project_number}: {exc}", flush=True)
+
+
+def update_issue_automation_state(
+    repo: str,
+    number: int,
+    automation_state: str,
+    *,
+    status: str | None = None,
+    projects_file: str | pathlib.Path | None = None,
+) -> None:
+    fields = {"AutomationState": automation_state}
+    if status:
+        fields["Status"] = status
+    update_issue_project_fields(repo, number, fields, projects_file=projects_file)
+
+
+def github_throttle_before(parts: list[str] | None) -> None:
+    if not parts:
+        return
+    interval = gh_command_interval(parts)
+    if interval <= 0:
+        return
+    state_path, lock_path = github_throttle_paths()
+    lock = acquire_json_lock(lock_path)
+    try:
+        state = read_json_file(state_path)
+        now = time.time()
+        pause_until = float(state.get("pause_until") or 0)
+        next_allowed = float(state.get("next_allowed_at") or 0)
+        wait_until = max(pause_until, next_allowed)
+        if wait_until > now:
+            wait = wait_until - now
+            print(f"GitHub API throttle: waiting {wait:.1f}s", flush=True)
+            time.sleep(wait)
+            now = time.time()
+        state.update(
+            {
+                "next_allowed_at": now + interval,
+                "last_command": "gh " + " ".join(parts[:4]),
+                "updated_at": now_id(),
+            }
+        )
+        write_json(state_path, state)
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def is_github_rate_limit_error(output: str) -> bool:
+    lowered = (output or "").lower()
+    return "rate limit" in lowered or "secondary rate" in lowered or "api rate limit already exceeded" in lowered
+
+
+def github_throttle_after(parts: list[str] | None, output: str, returncode: int) -> None:
+    if not parts or returncode == 0 or not is_github_rate_limit_error(output):
+        return
+    pause = config_float("AGENT_GITHUB_RATE_LIMIT_BACKOFF_SECONDS", 900.0)
+    state_path, lock_path = github_throttle_paths()
+    lock = acquire_json_lock(lock_path)
+    try:
+        state = read_json_file(state_path)
+        pause_until = max(float(state.get("pause_until") or 0), time.time() + pause)
+        state.update(
+            {
+                "pause_until": pause_until,
+                "last_rate_limit_at": now_id(),
+                "last_rate_limit_command": "gh " + " ".join(parts[:6]),
+            }
+        )
+        write_json(state_path, state)
+        print(f"GitHub API throttle: rate limit detected; pausing future gh calls for {pause:.0f}s", flush=True)
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def github_throttle_shell_command(command: str) -> list[str] | None:
+    parts = gh_shell_command_parts(command)
+    github_throttle_before(parts)
+    return parts
+
+
 def run(
     args: list[str],
     cwd: pathlib.Path | str | None = None,
@@ -38,9 +370,11 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     if args[:1] == ["git"]:
         env = git_env(env)
+    gh_parts = gh_command_parts(args)
     last: subprocess.CompletedProcess[str] | None = None
     for attempt in range(1, max(retries, 1) + 1):
         print("+ " + " ".join(shlex.quote(arg) for arg in args), flush=True)
+        github_throttle_before(gh_parts)
         proc = subprocess.run(
             args,
             cwd=str(cwd) if cwd is not None else None,
@@ -49,6 +383,7 @@ def run(
             stderr=subprocess.STDOUT,
             env=env,
         )
+        github_throttle_after(gh_parts, proc.stdout or "", proc.returncode)
         if proc.returncode == 0:
             return proc
         last = proc
@@ -74,11 +409,16 @@ def git_env(env: dict[str, str] | None = None) -> dict[str, str] | None:
     if not gh_path:
         return env
     result = os.environ.copy() if env is None else dict(env)
-    result["GIT_CONFIG_COUNT"] = "2"
-    result["GIT_CONFIG_KEY_0"] = "credential.https://github.com.helper"
+    result["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    result["GIT_CONFIG_COUNT"] = "4"
+    result["GIT_CONFIG_KEY_0"] = "credential.helper"
     result["GIT_CONFIG_VALUE_0"] = ""
     result["GIT_CONFIG_KEY_1"] = "credential.https://github.com.helper"
-    result["GIT_CONFIG_VALUE_1"] = f"!{gh_path} auth git-credential"
+    result["GIT_CONFIG_VALUE_1"] = ""
+    result["GIT_CONFIG_KEY_2"] = "credential.helper"
+    result["GIT_CONFIG_VALUE_2"] = f"!{gh_path} auth git-credential"
+    result["GIT_CONFIG_KEY_3"] = "credential.https://github.com.helper"
+    result["GIT_CONFIG_VALUE_3"] = f"!{gh_path} auth git-credential"
     return result
 
 
@@ -187,13 +527,13 @@ def default_base_branch(repo: str) -> str:
     configured = os.environ.get(env_key) or cfg.get(env_key)
     if configured:
         return configured
+    fallback = os.environ.get("AGENT_BASE_BRANCH") or cfg.get("AGENT_BASE_BRANCH")
+    if fallback:
+        return fallback
     data = gh_json_or_none(["repo", "view", repo, "--json", "defaultBranchRef"], retries=2)
     branch = ((data or {}).get("defaultBranchRef") or {}).get("name")
     if branch:
         return str(branch)
-    fallback = os.environ.get("AGENT_BASE_BRANCH") or cfg.get("AGENT_BASE_BRANCH")
-    if fallback:
-        return fallback
     raise RuntimeError(
         f"Could not determine default branch for {repo}; set AGENT_BASE_BRANCH or {env_key}."
     )
@@ -345,17 +685,26 @@ def markdown_section_items(body: str, heading: str) -> list[str]:
         return []
     items: list[str] = []
     in_fence = False
+    saw_item = False
     for raw in match.group("body").splitlines():
         line = raw.strip()
         if line.startswith("```"):
             in_fence = not in_fence
             continue
-        if in_fence or not line:
+        if in_fence:
+            continue
+        if not line:
+            if saw_item:
+                break
             continue
         if line.startswith("-"):
             item = line.lstrip("-").strip().strip("`").strip()
             if item and item.lower() not in NONE_FIELD_VALUES:
                 items.append(item)
+                saw_item = True
+            continue
+        if saw_item:
+            break
     return items
 
 

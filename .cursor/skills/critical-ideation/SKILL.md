@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/critical-ideation/SKILL.md manifest=atlas-tools.v1 checksum=sha256:1c2f8a01bfdde2ce3e4ca3b64f19fcd3fbc24ec26417807a8797ecd90b11f7dd
+# atlas-tools-generated: source=skills/critical-ideation/SKILL.md manifest=atlas-tools.v1 checksum=sha256:f96174dc28fa96ebfb65900ae08385393aac47db56fbf52065dda64321ee4aa1
 # atlas-tools-generated-end
 name: critical-ideation
 description: Stress-test the defined problem with concrete weaknesses, risks, assumptions-to-tests, and alternatives. Use after problem definition and before technical planning.
@@ -22,7 +22,7 @@ Challenge the idea to surface hidden risks, weak assumptions, and better alterna
 - Alternatives considered (include one disliked alternative)
 - At least 1 measurable milestone
 - Decision boundary if a real fork exists
- - Draft section content for `## Challenge Artifacts`
+- Draft section content for `## Challenge Artifacts`
 
 ## Sub-agent output contract
 Return a single block in this shape:

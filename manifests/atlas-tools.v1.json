@@ -16,6 +16,10 @@
       "path": "skills/github-project"
     },
     {
+      "name": "handoff",
+      "path": "skills/handoff"
+    },
+    {
       "name": "human-qa-loop",
       "path": "skills/human-qa-loop"
     },
@@ -46,6 +50,10 @@
     {
       "name": "plan-to-issues",
       "path": "skills/plan-to-issues"
+    },
+    {
+      "name": "plan-to-html",
+      "path": "skills/plan-to-html"
     },
     {
       "name": "project-queue-audit",
@@ -117,6 +125,11 @@
     "plan-to-issues": [
       "issues-from-plan",
       "github-issue-projection"
+    ],
+    "plan-to-html": [
+      "html-plan",
+      "render-plan",
+      "plan-render"
     ],
     "project-queue-audit": [
       "manual-dispatch-resolution",

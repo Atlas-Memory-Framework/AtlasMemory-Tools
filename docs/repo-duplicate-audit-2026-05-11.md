@@ -1,5 +1,9 @@
 # Repo Duplicate Audit - 2026-05-11
 
+Historical snapshot: this document records the local repo/runtime state as observed on 2026-05-11.
+It is not the current runtime inventory. Use it for audit history only, then re-run local status checks
+before making cleanup, normalization, or publication decisions.
+
 No repositories were deleted or reset during this audit. No network fetch was performed; upstream status reflects the local tracking refs already present.
 
 ## Classification

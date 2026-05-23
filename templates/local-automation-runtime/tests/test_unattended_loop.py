@@ -4,10 +4,12 @@ import importlib.machinery
 import importlib.util
 import inspect
 import json
+import os
 import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -158,6 +160,74 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertNotIn("--auto-create-missing-base", command)
         self.assertNotIn("--triage-apply-stale", command)
         self.assertNotIn("--triage-approve-review-before-dispatch", command)
+
+    def test_dispatch_max_per_repo_overrides_legacy_max_per_repo(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            [
+                "--dry-run",
+                "--repos-file",
+                "repos.txt",
+                "--max-per-repo",
+                "1",
+                "--dispatch-max-per-repo",
+                "3",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repos = Path(tmp) / "repos.txt"
+            repos.write_text("owner/repo\n", encoding="utf-8")
+            args.repos_file = str(repos)
+            commands = self.loop.build_dispatch_commands(args, Path(tmp), "chain", 1)
+
+        self.assertEqual([command.name for command in commands], ["owner/repo/lane-1", "owner/repo/lane-2", "owner/repo/lane-3"])
+
+    def test_stage_concurrency_defaults_follow_existing_target_limits(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            [
+                "--repair-max",
+                "5",
+                "--local-validate-max",
+                "3",
+                "--semantic-review-max",
+                "2",
+            ]
+        )
+
+        self.assertEqual(self.loop.concurrency_value(args, "repair_concurrency", "repair_max"), 5)
+        self.assertEqual(self.loop.concurrency_value(args, "local_validate_concurrency", "local_validate_max"), 3)
+        self.assertEqual(self.loop.concurrency_value(args, "semantic_review_concurrency", "semantic_review_max"), 2)
+        self.assertEqual(self.loop.concurrency_value(args, "deployed_validate_concurrency", default=1), 1)
+
+    def test_stage_concurrency_can_be_limited_below_target_count(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            [
+                "--repair-max",
+                "5",
+                "--repair-concurrency",
+                "2",
+                "--semantic-review-max",
+                "5",
+                "--semantic-review-concurrency",
+                "3",
+            ]
+        )
+
+        self.assertEqual(self.loop.concurrency_value(args, "repair_concurrency", "repair_max"), 2)
+        self.assertEqual(self.loop.concurrency_value(args, "semantic_review_concurrency", "semantic_review_max"), 3)
+
+    def test_project_item_limit_defaults_from_runtime_config(self) -> None:
+        with mock.patch.dict(os.environ, {"AGENT_PROJECT_ITEM_LIMIT": "750"}):
+            args = self.loop.build_parser().parse_args([])
+
+        self.assertEqual(args.project_item_limit, 750)
+
+    def test_project_reconcile_command_uses_project_item_limit(self) -> None:
+        args = self.loop.build_parser().parse_args(["--project-item-limit", "750"])
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_project_reconcile_command(args, Path(tmp), "chain", 1)
+
+        limit_index = command.args.index("--limit") + 1
+        self.assertEqual(command.args[limit_index], "750")
 
     def test_dry_run_overrides_mutating_stage_apply_flags(self) -> None:
         args = self.loop.build_parser().parse_args(

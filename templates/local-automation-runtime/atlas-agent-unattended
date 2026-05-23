@@ -24,6 +24,8 @@ DEFAULT_STAGES = (
     "reconcile",
     "project-reconcile",
     "decompose",
+    "project-reconcile",
+    "workstream-review",
     "dependency-promote",
     "dispatch",
     "review",
@@ -51,6 +53,7 @@ WARNING_PATTERNS = (
     "non-200 OK status code",
     "Gateway Timeout",
 )
+DEFAULT_PROJECT_ITEM_LIMIT = 500
 
 
 @dataclass
@@ -92,6 +95,7 @@ def parse_stages(raw: str | None) -> list[str]:
         "reconcile",
         "project-reconcile",
         "decompose",
+        "workstream-review",
         "dependency-promote",
         "dispatch",
         "review",
@@ -108,6 +112,22 @@ def parse_stages(raw: str | None) -> list[str]:
     return stages
 
 
+def dispatch_max_per_repo(args: argparse.Namespace) -> int:
+    configured = getattr(args, "dispatch_max_per_repo", None)
+    if configured is not None:
+        return int(configured)
+    return int(getattr(args, "max_per_repo", 1))
+
+
+def concurrency_value(args: argparse.Namespace, attr: str, fallback_attr: str | None = None, default: int = 1) -> int:
+    configured = getattr(args, attr, None)
+    if configured is not None:
+        return int(configured)
+    if fallback_attr is not None:
+        return int(getattr(args, fallback_attr, default))
+    return default
+
+
 def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> list[CommandSpec]:
     commands: list[CommandSpec] = []
     for repo in target_repos(args.repos_file):
@@ -115,7 +135,7 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
         shard_file = chain_dir / f"{safe_name}.repos.txt"
         shard_file.write_text(repo + "\n", encoding="utf-8")
         summary_file = chain_dir / f"local-needs-human-summary-{safe_name}-cycle-{cycle}.json"
-        for lane in range(1, args.max_per_repo + 1):
+        for lane in range(1, dispatch_max_per_repo(args) + 1):
             cmd = [
                 str(common.RUNTIME_DIR / "atlas-agent-orchestrator"),
                 "--once",
@@ -261,10 +281,48 @@ def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id:
         cmd.append("--dry-run")
     if decompose_create_subissues_enabled(args):
         cmd.append("--create-subissues")
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
     return CommandSpec(
         name="decompose",
         args=cmd,
         log_file=common.logs_dir() / f"unattended-{chain_id}-decompose-cycle-{cycle}.log",
+        summary_file=summary_file,
+    )
+
+
+def workstream_review_apply_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "dry_run", False):
+        return False
+    configured = getattr(args, "workstream_review_apply", None)
+    if configured is not None:
+        return bool(configured)
+    return bool(getattr(args, "apply", False) or getattr(args, "review_apply", False))
+
+
+def build_workstream_review_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    summary_file = chain_dir / f"workstream-review-cycle-{cycle}.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-workstream-review"),
+        "--repos-file",
+        str(args.repos_file),
+        "--scan-label",
+        args.workstream_review_label,
+        "--max",
+        str(args.workstream_review_max),
+        "--summary",
+        str(summary_file),
+    ]
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
+    if args.workstream_review_feedback_file:
+        cmd.extend(["--feedback-file", str(args.workstream_review_feedback_file)])
+    if workstream_review_apply_enabled(args):
+        cmd.append("--apply")
+    return CommandSpec(
+        name="workstream-review",
+        args=cmd,
+        log_file=common.logs_dir() / f"unattended-{chain_id}-workstream-review-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -624,11 +682,15 @@ def run_command(command: CommandSpec) -> StageResult:
     )
 
 
-def run_parallel(stage: str, commands: list[CommandSpec]) -> list[StageResult]:
+def run_parallel(stage: str, commands: list[CommandSpec], concurrency: int | None = None) -> list[StageResult]:
     if not commands:
         return []
+    limit = len(commands) if concurrency is None else max(1, min(int(concurrency), len(commands)))
+    pending = list(commands)
     processes: list[tuple[CommandSpec, Any, subprocess.Popen[str]]] = []
-    for command in commands:
+    results: list[StageResult] = []
+
+    def start(command: CommandSpec) -> None:
         command.log_file.parent.mkdir(parents=True, exist_ok=True)
         handle = command.log_file.open("w", encoding="utf-8")
         write_command_header(handle, command)
@@ -640,8 +702,9 @@ def run_parallel(stage: str, commands: list[CommandSpec]) -> list[StageResult]:
             stderr=subprocess.STDOUT,
         )
         processes.append((command, handle, proc))
-    results: list[StageResult] = []
-    for command, handle, proc in processes:
+
+    def collect(index: int) -> None:
+        command, handle, proc = processes.pop(index)
         returncode = proc.wait()
         handle.close()
         results.append(
@@ -653,6 +716,15 @@ def run_parallel(stage: str, commands: list[CommandSpec]) -> list[StageResult]:
                 log_file=str(command.log_file),
             )
         )
+
+    while pending or processes:
+        while pending and len(processes) < limit:
+            start(pending.pop(0))
+        completed = next((idx for idx, (_command, _handle, proc) in enumerate(processes) if proc.poll() is not None), None)
+        if completed is None:
+            time.sleep(0.2)
+            continue
+        collect(completed)
     return results
 
 
@@ -957,6 +1029,11 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
             results = [run_command(command)]
             print_stage_report(stage, results)
             print_decision_counts(stage, command.summary_file, "action")
+        elif stage == "workstream-review":
+            print(f"=== unattended cycle {cycle}/{args.cycles}: workstream review ===", flush=True)
+            command = build_workstream_review_command(args, chain_dir, chain_id, cycle)
+            results = [run_command(command)]
+            print_stage_report(stage, results)
         elif stage == "dependency-promote":
             print(f"=== unattended cycle {cycle}/{args.cycles}: dependency promote ===", flush=True)
             command = build_dependency_promote_command(args, chain_dir, chain_id, cycle)
@@ -987,7 +1064,11 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
             commands = build_repair_commands(args, chain_dir, chain_id, cycle, repair_summary)
             if commands:
                 print("REPAIR targets: " + ", ".join(command.name for command in commands), flush=True)
-            results = run_parallel("repair", commands)
+            results = run_parallel(
+                "repair",
+                commands,
+                concurrency_value(args, "repair_concurrency", "repair_max"),
+            )
             record_repair_attempts(results)
             print_stage_report(stage, results)
         elif stage == "local-validate":
@@ -995,21 +1076,33 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
             commands = build_local_validate_commands(args, chain_id, cycle, latest_review_summary)
             if commands:
                 print("LOCAL-VALIDATE targets: " + ", ".join(command.name for command in commands), flush=True)
-            results = run_parallel("local-validate", commands)
+            results = run_parallel(
+                "local-validate",
+                commands,
+                concurrency_value(args, "local_validate_concurrency", "local_validate_max"),
+            )
             print_stage_report(stage, results)
         elif stage == "semantic-review":
             print(f"=== unattended cycle {cycle}/{args.cycles}: semantic review ===", flush=True)
             commands = build_semantic_review_commands(args, chain_id, cycle, latest_review_summary)
             if commands:
                 print("SEMANTIC-REVIEW targets: " + ", ".join(command.name for command in commands), flush=True)
-            results = run_sequential("semantic-review", commands)
+            results = run_parallel(
+                "semantic-review",
+                commands,
+                concurrency_value(args, "semantic_review_concurrency", "semantic_review_max"),
+            )
             print_stage_report(stage, results)
         elif stage == "deployed-validate":
             print(f"=== unattended cycle {cycle}/{args.cycles}: deployed validate ===", flush=True)
             commands = build_deployed_validate_commands(args, chain_id, cycle, latest_review_summary)
             if commands:
                 print("DEPLOYED-VALIDATE targets: " + ", ".join(command.name for command in commands), flush=True)
-            results = run_sequential("deployed-validate", commands)
+            results = run_parallel(
+                "deployed-validate",
+                commands,
+                concurrency_value(args, "deployed_validate_concurrency", default=1),
+            )
             print_stage_report(stage, results)
         elif stage == "finalize":
             print(f"=== unattended cycle {cycle}/{args.cycles}: finalize ===", flush=True)
@@ -1051,6 +1144,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--required-checks-file", default=str(common.RUNTIME_DIR / "required-checks.json"))
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--max-per-repo", type=int, default=1)
+    parser.add_argument(
+        "--dispatch-max-per-repo",
+        type=int,
+        default=None,
+        help="Dispatch worker lanes per repo. Defaults to --max-per-repo for backward compatibility.",
+    )
     parser.add_argument("--auto-queue-label", default="status:ready")
     parser.add_argument("--decompose-max", type=int, default=10)
     parser.add_argument(
@@ -1071,6 +1170,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Use the planning Codex profile to create one-point child issues for oversized parents. Defaults to enabled when --apply is used.",
     )
+    parser.add_argument("--workstream-review-label", default="agent:workstream-review-required")
+    parser.add_argument("--workstream-review-max", type=int, default=4)
+    parser.add_argument("--workstream-review-feedback-file")
+    parser.add_argument(
+        "--workstream-review-apply",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply workstream review labels/comments/follow-up issues. Defaults to enabled when --review-apply or --apply is used.",
+    )
     parser.add_argument(
         "--dependency-promote-apply",
         action=argparse.BooleanOptionalAction,
@@ -1084,11 +1192,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Require one-point issue metadata before dispatch.",
     )
     parser.add_argument("--repair-max", type=int, default=4)
+    parser.add_argument(
+        "--repair-concurrency",
+        type=int,
+        default=None,
+        help="Maximum repair processes to run at once. Defaults to --repair-max.",
+    )
     parser.add_argument("--repair-cooldown-hours", type=float, default=24.0)
     parser.add_argument("--local-validate-max", type=int, default=4)
+    parser.add_argument(
+        "--local-validate-concurrency",
+        type=int,
+        default=None,
+        help="Maximum local validation processes to run at once. Defaults to --local-validate-max.",
+    )
     parser.add_argument("--local-validation-file", default=str(common.RUNTIME_DIR / "local-validation.json"))
     parser.add_argument("--semantic-review-max", type=int, default=4)
+    parser.add_argument(
+        "--semantic-review-concurrency",
+        type=int,
+        default=None,
+        help="Maximum semantic review processes to run at once. Defaults to --semantic-review-max.",
+    )
     parser.add_argument("--deployed-validate-max", type=int, default=4)
+    parser.add_argument(
+        "--deployed-validate-concurrency",
+        type=int,
+        default=1,
+        help="Maximum deployed validation processes to run at once. Default is 1 because targets may share environments.",
+    )
     parser.add_argument("--deployed-validation-file", default=str(common.RUNTIME_DIR / "deployed-validation.json"))
     parser.add_argument(
         "--local-validation-apply",
@@ -1128,7 +1260,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project-owner", default=cfg.get("AGENT_PROJECT_OWNER", "OWNER"))
     parser.add_argument("--project-number", type=int, default=int(cfg.get("AGENT_PROJECT_NUMBER", "1")))
     parser.add_argument("--projects-file", help="Optional file of GitHub Project targets for project-reconcile.")
-    parser.add_argument("--project-item-limit", type=int, default=100)
+    parser.add_argument(
+        "--project-item-limit",
+        type=int,
+        default=common.config_int("AGENT_PROJECT_ITEM_LIMIT", DEFAULT_PROJECT_ITEM_LIMIT),
+        help="Maximum GitHub Project items scanned by project reconcile and dependency promotion stages.",
+    )
     parser.add_argument("--publish", action="store_true", help="Let dispatch workers publish draft PRs.")
     parser.add_argument("--apply", action="store_true", help="Apply repair/finalize actions. Repairs dry-run without this.")
     parser.add_argument(
@@ -1156,10 +1293,21 @@ def main() -> None:
         raise SystemExit("--cycles must be >= 1")
     if args.max_per_repo < 1:
         raise SystemExit("--max-per-repo must be >= 1")
+    if args.dispatch_max_per_repo is not None and args.dispatch_max_per_repo < 1:
+        raise SystemExit("--dispatch-max-per-repo must be >= 1")
     if args.decompose_max < 0:
         raise SystemExit("--decompose-max must be >= 0")
     if args.repair_max < 0:
         raise SystemExit("--repair-max must be >= 0")
+    for attr, flag in (
+        ("repair_concurrency", "--repair-concurrency"),
+        ("local_validate_concurrency", "--local-validate-concurrency"),
+        ("semantic_review_concurrency", "--semantic-review-concurrency"),
+        ("deployed_validate_concurrency", "--deployed-validate-concurrency"),
+    ):
+        value = getattr(args, attr)
+        if value is not None and value < 1:
+            raise SystemExit(f"{flag} must be >= 1")
 
     chain_id = common.now_id()
     chain_dir = common.jobs_dir() / f"unattended-{chain_id}"

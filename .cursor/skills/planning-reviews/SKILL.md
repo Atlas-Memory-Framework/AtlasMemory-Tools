@@ -1,14 +1,14 @@
 ---
-# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:4cd807c5103997c6d7fab1b4adff7ab41fbee5d2db83af950db9cdd9e7931813
+# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:9f2e541fd401de4c944e7b226be934a2bde1064120e6dc77f0a25a192b629280
 # atlas-tools-generated-end
 name: planning-reviews
-description: Run required planning-phase reviews and log dispositions in the current plan artifact. Use after Implementation stage before plan approval.
+description: Run required planning-phase reviews, including human readability review, and log dispositions in the current plan artifact. Use after Implementation stage before plan approval.
 ---
 
 # /planning-reviews
 
 ## Purpose
-Run planning-phase review passes and update the Planning Reviews section with findings and dispositions. Do not write the plan artifact directly.
+Run planning-phase review passes and update the Planning Reviews section with findings and dispositions. Reviews must judge both structure and meaning: a structurally complete plan still fails if a maintainer or zero-contact implementation agent cannot understand what is being built, why, and how to verify it. Do not write the plan artifact directly.
 
 ## Authority contract lens
 - Markdown plan artifacts are the authoring write surface.
@@ -16,6 +16,7 @@ Run planning-phase review passes and update the Planning Reviews section with fi
 - GitHub issues, PRs, and checks are the execution truth.
 - GitHub Projects v2, rendered overlays, and runtime-mirror outputs are downstream or derived evidence surfaces only.
 - Review packaging must preserve these boundaries; no review may treat markdown as execution-authoritative once `registry-first` is active.
+- Authority/projection/dispatch language belongs in execution sections and appendices. If it crowds out the product/system problem or technical narrative, emit a Human Readability finding.
 
 ## Finding severity labeling
 - If a review point is optional and does not block correct implementation, prefix the finding text with `Non-blocker:` (keep schema and ids unchanged).
@@ -81,6 +82,21 @@ If you cannot provide an evidence hook, emit a finding with `Remediation target:
 2) **Human decisions required (if any)**: list only the remaining finding ids with a 1-line explanation each.
 3) **Dispositions needed**: prompt only for the remaining ids (A/R/D), not for auto-remediated items.
 
+## Human Readability Review (required)
+Run this review after `TechnicalClarity` and refresh it whenever Problem Definition, Technical Plan intro, Implementation Plan summary, or execution/authority sections materially change.
+
+### Review questions
+- Can a new engineer explain what is being built and why after reading only `Problem Definition` and `Technical Plan Intro`?
+- Does the rendered HTML, or the markdown if HTML is not generated, read like a product/engineering plan instead of a validator report?
+- Are automation, source-of-truth, projection, dispatch, and authority-contract details confined to execution sections/appendices unless they are the actual product/system being changed?
+- Does the plan identify the strongest remaining ambiguity, or explicitly state that none remains?
+
+### Rendered HTML check
+- Prefer generating/reviewing the plan through `plan-to-html` when that skill/script is available.
+- If rendered HTML is unavailable, perform the same reader review over the markdown and record that HTML rendering was not run.
+
+Use the Human readability review schema below.
+
 ## Review freshness + packaging outputs
 - Tie review freshness to the current validator/package outputs for the plan state being reviewed.
 - If review packaging, validator evidence, or refreshed stamps no longer match the current plan state, treat the review as stale and rerun it.
@@ -112,6 +128,16 @@ This skill is typically invoked by `/plan` during the Reviews stage. Users can r
 - Findings may be auto-remediated per policy above, but dispositions must still be recorded. Explicit user agency is required only for human-agency findings.
 
 ### Zero-context review schema
+When used for Reviews/Approved re-entry, include this block before findings:
+- Re-entry audit answers:
+  - What is being built:
+  - Why now:
+  - Repos involved:
+  - What changes first:
+  - What must not happen:
+  - How work is validated:
+  - What remains blocked:
+
 - Missing context:
   - F-001: ...
 - Contradictions:
@@ -141,6 +167,18 @@ This skill is typically invoked by `/plan` during the Reviews stage. Users can r
 - Pass/fail readiness statement:
   - F-003: ...
 
+### Human readability review schema
+- Product/system clarity:
+  - F-001: ...
+- Technical narrative clarity:
+  - F-002: ...
+- Execution-mechanics leakage:
+  - F-003: ...
+- Strongest remaining ambiguity:
+  - F-004: ...
+- Pass/fail readability statement:
+  - F-005: ...
+
 ### Automation readiness review schema
 - Manifest gaps:
   - F-001: ...
@@ -162,6 +200,7 @@ This skill is typically invoked by `/plan` during the Reviews stage. Users can r
 - Implementer readiness review (doc-reviewer-implementer)
 - Expert technical review if triggered (doc-reviewer-expert-tech) or mark N/A with rationale
 - Security/privacy review (required)
+- Human readability review (required)
 - Automation readiness review when `AutomationTarget != none`
 
 ## Sub-agent routing
@@ -174,6 +213,7 @@ Unless the user explicitly requests otherwise, run **one sub-agent per review ty
 - Implementer readiness review: run a reviewer using `/review mode=implementer-readiness`
 - Expert technical review: run a reviewer using `/review mode=expert-tech` when triggered; otherwise record `N/A` with rationale
 - Security/privacy review: run as a dedicated pass (security/privacy rubric below). If using a reviewer agent, treat it as expert-tech strictness but security/privacy scope.
+- Human readability review: run `/review mode=human-readability`
 - Automation readiness review: run `/review mode=automation-readiness` when `AutomationTarget != none`.
 
 Then merge outputs into the plan’s `## Planning Reviews` section, preserving stable `F-xxx` ids per review block and recording `Refreshed: YYYY-MM-DD` for each required review.

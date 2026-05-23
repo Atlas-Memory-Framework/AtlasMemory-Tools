@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 ssot-projects.local.json
 local-automation-runtime-state/
+artifacts/

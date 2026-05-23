@@ -29,9 +29,9 @@ Install `templates/local-automation-runtime/` into a target runtime directory an
    - `cp projects.example.txt projects.txt`
    - `cp config/required-checks.example.json required-checks.json`
    - `cp config/local-validation.example.json local-validation.json`
-   - `cp config/deployed-validation.example.json deployed-validation.json`
    - Put target GitHub repos in `repos.txt`, one `OWNER/REPO` per line. The runtime clones them under `repos/`.
    - Do not set up one runtime per repo by default.
+   - Copy `config/deployed-validation.example.json` to `deployed-validation.json` only after the target repo has chosen hosted/deployed validation.
 4. Fill `config.env` with local-only values:
    - `AGENT_REPO`
    - `AGENT_TRUSTED_AUTHORS`

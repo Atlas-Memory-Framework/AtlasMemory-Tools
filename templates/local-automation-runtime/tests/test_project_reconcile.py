@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +75,12 @@ class ProjectReconcileTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.reconcile = load_script("atlas_agent_project_reconcile_test", "atlas-agent-project-reconcile")
+
+    def test_limit_defaults_from_runtime_config(self) -> None:
+        with mock.patch.dict(os.environ, {"AGENT_PROJECT_ITEM_LIMIT": "750"}):
+            args = self.reconcile.build_parser().parse_args([])
+
+        self.assertEqual(args.limit, 750)
 
     def test_desired_metadata_hydrates_child_issue_fields(self) -> None:
         pr = {
@@ -146,6 +154,144 @@ class ProjectReconcileTests(unittest.TestCase):
             self.assertEqual(updates["Workstream"], "WS1-CONFIG-TYPES")
             self.assertEqual(updates["AutomationState"], "Done")
             self.assertEqual(updates["Status"], "Done")
+        finally:
+            self.reconcile.latest_pr_for_issue = original_latest_pr
+
+    def test_metadata_decision_inherits_parent_project_fields_for_decomposed_children(self) -> None:
+        original_latest_pr = self.reconcile.latest_pr_for_issue
+        self.reconcile.latest_pr_for_issue = lambda _repo, _number: None
+        fields = {
+            name: {"id": name, "options": []}
+            for name in (
+                "PlanKey",
+                "ParentEpic",
+                "ReviewGates",
+                "Risk",
+                "RiskTags",
+                "ValidationScope",
+                "Priority",
+            )
+        }
+        fields["Risk"]["options"] = [{"name": "High", "id": "high"}]
+        fields["ValidationScope"]["options"] = [{"name": "ci", "id": "ci"}]
+        fields["Priority"]["options"] = [{"name": "P1", "id": "p1"}]
+        try:
+            config = self.reconcile.ProjectConfig(
+                project_id="PROJECT",
+                status_field_id="Status",
+                status_options={},
+                execution_state_field_id=None,
+                execution_state_options={},
+                fields=fields,
+            )
+            parent = item(
+                5,
+                planKey="PLAN-1",
+                parentEpic="https://github.com/owner/repo/issues/1",
+                reviewGates="G-BACKEND-BUILD",
+                risk="High",
+                riskTags="needs-ci-validation, migration",
+                validationScope="ci",
+                priority="P1",
+            )
+            child = item(
+                49,
+                content={
+                    "type": "Issue",
+                    "repository": "owner/repo",
+                    "number": 49,
+                    "title": "[WS2-QUOTE-CONTRACT] Child",
+                    "url": "https://github.com/owner/repo/issues/49",
+                    "body": """## Automation Manifest Metadata
+- Suggested points: `1`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+
+## Parent Issue
+Parent issue: #5
+https://github.com/owner/repo/issues/5
+""",
+                },
+                labels=["points:1", "agent:one-point", "workstream:ws2-quote-contract"],
+            )
+
+            decisions = self.reconcile.metadata_decisions(
+                "owner",
+                1,
+                config,
+                [parent, child],
+                {("owner/repo", 5): "OPEN", ("owner/repo", 49): "OPEN"},
+                hydrate_metadata=True,
+            )
+
+            child_decision = next(decision for decision in decisions if decision.number == 49)
+            self.assertEqual(child_decision.field_updates["PlanKey"], "PLAN-1")
+            self.assertEqual(child_decision.field_updates["ParentEpic"], "https://github.com/owner/repo/issues/1")
+            self.assertEqual(child_decision.field_updates["ReviewGates"], "G-BACKEND-BUILD")
+            self.assertEqual(child_decision.field_updates["Risk"], "High")
+            self.assertEqual(child_decision.field_updates["RiskTags"], "needs-ci-validation, migration")
+            self.assertEqual(child_decision.field_updates["ValidationScope"], "ci")
+            self.assertEqual(child_decision.field_updates["Priority"], "P1")
+        finally:
+            self.reconcile.latest_pr_for_issue = original_latest_pr
+
+    def test_metadata_decision_inherits_unambiguous_workstream_priority(self) -> None:
+        original_latest_pr = self.reconcile.latest_pr_for_issue
+        self.reconcile.latest_pr_for_issue = lambda _repo, _number: None
+        fields = {"Priority": {"id": "Priority", "options": [{"name": "P0", "id": "p0"}]}}
+        try:
+            config = self.reconcile.ProjectConfig(
+                project_id="PROJECT",
+                status_field_id="Status",
+                status_options={},
+                execution_state_field_id=None,
+                execution_state_options={},
+                fields=fields,
+            )
+            seeded = item(17, workstream="WS1-CONFIG-TYPES-01", priority="P0")
+            child = item(31, workstream="WS1-CONFIG-TYPES", priority="")
+
+            decisions = self.reconcile.metadata_decisions(
+                "owner",
+                1,
+                config,
+                [seeded, child],
+                {("owner/repo", 17): "OPEN", ("owner/repo", 31): "OPEN"},
+                hydrate_metadata=True,
+            )
+
+            child_decision = next(decision for decision in decisions if decision.number == 31)
+            self.assertEqual(child_decision.field_updates["Priority"], "P0")
+        finally:
+            self.reconcile.latest_pr_for_issue = original_latest_pr
+
+    def test_metadata_decision_defaults_priority_from_gate_tier(self) -> None:
+        original_latest_pr = self.reconcile.latest_pr_for_issue
+        self.reconcile.latest_pr_for_issue = lambda _repo, _number: None
+        fields = {"Priority": {"id": "Priority", "options": [{"name": "P1", "id": "p1"}]}}
+        try:
+            config = self.reconcile.ProjectConfig(
+                project_id="PROJECT",
+                status_field_id="Status",
+                status_options={},
+                execution_state_field_id=None,
+                execution_state_options={},
+                fields=fields,
+            )
+            row = item(5, labels=["tier:t0", "type:story"], priority="")
+
+            decisions = self.reconcile.metadata_decisions(
+                "owner",
+                1,
+                config,
+                [row],
+                {("owner/repo", 5): "OPEN"},
+                hydrate_metadata=True,
+            )
+
+            self.assertEqual(decisions[0].field_updates["Priority"], "P1")
         finally:
             self.reconcile.latest_pr_for_issue = original_latest_pr
 

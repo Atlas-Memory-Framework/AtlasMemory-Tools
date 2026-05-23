@@ -34,6 +34,7 @@ READY_PROJECT_FIELDS = {
     "BlockerReason": "",
     "Blocks": "",
 }
+DEFAULT_PROJECT_ITEM_LIMIT = 500
 
 
 @dataclass(frozen=True)
@@ -133,10 +134,17 @@ def project_config(owner: str, project_number: int) -> FieldConfig:
 
 
 def project_items(owner: str, project_number: int, limit: int) -> list[dict[str, Any]]:
-    return common.gh_json(
+    items = common.gh_json(
         ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(limit)],
         retries=2,
     ).get("items") or []
+    if len(items) >= limit:
+        print(
+            f"DEPENDENCY-PROMOTE warning: scanned item limit {limit} for {owner}/{project_number}; "
+            "raise --limit or AGENT_PROJECT_ITEM_LIMIT if dependency-gated Project cards are missing.",
+            flush=True,
+        )
+    return items
 
 
 def normalize_key(value: str) -> str:
@@ -627,7 +635,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
     parser.add_argument("--projects-file", default=str(common.RUNTIME_DIR / "projects.txt"))
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=common.config_int("AGENT_PROJECT_ITEM_LIMIT", DEFAULT_PROJECT_ITEM_LIMIT),
+        help="Maximum GitHub Project items to scan.",
+    )
     parser.add_argument("--summary")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Preview promotions. This is the default.")

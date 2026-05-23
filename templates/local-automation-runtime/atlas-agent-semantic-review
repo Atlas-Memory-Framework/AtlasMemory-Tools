@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 from pathlib import Path
@@ -182,6 +183,28 @@ def display_review_text(review_text: str) -> str:
     return compact(text, 6000)
 
 
+def codex_timeout_seconds() -> int:
+    cfg = common.read_config()
+    raw = (
+        os.environ.get("AGENT_CODEX_REVIEW_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_REVIEW_TIMEOUT_SECONDS")
+        or os.environ.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or cfg.get("AGENT_CODEX_TIMEOUT_SECONDS")
+        or "1800"
+    )
+    try:
+        seconds = int(str(raw).strip().strip('"'))
+    except ValueError:
+        return 1800
+    return max(seconds, 1)
+
+
+def with_timeout(cmd: list[str]) -> list[str]:
+    if shutil.which("timeout"):
+        return ["timeout", str(codex_timeout_seconds()), *cmd]
+    return cmd
+
+
 def run_codex_review(job_dir: Path, prompt: str) -> str:
     prompt_path = job_dir / "semantic-review-prompt.md"
     prompt_path.write_text(prompt, encoding="utf-8")
@@ -189,31 +212,70 @@ def run_codex_review(job_dir: Path, prompt: str) -> str:
     image = common.codex_image()
     profile_args = common.codex_profile_shell_args("review")
     profile_segment = f"{profile_args} " if profile_args else ""
-    cmd = [
-        *common.podman_cmd(),
-        "run",
-        "--rm",
-        *common.podman_userns_args(),
-        "--network=slirp4netns",
-        "-v",
-        f"{run_home}:/home/agent/.codex:Z",
-        "-v",
-        f"{job_dir}:/job:Z",
-        image,
-        "bash",
-        "-lc",
-        f"cd /job && codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < semantic-review-prompt.md",
-    ]
-    proc = common.run(cmd, check=False)
-    shutil.rmtree(run_home, ignore_errors=True)
-    raw_output = proc.stdout or ""
-    if proc.returncode != 0:
+    shell_command = (
+        f"cd /job && codex exec {profile_segment}"
+        "--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < semantic-review-prompt.md"
+    )
+
+    def run_local_codex() -> Any:
+        if not shutil.which("codex"):
+            return None
+        env = os.environ.copy()
+        env["CODEX_HOME"] = str(run_home)
+        return common.run(
+            with_timeout([
+                "bash",
+                "-lc",
+                f"codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < semantic-review-prompt.md",
+            ]),
+            cwd=job_dir,
+            check=False,
+            env=env,
+        )
+
+    try:
+        cmd = [
+            *common.podman_cmd(),
+            "run",
+            "--rm",
+            *common.podman_userns_args(),
+            "--network=slirp4netns",
+            "-v",
+            f"{run_home}:/home/agent/.codex:Z",
+            "-v",
+            f"{job_dir}:/job:Z",
+            image,
+            "bash",
+            "-lc",
+            shell_command,
+        ]
+        proc = common.run(with_timeout(cmd), check=False)
+        if proc.returncode != 0 and "podman: command not found" in (proc.stdout or "").lower():
+            fallback = run_local_codex()
+            if fallback is not None:
+                proc = fallback
+    except RuntimeError as exc:
+        fallback = run_local_codex()
+        if fallback is None:
+            proc = None
+            raw_output = f"{exc}\nlocal codex fallback is unavailable\n"
+        else:
+            proc = fallback
+    finally:
+        shutil.rmtree(run_home, ignore_errors=True)
+    if proc is None:
+        returncode = 1
+    else:
+        returncode = proc.returncode
+        raw_output = proc.stdout or ""
+    (job_dir / "codex.log").write_text(raw_output, encoding="utf-8", errors="replace")
+    if returncode != 0:
         output = (
             "Result: needs-human\n"
             "Summary:\n"
             "Codex semantic review command failed before completing a review.\n"
             "Blocking Findings:\n"
-            f"- Semantic review infrastructure exited {proc.returncode}; this PR was not reviewed.\n"
+            f"- Semantic review infrastructure exited {returncode}; this PR was not reviewed.\n"
             "Validation Assessment:\n"
             "No semantic review was completed.\n"
             "Rationale:\n"

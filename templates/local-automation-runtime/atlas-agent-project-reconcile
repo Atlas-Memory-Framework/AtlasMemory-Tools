@@ -16,6 +16,7 @@ import atlas_agent_common as common
 
 DEFAULT_OWNER = os.environ.get("AGENT_PROJECT_OWNER", "OWNER")
 DEFAULT_PROJECT_NUMBER = int(os.environ.get("AGENT_PROJECT_NUMBER", "1"))
+DEFAULT_PROJECT_ITEM_LIMIT = 500
 
 
 @dataclass
@@ -104,10 +105,17 @@ def project_config(owner: str, project_number: int) -> ProjectConfig:
 
 
 def project_items(owner: str, project_number: int, limit: int) -> list[dict[str, Any]]:
-    return common.gh_json(
+    items = common.gh_json(
         ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(limit)],
         retries=2,
     ).get("items") or []
+    if len(items) >= limit:
+        print(
+            f"PROJECT-RECONCILE warning: scanned item limit {limit} for {owner}/{project_number}; "
+            "raise --limit or AGENT_PROJECT_ITEM_LIMIT if newer Project cards are missing.",
+            flush=True,
+        )
+    return items
 
 
 def issue_key(item: dict[str, Any]) -> tuple[str, int] | None:
@@ -199,6 +207,34 @@ def gate_tier_from(labels: set[str]) -> str:
     return ""
 
 
+def label_value(labels: set[str], prefix: str) -> str:
+    for label in sorted(labels):
+        if label.startswith(prefix):
+            return label.split(":", 1)[1].strip()
+    return ""
+
+
+def risk_from_tags(raw_tags: str) -> str:
+    tags = {tag.strip().lower() for tag in re.split(r"[,;\n]+", raw_tags or "") if tag.strip()}
+    if tags & {"auth", "secrets", "migration", "cross-repo", "needs-deployed-validation", "ui-surface"}:
+        return "High"
+    if tags:
+        return "Medium"
+    return ""
+
+
+def priority_from_gate_tier(gate_tier: str) -> str:
+    match = re.search(r"(\d+)", gate_tier or "")
+    if not match:
+        return ""
+    tier = int(match.group(1))
+    if tier <= 1:
+        return "P1"
+    if tier <= 3:
+        return "P2"
+    return "P3"
+
+
 def section_text(body: str, heading: str) -> str:
     pattern = rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(?P<body>.*?)(?=^##\s+|\Z)"
     match = re.search(pattern, body)
@@ -219,6 +255,85 @@ def section_text(body: str, heading: str) -> str:
         if item and item.lower() not in common.NONE_FIELD_VALUES:
             items.append(item)
     return "\n".join(items)
+
+
+def section_body_text(body: str, heading: str) -> str:
+    pattern = rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(?P<body>.*?)(?=^##\s+|\Z)"
+    match = re.search(pattern, body)
+    if not match:
+        return ""
+    return match.group("body").strip()
+
+
+def section_url(body: str, heading: str) -> str:
+    text = section_body_text(body, heading)
+    match = re.search(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/\d+", text)
+    return match.group(0) if match else ""
+
+
+def parent_issue_refs(item: dict[str, Any]) -> list[tuple[str, int]]:
+    key = issue_key(item)
+    if not key:
+        return []
+    repo, _number = key
+    body = str((item.get("content") or {}).get("body") or "")
+    refs: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for match in re.finditer(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)", body):
+        ref = (match.group(1), int(match.group(2)))
+        if ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    for match in re.finditer(r"(?im)^\s*(?:-\s*)?(?:Parent issue|Parent):\s*`?#(\d+)`?\s*$", body):
+        ref = (repo, int(match.group(1)))
+        if ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    return refs
+
+
+INHERITED_PROJECT_FIELDS = (
+    "PlanKey",
+    "ParentEpic",
+    "ReviewGates",
+    "Risk",
+    "RiskTags",
+    "ValidationScope",
+    "Priority",
+)
+
+
+def item_project_value(item: dict[str, Any], field: str) -> str:
+    return item_value(item, field).strip()
+
+
+def priority_workstream_key(workstream: str) -> str:
+    cleaned = workstream.strip().upper()
+    return re.sub(r"-\d+$", "", cleaned)
+
+
+def inherited_project_metadata(
+    item: dict[str, Any],
+    items_by_issue: dict[tuple[str, int], dict[str, Any]],
+    priority_by_workstream: dict[str, str],
+) -> dict[str, str]:
+    inherited: dict[str, str] = {}
+    for ref in parent_issue_refs(item):
+        parent = items_by_issue.get(ref)
+        if not parent:
+            continue
+        for field in INHERITED_PROJECT_FIELDS:
+            value = item_project_value(parent, field)
+            if value and field not in inherited:
+                inherited[field] = value
+    workstream = priority_workstream_key(
+        item_project_value(item, "Workstream") or normalized_workstream(labels_for_item(item), issue_title(item))
+    )
+    if workstream and "Priority" not in inherited:
+        priority = priority_by_workstream.get(workstream)
+        if priority:
+            inherited["Priority"] = priority
+    return inherited
 
 
 def issue_ready_from(body: str, labels: set[str]) -> str:
@@ -274,7 +389,21 @@ def pr_label_names(pr: dict[str, Any] | None) -> set[str]:
     return labels
 
 
-def desired_metadata(item: dict[str, Any], issue_state_value: str, pr: dict[str, Any] | None) -> dict[str, str]:
+def should_lookup_pr(item: dict[str, Any], issue_state_value: str) -> bool:
+    labels = labels_for_item(item)
+    if "agent:pr-open" in labels or "agent:running" in labels:
+        return True
+    if issue_state_value == "CLOSED":
+        return bool(item_value(item, "ActivePR")) or item_value(item, "ReviewVerdict") != "Merged"
+    return item_value(item, "AutomationState") == "PR Open" or item_value(item, "Status") == "In Progress"
+
+
+def desired_metadata(
+    item: dict[str, Any],
+    issue_state_value: str,
+    pr: dict[str, Any] | None,
+    inherited: dict[str, str] | None = None,
+) -> dict[str, str]:
     content = item.get("content") or {}
     body = str(content.get("body") or "")
     title = issue_title(item)
@@ -285,6 +414,12 @@ def desired_metadata(item: dict[str, Any], issue_state_value: str, pr: dict[str,
     dispatch_recommendation = first_body_field(body, "Dispatch recommendation")
     target_repo = first_body_field(body, "Target repo(s)", "Target repo") or repo
     execution_repo = first_body_field(body, "Execution repo") or target_repo
+    plan_key = first_body_field(body, "Plan key")
+    risk_tags = first_body_field(body, "Risk tags")
+    validation_scope = first_body_field(body, "Validation scope")
+    review_gates = section_text(body, "Named Gates") or section_text(body, "Required Gates")
+    priority = first_body_field(body, "Priority") or label_value(labels, "priority:")
+    parent_epic = section_url(body, "Parent Epic")
     pr_state = str((pr or {}).get("state") or "").upper()
     pr_labels = pr_label_names(pr)
     is_closed = issue_state_value == "CLOSED"
@@ -297,10 +432,17 @@ def desired_metadata(item: dict[str, Any], issue_state_value: str, pr: dict[str,
         "TargetRepo": target_repo,
         "ExecutionRepo": execution_repo,
         "BaseBranch": first_body_field(body, "Base branch"),
+        "PlanKey": plan_key,
         "SourceId": bracket_source_id(title),
+        "ParentEpic": parent_epic,
+        "ReviewGates": review_gates,
         "GateTier": gate_tier_from(labels),
         "DispatchMode": dispatch_mode,
         "DispatchRecommendation": dispatch_recommendation,
+        "Priority": priority.upper() if priority else "",
+        "Risk": risk_from_tags(risk_tags),
+        "RiskTags": risk_tags,
+        "ValidationScope": validation_scope,
         "IssueReady": issue_ready_from(body, labels),
         "WriteScope": section_text(body, "Write Scope"),
         "Validation": section_text(body, "Validation Commands"),
@@ -329,6 +471,11 @@ def desired_metadata(item: dict[str, Any], issue_state_value: str, pr: dict[str,
         updates["AutomationState"] = "Ready"
     if has_pr:
         updates["ActivePR"] = str(pr.get("url") or "")
+    for field, value in (inherited or {}).items():
+        if not updates.get(field):
+            updates[field] = value
+    if not updates.get("Priority"):
+        updates["Priority"] = priority_from_gate_tier(updates.get("GateTier", ""))
     return {field: value for field, value in updates.items() if value}
 
 
@@ -346,17 +493,40 @@ def metadata_decisions(
 ) -> list[ProjectDecision]:
     if not hydrate_metadata or not config.fields:
         return []
+    items_by_issue = {key: item for item in items if (key := issue_key(item))}
+    priority_values_by_workstream: dict[str, set[str]] = {}
+    for item in items:
+        workstream = priority_workstream_key(
+            item_project_value(item, "Workstream") or normalized_workstream(labels_for_item(item), issue_title(item))
+        )
+        priority = item_project_value(item, "Priority")
+        if workstream and priority:
+            priority_values_by_workstream.setdefault(workstream, set()).add(priority)
+    priority_by_workstream = {
+        workstream: next(iter(values))
+        for workstream, values in priority_values_by_workstream.items()
+        if len(values) == 1
+    }
     decisions: list[ProjectDecision] = []
     for item in items:
         key = issue_key(item)
         if not key:
             continue
         repo, number = key
-        pr = latest_pr_for_issue(repo, number)
-        desired = desired_metadata(item, issue_states.get(key, "UNKNOWN"), pr)
+        pr = latest_pr_for_issue(repo, number) if should_lookup_pr(item, issue_states.get(key, "UNKNOWN")) else None
+        desired = desired_metadata(
+            item,
+            issue_states.get(key, "UNKNOWN"),
+            pr,
+            inherited_project_metadata(item, items_by_issue, priority_by_workstream),
+        )
         field_updates: dict[str, str] = {}
         for field, value in desired.items():
-            if field not in config.fields:
+            field_config = config.fields.get(field)
+            if not field_config:
+                continue
+            options = {str(option.get("name")) for option in field_config.get("options") or []}
+            if options and value not in options:
                 continue
             current = item_value(item, field)
             if field in ALWAYS_RECONCILE_FIELDS:
@@ -569,7 +739,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--projects-file",
         help="Optional file of project targets, one per line as OWNER/NUMBER or 'OWNER NUMBER'.",
     )
-    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=common.config_int("AGENT_PROJECT_ITEM_LIMIT", DEFAULT_PROJECT_ITEM_LIMIT),
+        help="Maximum GitHub Project items to scan.",
+    )
     parser.add_argument(
         "--hydrate-metadata",
         action=argparse.BooleanOptionalAction,

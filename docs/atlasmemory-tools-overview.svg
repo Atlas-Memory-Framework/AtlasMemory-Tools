@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">AtlasMemory Tools architecture overview</title>
+  <desc id="desc">Diagram showing canonical skills, agents, project templates, issue projection, local automation runtime, GitHub Projects, pull requests, validation, repair, and finalization.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#101820"/>
+      <stop offset="1" stop-color="#1f2933"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" x2="1">
+      <stop offset="0" stop-color="#37c2a1"/>
+      <stop offset="1" stop-color="#4f8cff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+    <style>
+      .title { font: 700 42px system-ui, -apple-system, Segoe UI, sans-serif; fill: #f8fafc; letter-spacing: 0; }
+      .subtitle { font: 400 18px system-ui, -apple-system, Segoe UI, sans-serif; fill: #b8c4d0; letter-spacing: 0; }
+      .section { font: 700 18px system-ui, -apple-system, Segoe UI, sans-serif; fill: #e5edf5; letter-spacing: 0; }
+      .item { font: 500 15px system-ui, -apple-system, Segoe UI, sans-serif; fill: #cbd6e2; letter-spacing: 0; }
+      .small { font: 500 13px system-ui, -apple-system, Segoe UI, sans-serif; fill: #9fb0c1; letter-spacing: 0; }
+      .card { fill: #172330; stroke: #2d4052; stroke-width: 1.5; rx: 8; filter: url(#shadow); }
+      .chip { fill: #203142; stroke: #35546a; stroke-width: 1; rx: 6; }
+      .line { stroke: url(#accent); stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f8cff"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <text x="64" y="68" class="title">AtlasMemory Tools</text>
+  <text x="64" y="98" class="subtitle">Canonical planning, issue projection, GitHub Project, and local issue-to-PR automation toolkit</text>
+
+  <rect x="64" y="142" width="278" height="322" class="card"/>
+  <text x="88" y="178" class="section">Canonical Source</text>
+  <rect x="88" y="206" width="230" height="38" class="chip"/>
+  <text x="104" y="230" class="item">skills/ workflow contracts</text>
+  <rect x="88" y="258" width="230" height="38" class="chip"/>
+  <text x="104" y="282" class="item">agents/ role rubrics</text>
+  <rect x="88" y="310" width="230" height="38" class="chip"/>
+  <text x="104" y="334" class="item">runtime template scripts</text>
+  <rect x="88" y="362" width="230" height="38" class="chip"/>
+  <text x="104" y="386" class="item">Project schema + views</text>
+  <text x="88" y="430" class="small">Generated harness copies are install artifacts.</text>
+
+  <rect x="414" y="142" width="278" height="322" class="card"/>
+  <text x="438" y="178" class="section">Plan To Execution</text>
+  <rect x="438" y="206" width="230" height="38" class="chip"/>
+  <text x="454" y="230" class="item">/plan authoring artifact</text>
+  <rect x="438" y="258" width="230" height="38" class="chip"/>
+  <text x="454" y="282" class="item">reviews + approval gates</text>
+  <rect x="438" y="310" width="230" height="38" class="chip"/>
+  <text x="454" y="334" class="item">plan-to-issues projection</text>
+  <rect x="438" y="362" width="230" height="38" class="chip"/>
+  <text x="454" y="386" class="item">GitHub Project fields</text>
+  <text x="438" y="430" class="small">Issues and PRs become execution truth.</text>
+
+  <rect x="764" y="142" width="452" height="322" class="card"/>
+  <text x="788" y="178" class="section">Local Automation Runtime</text>
+  <rect x="788" y="206" width="184" height="38" class="chip"/>
+  <text x="804" y="230" class="item">Queue</text>
+  <rect x="1008" y="206" width="184" height="38" class="chip"/>
+  <text x="1024" y="230" class="item">Dispatch</text>
+  <rect x="788" y="268" width="184" height="38" class="chip"/>
+  <text x="804" y="292" class="item">Review</text>
+  <rect x="1008" y="268" width="184" height="38" class="chip"/>
+  <text x="1024" y="292" class="item">Validate</text>
+  <rect x="788" y="330" width="184" height="38" class="chip"/>
+  <text x="804" y="354" class="item">Repair</text>
+  <rect x="1008" y="330" width="184" height="38" class="chip"/>
+  <text x="1024" y="354" class="item">Finalize</text>
+  <text x="788" y="414" class="small">Shared GitHub throttle, write-scope locks, direct Project state sync.</text>
+
+  <path d="M342 303 H414" class="line"/>
+  <path d="M692 303 H764" class="line"/>
+  <path d="M990 464 V538 H203 V464" class="line"/>
+
+  <rect x="64" y="524" width="1152" height="54" rx="8" fill="#12202b" stroke="#294154"/>
+  <text x="88" y="557" class="item">Flow: author plan -> review gates -> project issues -> queue -> worker PR -> review/validate/repair -> merge + close</text>
+</svg>

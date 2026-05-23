@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:9e7a876644564d370960929c8be6d7efc6c740b2e5ea1f137c3eac8669262ef7
+# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:19730af6a23558c4899b69221a706688b50d7161f54bae1fe9e2d63bc48fc833
 # atlas-tools-generated-end
 name: local-automation-runtime-operate
 description: "Operate the local automation runtime: queue issues, run bounded or unattended cycles, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup."
@@ -38,7 +38,7 @@ template tree.
    - `./run_e2e_chain.sh --cycles 1`
    - Add mutating flags only after preview looks correct.
 6. Run unattended cycles when the lane is stable:
-   - `./atlas-agent-unattended --cycles 3 --max-per-repo 2 --review-apply --post-cycle-summary`
+   - `./atlas-agent-unattended --cycles 3 --dispatch-max-per-repo 2 --review-apply --post-cycle-summary`
 7. Review blockers:
    - `./atlas-agent-review --summary review.json`
    - `./atlas-agent-semantic-review OWNER/REPO#PR --apply`
@@ -51,7 +51,7 @@ template tree.
 
 ## Guardrails
 
-- Keep cycles bounded with `--cycles`, `--max-per-repo`, and repair/validation max flags.
+- Keep cycles bounded with `--cycles`, `--dispatch-max-per-repo`, and per-stage repair/review/validation max and concurrency flags.
 - Treat `Open dependencies:` and `Manual gates remaining:` as the runtime dispatch contract; Project fields are advisory unless they match the issue body.
 - Keep unattended dispatch one-point only. Larger `points:N` issues must be decomposed or explicitly handled outside unattended dispatch.
 - Treat no-check PRs as blocked unless local validation and required-check policy explicitly allow them.

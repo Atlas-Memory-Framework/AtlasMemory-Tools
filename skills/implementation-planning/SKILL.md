@@ -6,7 +6,7 @@ description: Produce the execution plan in the current plan artifact including f
 # /implementation-planning
 
 ## Purpose
-Create the Implementation Plan section for build execution. Run as a sub-agent and return a draft section to the orchestrator; do not write the plan artifact directly.
+Create the Implementation Plan section for build execution. It must be detailed enough for future build agents that have no prior context and no user interaction: file scope, task intent, validation, rollout, rollback, and blockers must be explicit. Run as a sub-agent and return a draft section to the orchestrator; do not write the plan artifact directly.
 
 ## Required outputs
 - Exhaustive file deltas with change type, explicit owner (existing agent/WS), and rationale.
@@ -18,7 +18,8 @@ Create the Implementation Plan section for build execution. Run as a sub-agent a
 - Build-time gates for each phase.
 - Test Plan including at least a minimal test matrix (risk -> test type -> where it runs).
 - Rollout/Deployment steps (even minimal) and an explicit rollback trigger + rollback steps.
- - Draft section content for `## Implementation Plan`
+- Explicit manual blockers for any task that cannot be executed without user input.
+- Draft section content for `## Implementation Plan`
 - If `AutomationTarget != none`, include enough stable ids, file ownership, gate definitions, and task boundaries for `/automation-decomposition` to derive one-PR leaf issues without inventing scope.
 
 ## Anti-placeholder rule (hard rule)
@@ -26,9 +27,17 @@ Create the Implementation Plan section for build execution. Run as a sub-agent a
   - the gate name(s),
   - where they run (CI vs local vs deployed), and
   - the entrypoint/command (or test runner/target) and what “green” means.
+- Do not write "ask user", "decide later", "verify manually", "wire up", "clean up", "handle edge cases", or "follow existing pattern" unless the specific owner, trigger, file/interface, and evidence are named.
 - If specifics are truly unknown, convert them into either:
   - an explicit Decision boundary (A/B/C) with a recommended default, OR
   - a DR-backed Defer with an explicit trigger.
+
+## Zero-interaction implementer standard
+- Every workstream must state the intended behavior change in addition to owned files.
+- Every task must be locally actionable from the plan plus repository context. If not, block and ask now.
+- Every validation step must specify command/entrypoint or evidence artifact, expected green result, and where it runs.
+- Every rollout/rollback step must name the environment or explicitly say `N/A` with rationale.
+- Manual validation is allowed only as a named gate/blocker with owner, exact evidence to collect, and dispatch effect.
 
 ## Q/A wrapper
 - The orchestrator must run the inline Q/A loop to confirm user understanding and agreement on scope, ownership, and gates.
@@ -91,6 +100,10 @@ Use this exact structure so the `/plan` validator can deterministically check ex
 ### Workstreams + merge points
 - WS1: <name>
   - Owner:
+  - Agent type: <generalPurpose | test-engineer | code-reviewer | explore>
+  - Delegate: required | optional
+  - Intended behavior change:
+  - Tracking: <optional org/repo#123 or URL>
   - Depends on:
   - Review gates (named):
     - G-...

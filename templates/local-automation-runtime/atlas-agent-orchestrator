@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -209,11 +210,12 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
         return False
     print(f"Queueing {repo}#{issue['number']} from {args.auto_queue_label}: {issue['title']}", flush=True)
     common.run(["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--add-label", "agent:ready"], retries=3)
+    common.update_issue_automation_state(repo, int(issue["number"]), "Queued")
     return True
 
 
-def run_worker(repo: str, number: int, publish: bool) -> int:
-    env = common.env_for_repo(repo)
+def run_worker(repo: str, number: int, publish: bool, base_branch: str | None = None) -> int:
+    env = common.env_for_repo(repo, base_branch=base_branch)
     common.ensure_git_identity(common.ensure_repo(repo))
     cmd = [str(common.local_worker()), "--once", "--issue", str(number)]
     if publish:
@@ -255,6 +257,213 @@ def acquire_issue_lease(repo: str, issue: dict, stale_seconds: int) -> Path | No
 
 def release_issue_lease(path: Path | None) -> None:
     if path is not None:
+        path.unlink(missing_ok=True)
+
+
+def dispatch_base_branch(repo: str, issue: dict) -> str:
+    body_base = common.issue_body_base_branch(issue)
+    if body_base:
+        return body_base
+    cfg = common.read_config()
+    env_key = "AGENT_BASE_BRANCH_" + re.sub(r"[^A-Za-z0-9]+", "_", repo).strip("_").upper()
+    return os.environ.get(env_key) or cfg.get(env_key) or os.environ.get("AGENT_BASE_BRANCH") or cfg.get("AGENT_BASE_BRANCH") or "default"
+
+
+def issue_write_scope(issue: dict) -> list[str]:
+    body = str(issue.get("body") or "")
+    values: list[str] = []
+    values.extend(common.markdown_section_items(body, "Write Scope"))
+    values.extend(common.body_field_values(body, "WriteScope"))
+    values.extend(common.body_field_values(body, "Write Scope"))
+    values.extend(common.body_field_values(body, "Files in scope"))
+    values.extend(common.body_field_values(body, "Owns files"))
+
+    scopes: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        for value in re.split(r"[\n,]", str(raw)):
+            scope = normalize_scope(value)
+            if not scope or scope.lower() in common.NONE_FIELD_VALUES or scope in seen:
+                continue
+            seen.add(scope)
+            scopes.append(scope)
+    return scopes
+
+
+def normalize_scope(value: str) -> str:
+    scope = str(value).strip().strip("`").strip()
+    scope = re.sub(r"^\s*[-*]\s*", "", scope).strip().strip("`").strip()
+    if scope.startswith("./"):
+        scope = scope[2:]
+    return scope.rstrip("/")
+
+
+def scope_is_unknown(scope: str) -> bool:
+    lowered = scope.lower().strip()
+    if lowered in common.NONE_FIELD_VALUES:
+        return True
+    unknown_markers = (
+        "unknown",
+        "tbd",
+        "to be determined",
+        "entire repo",
+        "whole repo",
+        "repo-wide",
+        "repository-wide",
+        "all files",
+        "*",
+    )
+    return any(marker == lowered or marker in lowered for marker in unknown_markers)
+
+
+def write_scope_lock_dir(repo: str, base_branch: str) -> Path:
+    safe_repo = repo.replace("/", "__")
+    base_key = hashlib.sha256(base_branch.encode("utf-8")).hexdigest()[:16]
+    return common.jobs_dir() / "write-scope-locks" / safe_repo / base_key
+
+
+def lock_payload(repo: str, issue: dict, base_branch: str, scopes: list[str], exclusive: bool) -> dict:
+    return {
+        "repo": repo,
+        "issue": int(issue["number"]),
+        "base_branch": base_branch,
+        "scopes": scopes,
+        "exclusive": exclusive,
+        "pid": os.getpid(),
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def acquire_raw_lock(path: Path, payload: dict, stale_seconds: int) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and stale_seconds > 0:
+        age = time.time() - path.stat().st_mtime
+        if age > stale_seconds:
+            print(f"Removing stale lock {path} ({age:.0f}s old).", flush=True)
+            path.unlink(missing_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+    return True
+
+
+def acquire_namespace_lock(lock_dir: Path, stale_seconds: int) -> Path | None:
+    path = lock_dir / "_namespace.lock"
+    payload = {"pid": os.getpid(), "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if acquire_raw_lock(path, payload, stale_seconds):
+            return path
+        time.sleep(0.2)
+    return None
+
+
+def read_scope_lock(path: Path, stale_seconds: int) -> dict | None:
+    if path.name == "_namespace.lock":
+        return None
+    if stale_seconds > 0 and path.exists():
+        age = time.time() - path.stat().st_mtime
+        if age > stale_seconds:
+            print(f"Removing stale write-scope lock {path} ({age:.0f}s old).", flush=True)
+            path.unlink(missing_ok=True)
+            return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        path.unlink(missing_ok=True)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def migration_or_schema_scope(scope: str) -> bool:
+    segments = [segment.lower() for segment in scope.split("/") if segment]
+    return any("migration" in segment or "schema" in segment for segment in segments)
+
+
+def same_parent_dir(a: str, b: str) -> bool:
+    parent_a = a.rsplit("/", 1)[0] if "/" in a else ""
+    parent_b = b.rsplit("/", 1)[0] if "/" in b else ""
+    return parent_a == parent_b
+
+
+def scopes_overlap(a: str, b: str) -> bool:
+    left = normalize_scope(a)
+    right = normalize_scope(b)
+    if not left or not right:
+        return True
+    if scope_is_unknown(left) or scope_is_unknown(right):
+        return True
+    if "*" in left or "*" in right:
+        return True
+    if left == right:
+        return True
+    if left.startswith(right + "/") or right.startswith(left + "/"):
+        return True
+    if migration_or_schema_scope(left) and migration_or_schema_scope(right) and same_parent_dir(left, right):
+        return True
+    return False
+
+
+def active_scope_locks(lock_dir: Path, stale_seconds: int) -> list[tuple[Path, dict]]:
+    locks: list[tuple[Path, dict]] = []
+    for path in sorted(lock_dir.glob("*.lock")):
+        payload = read_scope_lock(path, stale_seconds)
+        if payload:
+            locks.append((path, payload))
+    return locks
+
+
+def acquire_write_scope_lease(
+    repo: str,
+    issue: dict,
+    base_branch: str,
+    stale_seconds: int,
+) -> tuple[list[Path], str | None]:
+    lock_dir = write_scope_lock_dir(repo, base_branch)
+    namespace = acquire_namespace_lock(lock_dir, stale_seconds)
+    if namespace is None:
+        return [], "write-scope lock namespace is busy"
+
+    acquired: list[Path] = []
+    scopes = issue_write_scope(issue)
+    exclusive = not scopes or any(scope_is_unknown(scope) for scope in scopes)
+    try:
+        existing = active_scope_locks(lock_dir, stale_seconds)
+        if exclusive and existing:
+            owners = ", ".join(f"#{payload.get('issue', '?')}" for _path, payload in existing[:5])
+            return [], f"exclusive write scope waits for active lock(s): {owners}"
+        for _path, payload in existing:
+            if payload.get("exclusive"):
+                return [], f"active exclusive write-scope lock for issue #{payload.get('issue', '?')}"
+            existing_scopes = [str(scope) for scope in payload.get("scopes") or []]
+            for scope in scopes:
+                conflict = next((existing_scope for existing_scope in existing_scopes if scopes_overlap(scope, existing_scope)), None)
+                if conflict is not None:
+                    return [], (
+                        f"write scope `{scope}` overlaps `{conflict}` "
+                        f"from issue #{payload.get('issue', '?')}"
+                    )
+
+        payload = lock_payload(repo, issue, base_branch, scopes, exclusive)
+        lock_names = ["exclusive"] if exclusive else [hashlib.sha256(scope.encode("utf-8")).hexdigest()[:24] for scope in scopes]
+        for name in lock_names:
+            path = lock_dir / f"{name}.lock"
+            if not acquire_raw_lock(path, payload, stale_seconds):
+                for acquired_path in acquired:
+                    acquired_path.unlink(missing_ok=True)
+                return [], f"write-scope lock appeared at {path}"
+            acquired.append(path)
+        return acquired, None
+    finally:
+        namespace.unlink(missing_ok=True)
+
+
+def release_write_scope_lease(paths: list[Path]) -> None:
+    for path in paths:
         path.unlink(missing_ok=True)
 
 
@@ -578,9 +787,28 @@ def process_once(args: argparse.Namespace) -> int:
                     check=False,
                 )
                 continue
+            base_branch = dispatch_base_branch(repo, issue)
+            scope_lease: list[Path] = []
+            if getattr(args, "write_scope_locks", True):
+                scope_lease, scope_blocker = acquire_write_scope_lease(
+                    repo,
+                    issue,
+                    base_branch,
+                    lease_stale_seconds,
+                )
+                if scope_blocker:
+                    print(f"Skipping {repo}#{issue['number']}: {scope_blocker}.", flush=True)
+                    release_issue_lease(lease)
+                    continue
             maybe_dispatch_deploy_candidate(repo, issue, args)
+            common.update_issue_automation_state(repo, int(issue["number"]), "Running", status="In Progress")
             try:
-                rc = run_worker(repo, issue["number"], publish=args.publish)
+                rc = run_worker(
+                    repo,
+                    issue["number"],
+                    publish=args.publish,
+                    base_branch=common.issue_body_base_branch(issue),
+                )
                 processed += 1
                 repo_processed += 1
                 notify_worker_result(repo, issue, rc)
@@ -592,6 +820,7 @@ def process_once(args: argparse.Namespace) -> int:
                         args.auto_allow_policy_labels,
                     )
             finally:
+                release_write_scope_lease(scope_lease)
                 release_issue_lease(lease)
             if processed >= args.max_items:
                 return processed
@@ -609,6 +838,12 @@ def main() -> None:
     parser.add_argument("--max-items", type=int, default=3)
     parser.add_argument("--max-per-repo", type=int, default=1)
     parser.add_argument("--lease-stale-seconds", type=int, default=6 * 60 * 60)
+    parser.add_argument(
+        "--write-scope-locks",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prevent concurrent workers on the same repo/base when issue Write Scope values overlap or are unknown.",
+    )
     parser.add_argument("--sleep-seconds", type=int, default=60)
     parser.add_argument("--inspect-failed", action="store_true")
     parser.add_argument(

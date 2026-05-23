@@ -1,5 +1,11 @@
 {
   "OWNER/REPO": {
+    "install_commands": [
+      "python3 -m pip install -r requirements-dev.txt"
+    ],
+    "commands": [
+      "python3 -m pytest tests/deployed"
+    ],
     "workflows": [
       {
         "workflow": "deployed-validation.yml",
@@ -9,6 +15,9 @@
           "pr_number": "$PR_NUMBER"
         }
       }
-    ]
+    ],
+    "env": {
+      "DEPLOYED_VALIDATION_DRY_RUN": "true"
+    }
   }
 }

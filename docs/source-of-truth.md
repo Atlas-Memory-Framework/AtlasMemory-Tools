@@ -13,6 +13,8 @@ Edit these files in this repository:
 - `manifests/atlas-tools.v1.json`
 - `scripts/**`
 - `docs/**`
+- `tests/**`
+- `examples/**`
 
 Do not edit generated downstream copies as the normal workflow:
 
@@ -134,7 +136,20 @@ it is the local host that stores config, auth, logs, jobs, and managed checkouts
 
 The installed runtime's `repos.txt` is the inventory of repositories the runtime operates on. Runtime-managed
 clones live under `repos/`, using names such as `OWNER__REPO`. Preserve local-only files and directories such as
-`config.env`, `repos.txt`, `repos/`, `jobs/`, `logs/`, `state/`, and `codex-home/`.
+`config.env`, `repos.txt`, `projects.txt`, `required-checks.json`, `local-validation.json`,
+`deployed-validation.json`, `repo-env/`, `repos/`, `jobs/`, `logs/`, `state/`, and `codex-home/`.
+
+Use the source-level runtime helpers instead of hand-copying over live state:
+
+```bash
+python3 scripts/sync_runtime_template.py --runtime-dir /path/to/runtime
+python3 scripts/runtime_control.py --runtime-dir /path/to/runtime status
+python3 scripts/runtime_control.py --runtime-dir /path/to/runtime queue --plan /path/to/plan.md --repo OWNER/REPO --dry-run
+```
+
+`scripts/sync_runtime_template.py` refreshes template files while preserving runtime-local config, secrets,
+managed clones, logs, jobs, repo environment overlays, and validation policy files. `scripts/runtime_control.py`
+wraps common status, sync, plan preview, queue, dry cycle, run-once, review, and finalize operations.
 
 Use the runtime setup and upgrade skills for operational changes:
 

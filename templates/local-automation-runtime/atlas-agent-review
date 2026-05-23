@@ -27,6 +27,7 @@ REVIEW_LABELS = {
     "agent:overlap-queued": "1D76DB",
     "agent:local-validation-required": "FBCA04",
     "agent:semantic-review-required": "5319E7",
+    "agent:checks-pending": "FBCA04",
     "agent:human-action-required": "B60205",
 }
 REVIEW_AUX_LABELS = {
@@ -47,6 +48,7 @@ LOCAL_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-local-validation -->"
 DEPLOYED_VALIDATION_PASSED_LABEL = "agent:deployed-validation-passed"
 DEPLOYED_VALIDATION_COMMENT_MARKER = "<!-- atlas-agent-deployed-validation -->"
 SEMANTIC_REVIEW_REQUIRED_LABEL = "agent:semantic-review-required"
+CHECKS_PENDING_LABEL = "agent:checks-pending"
 SEMANTIC_REVIEW_PASSED_LABEL = "agent:semantic-review-passed"
 SEMANTIC_REVIEW_FAILED_LABEL = "agent:semantic-review-failed"
 SEMANTIC_REVIEW_COMMENT_MARKER = "<!-- atlas-agent-semantic-review -->"
@@ -74,6 +76,7 @@ class ReviewDecision:
     reasons: list[str]
     files: list[str]
     ci_review: dict[str, Any] | None = None
+    current_labels: set[str] | None = None
 
 
 def target_repos(path: str | None) -> list[str]:
@@ -629,7 +632,7 @@ def blocker_types_for(label: str, reasons: list[str]) -> list[str]:
         types.add("dependency_blocker")
     if "ci review required" in reason_text:
         types.add("ci_review")
-    if "checks pending:" in reason_text:
+    if label == CHECKS_PENDING_LABEL or "checks pending:" in reason_text:
         types.add("check_wait")
     if "merge state is" in reason_text or "mergeable is" in reason_text:
         types.add("merge_repair")
@@ -678,6 +681,8 @@ def route_for(label: str, reasons: list[str]) -> str:
         return "deployed-validate"
     if label == SEMANTIC_REVIEW_REQUIRED_LABEL:
         return "semantic-review"
+    if label == CHECKS_PENDING_LABEL:
+        return "wait"
     if label == OVERLAP_LABEL:
         return "wait"
     if label == SUPERSEDED_LABEL:
@@ -886,7 +891,7 @@ def classify(
         else:
             reasons.append("ci review required before repair routing")
     elif check_state == "pending":
-        label = NEEDS_REPAIR_LABEL
+        label = CHECKS_PENDING_LABEL
         reasons.append(f"checks {check_state}: {', '.join(check_details[:5])}")
     if issue and check_dependencies:
         blockers = common.issue_dependency_blockers(repo, issue)
@@ -944,6 +949,7 @@ def classify(
         reasons=reasons,
         files=files,
         ci_review=ci_review,
+        current_labels=common.label_names(pr),
     )
 
 
@@ -996,61 +1002,54 @@ def review_comment_body(decision: ReviewDecision) -> str:
 
 def post_review_comment(decision: ReviewDecision) -> None:
     body = review_comment_body(decision)
-    payload = common.gh_json_or_none(
-        ["pr", "view", str(decision.number), "--repo", decision.repo, "--json", "comments"],
+    comments = common.gh_json_or_none(
+        ["api", f"repos/{decision.repo}/issues/{decision.number}/comments"],
         retries=2,
-    ) or {}
-    for comment in payload.get("comments") or []:
+    ) or []
+    for comment in comments:
         if "<!-- atlas-agent-review -->" not in str(comment.get("body") or ""):
             continue
         comment_id = str(comment.get("id") or "")
         if not comment_id:
             return
-        proc = common.run(
+        common.run(
             [
                 "gh",
                 "api",
-                "graphql",
-                "-f",
-                "query=mutation($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { issueComment { id } } }",
-                "-f",
-                f"id={comment_id}",
+                f"repos/{decision.repo}/issues/comments/{comment_id}",
+                "-X",
+                "PATCH",
                 "-f",
                 f"body={body}",
             ],
             check=False,
         )
-        if proc.returncode != 0 and comment_id.isdigit():
-            common.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{decision.repo}/issues/comments/{comment_id}",
-                    "-X",
-                    "PATCH",
-                    "-f",
-                    f"body={body}",
-                ],
-                check=False,
-            )
         return
     common.run(["gh", "pr", "comment", str(decision.number), "--repo", decision.repo, "--body", body], check=False)
 
 
+_LABELS_READY: set[str] = set()
+
+
 def ensure_review_labels(repo: str) -> None:
+    if repo in _LABELS_READY:
+        return
     for label, color in {**REVIEW_LABELS, **REVIEW_AUX_LABELS}.items():
         common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+    _LABELS_READY.add(repo)
 
 
 def apply_decision(decision: ReviewDecision, *, comment: bool) -> None:
     ensure_review_labels(decision.repo)
+    current_labels = decision.current_labels or set()
     for label in REVIEW_LABELS:
-        if label != decision.label:
+        if label != decision.label and label in current_labels:
             common.run(["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--remove-label", label], check=False)
-    common.run(
-        ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", decision.label],
-        retries=3,
-    )
+    if decision.label not in current_labels:
+        common.run(
+            ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", decision.label],
+            retries=3,
+        )
     if comment:
         post_review_comment(decision)
 

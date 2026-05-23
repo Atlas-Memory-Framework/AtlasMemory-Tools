@@ -167,6 +167,69 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             ],
         )
 
+    def test_common_classifies_github_commands_for_throttling(self) -> None:
+        common = self.orchestrator.common
+
+        self.assertTrue(common.gh_command_is_project(["project", "list", "--owner", "Instablinds"]))
+        self.assertTrue(common.gh_command_is_graphql_heavy(["issue", "list", "--json", "number,title"]))
+        self.assertTrue(common.gh_command_is_mutating(["issue", "edit", "7", "--add-label", "agent:ready"]))
+        self.assertFalse(common.gh_command_is_mutating(["issue", "list", "--json", "number"]))
+
+    def test_common_records_shared_github_rate_limit_pause(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            os.environ["AGENT_GITHUB_RATE_LIMIT_BACKOFF_SECONDS"] = "1"
+            try:
+                common.github_throttle_after(
+                    ["issue", "list", "--json", "number"],
+                    "GraphQL: API rate limit already exceeded for user ID 1.",
+                    1,
+                )
+                state = common.read_json_file(Path(tmp) / "github-api-throttle" / "state.json")
+            finally:
+                common.jobs_dir = original_jobs_dir
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertIn("pause_until", state)
+        self.assertEqual(state["last_rate_limit_command"], "gh issue list --json number")
+
+    def test_common_updates_issue_project_automation_state(self) -> None:
+        common = self.orchestrator.common
+        original_targets = common.project_targets
+        original_info = common.project_info
+        original_fields = common.project_fields
+        original_items = common.project_items
+        original_run = common.run
+        calls: list[list[str]] = []
+        try:
+            common.project_targets = lambda _path=None: [("owner", 2)]
+            common.project_info = lambda _owner, _number: {"id": "PROJECT"}
+            common.project_fields = lambda _owner, _number: [
+                {"name": "AutomationState", "id": "STATE", "options": [{"name": "Running", "id": "RUNNING"}]},
+                {"name": "Status", "id": "STATUS", "options": [{"name": "In Progress", "id": "INPROGRESS"}]},
+            ]
+            common.project_items = lambda _owner, _number: [
+                {"id": "ITEM", "content": {"repository": "owner/repo", "number": 9}}
+            ]
+            common.run = lambda args, **_kwargs: calls.append(args)
+
+            common.update_issue_automation_state("owner/repo", 9, "Running", status="In Progress")
+        finally:
+            common.project_targets = original_targets
+            common.project_info = original_info
+            common.project_fields = original_fields
+            common.project_items = original_items
+            common.run = original_run
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--single-select-option-id", calls[0])
+        self.assertIn("RUNNING", calls[0])
+        self.assertIn("INPROGRESS", calls[1])
+
     def test_orchestrator_treats_approved_review_wait_as_recoverable(self) -> None:
         reasons = self.orchestrator.hard_non_execution_reasons(
             issue(
@@ -238,6 +301,87 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         )
 
         self.assertIn("dispatch guardrails", reasons)
+
+    def test_orchestrator_extracts_write_scope_metadata(self) -> None:
+        scopes = self.orchestrator.issue_write_scope(
+            issue(
+                body=(
+                    "## Write Scope\n"
+                    "- `src/routes/workflow.ts`\n"
+                    "- `tests/workflow.test.ts`\n\n"
+                    "WriteScope: `docs/runtime.md`"
+                )
+            )
+        )
+
+        self.assertEqual(scopes, ["src/routes/workflow.ts", "tests/workflow.test.ts", "docs/runtime.md"])
+
+    def test_orchestrator_write_scope_overlap_is_conservative(self) -> None:
+        self.assertTrue(self.orchestrator.scopes_overlap("src/routes", "src/routes/workflow.ts"))
+        self.assertTrue(self.orchestrator.scopes_overlap("db/migrations/001.sql", "db/migrations/002.sql"))
+        self.assertFalse(self.orchestrator.scopes_overlap("src/routes/workflow.ts", "src/models/blind.ts"))
+
+    def test_orchestrator_write_scope_lease_blocks_overlaps_but_allows_disjoint_paths(self) -> None:
+        original_jobs_dir = self.orchestrator.common.jobs_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            self.orchestrator.common.jobs_dir = lambda: Path(tmp)
+            try:
+                lease, blocker = self.orchestrator.acquire_write_scope_lease(
+                    "owner/repo",
+                    issue(number=7, body="## Write Scope\n- `src/routes/workflow.ts`\n"),
+                    "main",
+                    3600,
+                )
+                overlapping, overlap_blocker = self.orchestrator.acquire_write_scope_lease(
+                    "owner/repo",
+                    issue(number=8, body="## Write Scope\n- `src/routes`\n"),
+                    "main",
+                    3600,
+                )
+                disjoint, disjoint_blocker = self.orchestrator.acquire_write_scope_lease(
+                    "owner/repo",
+                    issue(number=9, body="## Write Scope\n- `src/models/blind.ts`\n"),
+                    "main",
+                    3600,
+                )
+            finally:
+                self.orchestrator.common.jobs_dir = original_jobs_dir
+                self.orchestrator.release_write_scope_lease(lease if "lease" in locals() else [])
+                self.orchestrator.release_write_scope_lease(disjoint if "disjoint" in locals() else [])
+
+        self.assertIsNone(blocker)
+        self.assertTrue(lease)
+        self.assertEqual(overlapping, [])
+        self.assertIn("overlaps", str(overlap_blocker))
+        self.assertIsNone(disjoint_blocker)
+        self.assertTrue(disjoint)
+
+    def test_orchestrator_unknown_write_scope_consumes_exclusive_repo_base_lock(self) -> None:
+        original_jobs_dir = self.orchestrator.common.jobs_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            self.orchestrator.common.jobs_dir = lambda: Path(tmp)
+            try:
+                exclusive, blocker = self.orchestrator.acquire_write_scope_lease(
+                    "owner/repo",
+                    issue(number=7, body="## Write Scope\n- `unknown`\n"),
+                    "main",
+                    3600,
+                )
+                disjoint, disjoint_blocker = self.orchestrator.acquire_write_scope_lease(
+                    "owner/repo",
+                    issue(number=8, body="## Write Scope\n- `src/models/blind.ts`\n"),
+                    "main",
+                    3600,
+                )
+            finally:
+                self.orchestrator.common.jobs_dir = original_jobs_dir
+                self.orchestrator.release_write_scope_lease(exclusive if "exclusive" in locals() else [])
+                self.orchestrator.release_write_scope_lease(disjoint if "disjoint" in locals() else [])
+
+        self.assertIsNone(blocker)
+        self.assertTrue(exclusive)
+        self.assertEqual(disjoint, [])
+        self.assertIn("exclusive", str(disjoint_blocker))
 
     def test_orchestrator_blocks_manual_validation_requirements_without_runtime_field(self) -> None:
         reasons = self.orchestrator.hard_non_execution_reasons(
@@ -625,9 +769,14 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
     def test_maybe_queue_issue_queues_recoverable_human_pause(self) -> None:
         calls: list[list[str]] = []
+        state_updates: list[tuple[str, int, str]] = []
         original_run = self.orchestrator.common.run
+        original_state = self.orchestrator.common.update_issue_automation_state
         original_skip = self.orchestrator.has_open_pr_for_issue
         self.orchestrator.common.run = lambda args, **_kwargs: calls.append(args)
+        self.orchestrator.common.update_issue_automation_state = (
+            lambda repo, number, state, **_kwargs: state_updates.append((repo, number, state))
+        )
         self.orchestrator.has_open_pr_for_issue = lambda _repo, _number: False
         args = types.SimpleNamespace(auto_queue_label="status:ready", auto_queue_skip_open_pr=True)
         try:
@@ -638,10 +787,12 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             )
         finally:
             self.orchestrator.common.run = original_run
+            self.orchestrator.common.update_issue_automation_state = original_state
             self.orchestrator.has_open_pr_for_issue = original_skip
 
         self.assertTrue(queued)
         self.assertEqual(calls, [["gh", "issue", "edit", "9", "--repo", "owner/repo", "--add-label", "agent:ready"]])
+        self.assertEqual(state_updates, [("owner/repo", 9, "Queued")])
 
     def test_process_once_removes_ready_when_open_pr_exists(self) -> None:
         calls: list[list[str]] = []

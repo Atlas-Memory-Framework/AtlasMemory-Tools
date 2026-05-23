@@ -22,7 +22,11 @@ tracking:
 ## Plan State
 PlanFormatVersion: 2
 PlanId: <auto or short unique id>
-Status: Draft | ProblemDefined | FeatureChallenged | TechnicalChallenged | Planned | Approved | InBuild | Shipped
+Status: Draft | ProblemDefined | FeatureChallenged | TechnicalChallenged | Planned | StructurallyComplete | SubstantivelyReviewed | Approved | InBuild | Shipped
+StructuralStatus: Draft | StructurallyComplete
+SubstanceStatus: NotReviewed | NeedsWork | SubstantivelyReviewed
+ProjectionApproval: NotRequested | Blocked | ApprovedForProjection
+DispatchApproval: NotRequested | Blocked | ApprovedForDispatch
 CurrentStage: Problem | Feature | Technical | Implementation | Automation | Reviews | Build
 PlanTier: Lite | Full
 AutomationTarget: none | manifest-only | issue-projection | unattended-prs
@@ -46,6 +50,7 @@ ArtifactAuthorityMode: legacy-plan | migration-bridge | registry-first
 ProblemDefinitionComplete: Pass | Fail | N/A
 FeatureClarity: Pass | Fail | N/A
 TechnicalClarity: Pass | Fail | N/A
+HumanReadabilityReview: Pass | Fail | N/A
 PlanReadiness: Pass | Fail | N/A
 AutomationReadiness: Pass | Fail | N/A
 PlanningReviewsComplete: Pass | Fail | N/A
@@ -78,8 +83,22 @@ PlanningReviewsComplete: Pass | Fail | N/A
 
 ## Problem Definition
 <!-- owner: problem-definition -->
-Problem statement:
+Problem narrative:
+<1-2 paragraphs describing the real product/system failure or opportunity. The first two paragraphs must not use planning-meta terms such as plan, artifact, gate, issue manifest, registry, projection, or dispatch.>
+
+Current broken workflow:
 - ...
+
+Desired workflow:
+- ...
+
+Why this matters / why now:
+- ...
+
+Current-state facts:
+- Fact 1: ... (source: file|command|user|issue)
+- Fact 2: ... (source: file|command|user|issue)
+- Fact 3: ... (source: file|command|user|issue)
 
 Success criteria (measurable):
 - SC1:
@@ -143,13 +162,6 @@ Recommended default: <A/B/C> (why)
   - Bypass risk summary:
   - Evidence hook (named gate):
 
-### Artifact authority snapshot
-- Authoring write surface: selected harness-local plan artifact
-- Local planning authority after compile: selected harness-local planning registry
-- Execution truth: GitHub issues / PRs / checks
-- Execution UI / signal layer: GitHub Projects v2
-- Derived read models / views: runtime mirror, rendered overlays, forecasts
-
 ## Challenge Artifacts
 <!-- owner: critical-ideation -->
 ### Weaknesses
@@ -168,6 +180,9 @@ Recommended default: <A/B/C> (why)
 
 ## Technical Plan
 <!-- owner: technical-planning -->
+### Technical Plan Intro
+<1-3 paragraphs explaining what will change in the system, why this approach fits the problem, and which existing components/data flows it touches. A new engineer should understand what is being built and why from this intro plus Problem Definition.>
+
 ### Integration Points
 - ...
 
@@ -192,9 +207,11 @@ Recommended default: <A/B/C> (why)
 - path/to/file.ext - change type (create/modify/delete) - owner (WSx / agent) - rationale
 
 ### Workstreams + merge points
-- WS1: <name> (Owner: <agent>)
+- WS1: <name>
+  - Owner:
   - Agent type: <generalPurpose | test-engineer | code-reviewer | explore>
   - Delegate: required | optional
+  - Intended behavior change:
   - Tracking: <optional org/repo#123 or URL>
   - Depends on:
   - Review gates (named):
@@ -324,6 +341,14 @@ Applies when `AutomationTarget` is not `none`.
 ### Zero-Context Review (required)
 - Reviewer: doc-reviewer-zero-context
 - Refreshed: <YYYY-MM-DD>
+- Re-entry audit answers (required when updating a plan at CurrentStage: Reviews or approved/complete status):
+  - What is being built:
+  - Why now:
+  - Repos involved:
+  - What changes first:
+  - What must not happen:
+  - How work is validated:
+  - What remains blocked:
 - Findings (schema):
   - Missing context:
   - Contradictions:
@@ -361,6 +386,20 @@ Applies when `AutomationTarget` is not `none`.
   - Reject: <finding-id> -> rationale
   - Defer: <finding-id> -> DR-xxx + trigger
 
+### Human Readability Review (required)
+- Reviewer:
+- Refreshed: <YYYY-MM-DD>
+- Findings:
+  - Product/system clarity:
+  - Technical narrative clarity:
+  - Execution-mechanics leakage:
+  - Strongest remaining ambiguity:
+- Pass/fail readability statement:
+- Disposition:
+  - Accept: <finding-id> -> DR-xxx
+  - Reject: <finding-id> -> rationale
+  - Defer: <finding-id> -> DR-xxx + trigger
+
 ### Implementer Readiness Review (required)
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
@@ -385,6 +424,21 @@ Applies when `AutomationTarget` is not `none`.
   - Accept: <finding-id> -> DR-xxx
   - Reject: <finding-id> -> rationale
   - Defer: <finding-id> -> DR-xxx + trigger
+
+## Execution Mechanics / Automation Appendix
+### Authority / source-of-truth contract
+- Authoring write surface: selected harness-local plan artifact
+- Local planning authority after compile: selected harness-local planning registry
+- Execution truth: GitHub issues / PRs / checks
+- Execution UI / signal layer: GitHub Projects v2
+- Derived read models / views: runtime mirror, rendered overlays, forecasts
+
+### Projection and dispatch approvals
+- Structural completion evidence:
+- Substance review evidence:
+- Projection approval evidence:
+- Dispatch approval evidence:
+- Dispatch remains blocked until:
 
 ## Execution Status
 Phase: <name>

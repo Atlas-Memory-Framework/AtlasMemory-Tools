@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/local-automation-runtime-setup/SKILL.md manifest=atlas-tools.v1 checksum=sha256:cd9bee41575fef19ec27d71162c5ea1f707b61d0d1846f2d6db8e54a34af9767
+# atlas-tools-generated: source=skills/local-automation-runtime-setup/SKILL.md manifest=atlas-tools.v1 checksum=sha256:abe79d78fea9920751b56a8c5a8b4a7d00ed77ee945327a6bdd54ca0c115e628
 # atlas-tools-generated-end
 name: local-automation-runtime-setup
 description: Install and validate the local automation runtime template for GitHub issue-to-PR automation. Use when setting up a runtime host, preparing config.env, checking gh/Codex/container prerequisites, or running initial smoke tests.
@@ -31,9 +31,9 @@ Install `templates/local-automation-runtime/` into a target runtime directory an
    - `cp projects.example.txt projects.txt`
    - `cp config/required-checks.example.json required-checks.json`
    - `cp config/local-validation.example.json local-validation.json`
-   - `cp config/deployed-validation.example.json deployed-validation.json`
    - Put target GitHub repos in `repos.txt`, one `OWNER/REPO` per line. The runtime clones them under `repos/`.
    - Do not set up one runtime per repo by default.
+   - Copy `config/deployed-validation.example.json` to `deployed-validation.json` only after the target repo has chosen hosted/deployed validation.
 4. Fill `config.env` with local-only values:
    - `AGENT_REPO`
    - `AGENT_TRUSTED_AUTHORS`
