@@ -357,10 +357,15 @@ def followup_labels(parent: dict[str, Any], ready: bool) -> list[str]:
     return sorted(labels)
 
 
+def followup_base_branch(repo: str, parent: dict[str, Any]) -> str:
+    return common.issue_body_base_branch(parent) or common.default_base_branch(repo)
+
+
 def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any], projects_file: str | None) -> str:
     ready = bool(followup.get("ready"))
     scope = [str(item).strip().strip("`") for item in followup.get("write_scope") or [] if str(item).strip()]
     manual = str(followup.get("manual_gates") or "none").strip() or "none"
+    base_branch = followup_base_branch(repo, parent)
     body = "\n".join(
         [
             "## Automation Manifest Metadata",
@@ -371,7 +376,7 @@ def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any],
             "- Validation scope: `ci`",
             f"- Target repo(s): `{repo}`",
             f"- Execution repo: `{repo}`",
-            "- Base branch: `mat`",
+            f"- Base branch: `{base_branch}`",
             "- One PR contract: `yes`",
             "",
             "## Execution State",
