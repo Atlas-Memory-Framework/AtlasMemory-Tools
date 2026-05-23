@@ -248,6 +248,7 @@ class RuntimeTemplateTests(unittest.TestCase):
             "atlas-agent-project-reconcile",
             "atlas-agent-review",
             "atlas-agent-semantic-review",
+            "atlas-agent-shift",
             "atlas-agent-finalize",
             "atlas-agent-local-validate",
             "atlas-agent-deployed-validate",

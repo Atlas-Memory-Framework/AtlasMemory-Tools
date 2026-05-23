@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Run bounded unattended cycles as one durable automation shift."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+CHAIN_RE = re.compile(r"Unattended chain complete\. Chain state is (?P<path>\S+)")
+
+
+@dataclass
+class ShiftCycle:
+    cycle: int
+    status: str
+    returncode: int
+    started_at: str
+    finished_at: str
+    log_file: str
+    chain_dir: str | None = None
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso_now() -> str:
+    return utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_deadline(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    value = raw.strip()
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    deadline = datetime.fromisoformat(value)
+    if deadline.tzinfo is None:
+        deadline = deadline.astimezone()
+    return deadline.astimezone(timezone.utc)
+
+
+def computed_deadline(args: argparse.Namespace) -> datetime | None:
+    deadlines: list[datetime] = []
+    explicit = parse_deadline(args.deadline)
+    if explicit:
+        deadlines.append(explicit)
+    if args.max_minutes is not None:
+        deadlines.append(utc_now() + timedelta(minutes=args.max_minutes))
+    return min(deadlines) if deadlines else None
+
+
+def should_start_cycle(deadline: datetime | None, stop_before_seconds: float) -> bool:
+    if deadline is None:
+        return True
+    remaining = (deadline - utc_now()).total_seconds()
+    return remaining > stop_before_seconds
+
+
+def clean_passthrough_args(args: list[str]) -> list[str]:
+    return [arg for arg in args if arg != "--"]
+
+
+def build_unattended_command(passthrough_args: list[str]) -> list[str]:
+    return [
+        str(common.RUNTIME_DIR / "atlas-agent-unattended"),
+        "--cycles",
+        "1",
+        *clean_passthrough_args(passthrough_args),
+    ]
+
+
+def extract_chain_dir(log_file: Path) -> str | None:
+    try:
+        text = log_file.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return None
+    matches = list(CHAIN_RE.finditer(text))
+    if not matches:
+        return None
+    return matches[-1].group("path")
+
+
+def write_status(
+    path: Path,
+    *,
+    shift_id: str,
+    state: str,
+    started_at: str,
+    deadline: datetime | None,
+    cycle_limit: int,
+    cycles: list[ShiftCycle],
+    last_command: list[str] | None,
+    stop_reason: str | None = None,
+) -> None:
+    common.write_json(
+        path,
+        {
+            "shift_id": shift_id,
+            "state": state,
+            "started_at": started_at,
+            "updated_at": iso_now(),
+            "deadline": deadline.strftime("%Y-%m-%dT%H:%M:%SZ") if deadline else None,
+            "runtime_dir": str(common.RUNTIME_DIR),
+            "cycle_limit": cycle_limit,
+            "cycles_completed": len(cycles),
+            "last_command": last_command,
+            "last_returncode": cycles[-1].returncode if cycles else None,
+            "last_log_file": cycles[-1].log_file if cycles else None,
+            "last_chain_dir": cycles[-1].chain_dir if cycles else None,
+            "stop_reason": stop_reason,
+            "cycles": [cycle.__dict__ for cycle in cycles],
+        },
+    )
+
+
+def write_handoff(
+    path: Path,
+    *,
+    shift_id: str,
+    status_file: Path,
+    heartbeat_file: Path,
+    state: str,
+    stop_reason: str | None,
+    cycles: list[ShiftCycle],
+    next_command: list[str] | None,
+) -> None:
+    last = cycles[-1] if cycles else None
+    lines = [
+        f"# Handoff: automation shift {shift_id}",
+        "",
+        f"**Created:** {iso_now()}",
+        f"**Project:** {common.RUNTIME_DIR}",
+        "**Purpose for next session:** Resume or inspect the local automation shift from durable runtime state.",
+        "",
+        "## Current State",
+        f"- Shift state: `{state}`",
+        f"- Stop reason: `{stop_reason or 'none'}`",
+        f"- Status file: `{status_file}`",
+        f"- Heartbeat file: `{heartbeat_file}`",
+        f"- Cycles completed: `{len(cycles)}`",
+    ]
+    if last:
+        lines.extend(
+            [
+                f"- Last cycle: `{last.cycle}`",
+                f"- Last return code: `{last.returncode}`",
+                f"- Last log: `{last.log_file}`",
+                f"- Last chain dir: `{last.chain_dir or 'unknown'}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Next Steps",
+            "1. Read the status file and last cycle summary before mutating GitHub state.",
+            "2. Inspect any nonzero return code or blocked review/finalizer decisions in the last chain dir.",
+            "3. Continue with another bounded `atlas-agent-shift` or a single `atlas-agent-unattended --cycles 1` run only after blockers are understood.",
+        ]
+    )
+    if next_command:
+        lines.append(f"4. Candidate resume command: `{' '.join(next_command)}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_cycle(
+    cycle: int,
+    shift_id: str,
+    command: list[str],
+    *,
+    timeout_seconds: float | None,
+) -> ShiftCycle:
+    started = iso_now()
+    log_file = common.logs_dir() / f"shift-{shift_id}-cycle-{cycle}.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("w", encoding="utf-8") as handle:
+        handle.write("+ " + " ".join(command) + "\n")
+        handle.flush()
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=str(common.RUNTIME_DIR),
+                text=True,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_seconds,
+            )
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            handle.write(f"\nSHIFT cycle timed out after {timeout_seconds} seconds.\n")
+            returncode = 124
+    return ShiftCycle(
+        cycle=cycle,
+        status="ok" if returncode == 0 else "failed",
+        returncode=returncode,
+        started_at=started,
+        finished_at=iso_now(),
+        log_file=str(log_file),
+        chain_dir=extract_chain_dir(log_file),
+    )
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.cycles < 1:
+        raise SystemExit("--cycles must be >= 1")
+    if args.sleep_seconds < 0:
+        raise SystemExit("--sleep-seconds must be >= 0")
+    if args.max_minutes is not None and args.max_minutes <= 0:
+        raise SystemExit("--max-minutes must be > 0")
+    if args.stop_before_deadline_seconds < 0:
+        raise SystemExit("--stop-before-deadline-seconds must be >= 0")
+    if args.cycle_timeout_seconds is not None and args.cycle_timeout_seconds <= 0:
+        raise SystemExit("--cycle-timeout-seconds must be > 0")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Arguments after known shift options are passed to atlas-agent-unattended.",
+    )
+    parser.add_argument("--cycles", type=int, default=1, help="Maximum one-cycle unattended runs in this shift.")
+    parser.add_argument("--max-minutes", type=float, help="Wall-clock shift budget.")
+    parser.add_argument("--deadline", help="Stop starting new cycles after this ISO-8601 deadline.")
+    parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Pause between one-cycle unattended runs.")
+    parser.add_argument("--cycle-timeout-seconds", type=float, help="Kill one unattended cycle after this many seconds.")
+    parser.add_argument(
+        "--stop-before-deadline-seconds",
+        type=float,
+        default=30.0,
+        help="Do not start another cycle if less time than this remains.",
+    )
+    parser.add_argument("--status-file", help="Machine-readable shift status JSON path.")
+    parser.add_argument("--heartbeat-file", help="Heartbeat JSON path updated whenever status changes.")
+    parser.add_argument("--handoff-file", help="Markdown handoff path. Defaults under jobs/.")
+    parser.add_argument("--no-handoff", action="store_true", help="Do not write a markdown handoff.")
+    parser.add_argument("--lock-wait-seconds", type=float, default=5.0)
+    parser.add_argument("--lock-stale-seconds", type=float, default=12 * 60 * 60)
+    parser.add_argument("--continue-on-error", action="store_true", help="Continue later cycles after a failed cycle.")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args, passthrough_args = parser.parse_known_args()
+    validate_args(args)
+    os.chdir(common.RUNTIME_DIR)
+    os.environ["PWD"] = str(common.RUNTIME_DIR)
+
+    shift_id = common.now_id()
+    started_at = iso_now()
+    status_file = Path(args.status_file) if args.status_file else common.jobs_dir() / f"shift-{shift_id}-status.json"
+    heartbeat_file = (
+        Path(args.heartbeat_file) if args.heartbeat_file else common.jobs_dir() / "atlas-agent-shift-heartbeat.json"
+    )
+    handoff_file = Path(args.handoff_file) if args.handoff_file else common.jobs_dir() / f"shift-{shift_id}-handoff.md"
+    deadline = computed_deadline(args)
+    command = build_unattended_command(passthrough_args)
+    lock_path = common.jobs_dir() / "atlas-agent-shift.lock"
+    lock = common.acquire_json_lock(
+        lock_path,
+        stale_seconds=args.lock_stale_seconds,
+        wait_seconds=args.lock_wait_seconds,
+    )
+
+    cycles: list[ShiftCycle] = []
+    state = "running"
+    stop_reason: str | None = None
+    try:
+        write_status(
+            status_file,
+            shift_id=shift_id,
+            state=state,
+            started_at=started_at,
+            deadline=deadline,
+            cycle_limit=args.cycles,
+            cycles=cycles,
+            last_command=command,
+        )
+        common.write_json(heartbeat_file, {"shift_id": shift_id, "state": state, "updated_at": iso_now()})
+        for cycle in range(1, args.cycles + 1):
+            if not should_start_cycle(deadline, args.stop_before_deadline_seconds):
+                state = "complete"
+                stop_reason = "deadline reached before next cycle"
+                break
+            print(f"=== shift {shift_id}: unattended cycle {cycle}/{args.cycles} ===", flush=True)
+            result = run_cycle(cycle, shift_id, command, timeout_seconds=args.cycle_timeout_seconds)
+            cycles.append(result)
+            if result.returncode != 0 and not args.continue_on_error:
+                state = "failed"
+                stop_reason = f"cycle {cycle} returned {result.returncode}"
+                break
+            write_status(
+                status_file,
+                shift_id=shift_id,
+                state=state,
+                started_at=started_at,
+                deadline=deadline,
+                cycle_limit=args.cycles,
+                cycles=cycles,
+                last_command=command,
+            )
+            common.write_json(heartbeat_file, {"shift_id": shift_id, "state": state, "updated_at": iso_now()})
+            if cycle < args.cycles and args.sleep_seconds:
+                time.sleep(args.sleep_seconds)
+        else:
+            state = "complete"
+            stop_reason = "cycle limit reached"
+        write_status(
+            status_file,
+            shift_id=shift_id,
+            state=state,
+            started_at=started_at,
+            deadline=deadline,
+            cycle_limit=args.cycles,
+            cycles=cycles,
+            last_command=command,
+            stop_reason=stop_reason,
+        )
+        common.write_json(heartbeat_file, {"shift_id": shift_id, "state": state, "updated_at": iso_now()})
+        if not args.no_handoff:
+            write_handoff(
+                handoff_file,
+                shift_id=shift_id,
+                status_file=status_file,
+                heartbeat_file=heartbeat_file,
+                state=state,
+                stop_reason=stop_reason,
+                cycles=cycles,
+                next_command=[str(common.RUNTIME_DIR / "atlas-agent-shift"), "--cycles", str(args.cycles), *passthrough_args],
+            )
+        print(f"Shift {state}. Status: {status_file}", flush=True)
+        if not args.no_handoff:
+            print(f"Handoff: {handoff_file}", flush=True)
+        return 0 if state == "complete" else 1
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

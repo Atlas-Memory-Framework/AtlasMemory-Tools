@@ -8,6 +8,7 @@ It provides:
 - local Codex worker execution in isolated per-job worktrees
 - draft PR publishing
 - unattended reconcile, dependency promotion, dispatch, review, local/deployed validation, repair, finalize, and merge supervision
+- bounded shift supervision with a wall-clock budget, one supervisor lock, heartbeat/status files, and handoff notes
 - finalizer gates for required checks, duplicate PRs, mergeability, and issue dependencies
 - one-command plan projection and queueing via `atlas-agent-plan-queue`
 - one end-of-cycle summary from `run_e2e_chain.sh`
@@ -63,6 +64,14 @@ Run the full unattended loop:
 ```
 
 The unattended loop first reconciles stale lifecycle labels and Project epic status, promotes dependency-gated one-point stories whose upstream issues/PRs and manual gates are complete, then dispatches issue workers, reviews local-agent PRs, runs local/deployed validation where configured, repairs PRs labeled `agent:needs-repair`, and finalizes only PRs with `agent:review-approved`.
+
+Run a longer but still bounded shift by wrapping one-cycle unattended runs:
+
+```bash
+./atlas-agent-shift --cycles 12 --max-minutes 480 --sleep-seconds 300 --publish --apply --review-apply --post-cycle-summary
+```
+
+`atlas-agent-shift` holds one runtime-wide supervisor lock, runs `atlas-agent-unattended --cycles 1` repeatedly, updates `jobs/atlas-agent-shift-heartbeat.json`, writes a per-shift status JSON under `jobs/`, and writes a markdown handoff under `jobs/` on exit. Use it when the lane is already stable and the operator needs regular GitHub sync plus durable resume state across a long window. The unattended cycle itself performs GitHub issue and Project reconciliation every cycle; the shift wrapper adds wall-clock limits and restartable evidence, not broader mutation authority.
 
 `agent:done` is reserved for resolved/closed work. A published draft PR leaves the linked issue marked `agent:pr-open` until the finalizer merges and closes it.
 

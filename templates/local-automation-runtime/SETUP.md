@@ -46,6 +46,14 @@ The unattended loop runs `reconcile -> project-reconcile -> decompose -> project
 
 For higher throughput, prefer explicit per-stage limits: `--dispatch-max-per-repo`, `--semantic-review-concurrency`, `--local-validate-concurrency`, `--repair-concurrency`, and `--deployed-validate-concurrency`. Deployed validation defaults to one active target because hosted validation may share mutable environments. Dispatch write-scope locks are enabled by default and use each issue's `## Write Scope` plus repo/base branch to avoid concurrent overlapping edits.
 
+For a long operator window, prefer `atlas-agent-shift` over asking an agent chat session to supervise indefinitely:
+
+```bash
+./atlas-agent-shift --cycles 12 --max-minutes 480 --sleep-seconds 300 --publish --apply --review-apply --post-cycle-summary
+```
+
+The shift wrapper runs one unattended cycle at a time, keeps a runtime-wide supervisor lock, updates a heartbeat/status file under `jobs/`, and writes a markdown handoff on exit. Keep the cycle count and wall-clock budget explicit.
+
 Keep `AGENT_GITHUB_THROTTLE=true` in `config.env` for unattended runs. The shared throttle coordinates GitHub CLI calls across parallel runtime processes and records temporary backoff state under `jobs/github-api-throttle/` after GitHub rate-limit responses.
 
 Project reconcile and dependency promotion scan up to `AGENT_PROJECT_ITEM_LIMIT` Project cards, default `500`. Increase it if the Project has more active cards or the logs report that the scanned item limit was reached.

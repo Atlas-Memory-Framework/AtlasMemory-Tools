@@ -57,7 +57,9 @@ def run_runtime(root: Path, command: list[str]) -> int:
         print("+ " + shlex.join(sync_cmd), flush=True)
         subprocess.run(sync_cmd, cwd=TOOLS_ROOT, check=True)
     print("+ " + shlex.join(command), flush=True)
-    return subprocess.run(command, cwd=root).returncode
+    env = os.environ.copy()
+    env["PWD"] = str(root)
+    return subprocess.run(command, cwd=root, env=env).returncode
 
 
 def require_yes(name: str, command: list[str], yes: bool) -> None:
@@ -185,6 +187,37 @@ def cmd_run_once(args: argparse.Namespace) -> int:
     return run_runtime(root, command)
 
 
+def cmd_shift(args: argparse.Namespace) -> int:
+    root = runtime_dir(args)
+    command = [
+        runtime_script(root, "atlas-agent-shift"),
+        "--cycles",
+        str(args.cycles),
+        "--sleep-seconds",
+        str(args.sleep_seconds),
+        "--dispatch-max-per-repo",
+        str(args.dispatch_max_per_repo),
+        "--repair-max",
+        str(args.repair_max),
+    ]
+    if args.max_minutes is not None:
+        command.extend(["--max-minutes", str(args.max_minutes)])
+    if args.deadline:
+        command.extend(["--deadline", args.deadline])
+    for enabled, flag in (
+        (args.publish, "--publish"),
+        (args.apply, "--apply"),
+        (args.merge, "--merge"),
+        (args.close_issues, "--close-issues"),
+        (args.review_apply, "--review-apply"),
+        (args.post_cycle_summary, "--post-cycle-summary"),
+    ):
+        if enabled:
+            command.append(flag)
+    require_yes("shift", command, args.yes)
+    return run_runtime(root, command)
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     root = runtime_dir(args)
     command = [runtime_script(root, "atlas-agent-review")]
@@ -275,6 +308,22 @@ def build_parser() -> argparse.ArgumentParser:
     run_once.add_argument("--post-cycle-summary", action=argparse.BooleanOptionalAction, default=True)
     run_once.add_argument("--yes", action="store_true", help="Confirm mutating runtime actions.")
     run_once.set_defaults(func=cmd_run_once)
+
+    shift = subparsers.add_parser("shift", help="Run a bounded long shift with heartbeat/status/handoff files.")
+    shift.add_argument("--publish", action="store_true")
+    shift.add_argument("--apply", action="store_true")
+    shift.add_argument("--merge", action="store_true")
+    shift.add_argument("--close-issues", action="store_true")
+    shift.add_argument("--cycles", type=positive_int, default=3)
+    shift.add_argument("--max-minutes", type=float)
+    shift.add_argument("--deadline")
+    shift.add_argument("--sleep-seconds", type=float, default=300.0)
+    shift.add_argument("--dispatch-max-per-repo", type=positive_int, default=1)
+    shift.add_argument("--repair-max", type=positive_int, default=2)
+    shift.add_argument("--review-apply", action=argparse.BooleanOptionalAction, default=True)
+    shift.add_argument("--post-cycle-summary", action=argparse.BooleanOptionalAction, default=True)
+    shift.add_argument("--yes", action="store_true", help="Confirm mutating runtime actions.")
+    shift.set_defaults(func=cmd_shift)
 
     review = subparsers.add_parser("review", help="Run atlas-agent-review.")
     review.add_argument("--apply", action="store_true")
