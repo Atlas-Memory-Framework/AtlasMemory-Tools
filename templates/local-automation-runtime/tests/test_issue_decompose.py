@@ -109,11 +109,47 @@ class IssueDecomposeTests(unittest.TestCase):
 
         self.assertEqual(
             self.decompose.child_labels(parent, child),
-            ["agent:one-point", "points:1", "status:blocked"],
+            ["agent:one-point", "points:1", "status:blocked", "type:story"],
         )
         body = self.decompose.child_body(parent, "owner/repo", child)
         self.assertIn("- Open dependencies: `#7; #9`", body)
         self.assertIn("- Dispatch recommendation: `dependency-gated`", body)
+
+    def test_child_labels_inherit_parent_project_routing_metadata(self) -> None:
+        parent = issue(
+            body="""## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            labels=[
+                "points:5",
+                "status:ready",
+                "agent:decomposition-required",
+                "area:core",
+                "owner:runtime",
+                "repo:atlas-memory",
+                "tier:t0",
+                "type:story",
+                "workstream:ws2-runtime-safety",
+                "priority:p1",
+            ],
+        )
+        child = {"body": "Scope: update one file.", "labels": ["points:7", "status:ready"]}
+
+        labels = self.decompose.child_labels(parent, child)
+
+        self.assertIn("area:core", labels)
+        self.assertIn("owner:runtime", labels)
+        self.assertIn("repo:atlas-memory", labels)
+        self.assertIn("tier:t0", labels)
+        self.assertIn("type:story", labels)
+        self.assertIn("workstream:ws2-runtime-safety", labels)
+        self.assertIn("priority:p1", labels)
+        self.assertIn("points:1", labels)
+        self.assertIn("status:ready", labels)
+        self.assertNotIn("points:5", labels)
+        self.assertNotIn("points:7", labels)
+        self.assertNotIn("agent:decomposition-required", labels)
 
     def test_child_body_infers_canonical_scope_and_validation_sections(self) -> None:
         parent = issue(

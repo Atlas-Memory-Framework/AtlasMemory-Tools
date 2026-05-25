@@ -17,6 +17,8 @@ import atlas_agent_common as common
 ONE_POINT_LABEL = "agent:one-point"
 DECOMPOSITION_REQUIRED_LABEL = "agent:decomposition-required"
 DECOMPOSED_LABEL = "agent:decomposed"
+CHILD_INHERITED_LABEL_PREFIXES = ("area:", "owner:", "repo:", "tier:", "workstream:", "priority:")
+CHILD_INHERITED_LABELS = {"type:story", "type:spike", "type:task"}
 
 
 def target_repos(path: str | None) -> list[str]:
@@ -286,16 +288,35 @@ def child_blocked_by_parent(parent: dict[str, Any]) -> bool:
     return parent_field_text(parent, "Open dependencies") != "none" or parent_field_text(parent, "Manual gates remaining") != "none"
 
 
+def inherited_child_labels(parent: dict[str, Any]) -> set[str]:
+    inherited: set[str] = set()
+    for label in common.label_names(parent):
+        if label in CHILD_INHERITED_LABELS or label.startswith(CHILD_INHERITED_LABEL_PREFIXES):
+            inherited.add(label)
+    if not any(label.startswith("type:") for label in inherited):
+        inherited.add("type:story")
+    return inherited
+
+
 def child_labels(parent: dict[str, Any], child: dict[str, Any]) -> list[str]:
     labels = {
         "points:1",
         ONE_POINT_LABEL,
+        *inherited_child_labels(parent),
         *[str(label) for label in child.get("labels") or [] if str(label).strip()],
     }
+    labels = {
+        label
+        for label in labels
+        if not label.startswith("points:")
+        and label not in {DECOMPOSITION_REQUIRED_LABEL, DECOMPOSED_LABEL}
+    }
+    labels.add("points:1")
     if child_blocked_by_parent(parent):
         labels.difference_update({"status:ready", "agent:ready", "agent:approved-dispatch"})
         labels.add("status:blocked")
     else:
+        labels.discard("status:blocked")
         labels.add("status:ready")
     return sorted(labels)
 

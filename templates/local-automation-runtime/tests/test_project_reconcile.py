@@ -82,6 +82,18 @@ class ProjectReconcileTests(unittest.TestCase):
 
         self.assertEqual(args.limit, 750)
 
+    def test_issue_filters_accept_numbers_refs_and_urls(self) -> None:
+        self.assertEqual(self.reconcile.issue_filter("28"), (None, 28))
+        self.assertEqual(self.reconcile.issue_filter("#28"), (None, 28))
+        self.assertEqual(self.reconcile.issue_filter("owner/repo#28"), ("owner/repo", 28))
+        self.assertEqual(
+            self.reconcile.issue_filter("https://github.com/owner/repo/issues/28"),
+            ("owner/repo", 28),
+        )
+        self.assertTrue(self.reconcile.item_matches_issue_filters(item(28), {(None, 28)}))
+        self.assertTrue(self.reconcile.item_matches_issue_filters(item(28), {("owner/repo", 28)}))
+        self.assertFalse(self.reconcile.item_matches_issue_filters(item(28), {("other/repo", 28)}))
+
     def test_desired_metadata_hydrates_child_issue_fields(self) -> None:
         pr = {
             "state": "MERGED",
@@ -230,6 +242,115 @@ https://github.com/owner/repo/issues/5
             self.assertEqual(child_decision.field_updates["PlanKey"], "PLAN-1")
             self.assertEqual(child_decision.field_updates["ParentEpic"], "https://github.com/owner/repo/issues/1")
             self.assertEqual(child_decision.field_updates["ReviewGates"], "G-BACKEND-BUILD")
+            self.assertEqual(child_decision.field_updates["Risk"], "High")
+            self.assertEqual(child_decision.field_updates["RiskTags"], "needs-ci-validation, migration")
+            self.assertEqual(child_decision.field_updates["ValidationScope"], "ci")
+            self.assertEqual(child_decision.field_updates["Priority"], "P1")
+        finally:
+            self.reconcile.latest_pr_for_issue = original_latest_pr
+
+    def test_metadata_decision_inherits_parent_body_fields_when_project_fields_missing(self) -> None:
+        original_latest_pr = self.reconcile.latest_pr_for_issue
+        self.reconcile.latest_pr_for_issue = lambda _repo, _number: None
+        fields = {
+            name: {"id": name, "options": []}
+            for name in (
+                "Workstream",
+                "TargetRepo",
+                "ExecutionRepo",
+                "BaseBranch",
+                "PlanKey",
+                "ParentEpic",
+                "ReviewGates",
+                "GateTier",
+                "Risk",
+                "RiskTags",
+                "ValidationScope",
+                "Priority",
+            )
+        }
+        fields["GateTier"]["options"] = [{"name": "T0", "id": "t0"}]
+        fields["Risk"]["options"] = [{"name": "High", "id": "high"}]
+        fields["ValidationScope"]["options"] = [{"name": "ci", "id": "ci"}]
+        fields["Priority"]["options"] = [{"name": "P1", "id": "p1"}]
+        try:
+            config = self.reconcile.ProjectConfig(
+                project_id="PROJECT",
+                status_field_id="Status",
+                status_options={},
+                execution_state_field_id=None,
+                execution_state_options={},
+                fields=fields,
+            )
+            parent = item(
+                5,
+                content={
+                    "type": "Issue",
+                    "repository": "owner/repo",
+                    "number": 5,
+                    "title": "[WS2-RUNTIME-SAFETY] Parent",
+                    "url": "https://github.com/owner/repo/issues/5",
+                    "body": """## Source Plan
+- Plan key: `PLAN-1`
+
+## Automation Manifest Metadata
+- Target repo(s): `owner/repo`
+- Execution repo: `owner/repo`
+- Base branch: `main`
+- Risk tags: `needs-ci-validation, migration`
+- Validation scope: `ci`
+- Priority: `P1`
+
+## Named Gates
+- G-BACKEND-BUILD
+
+## Parent Epic
+https://github.com/owner/repo/issues/1
+""",
+                },
+                labels=["points:5", "tier:t0", "workstream:ws2-runtime-safety"],
+            )
+            child = item(
+                49,
+                content={
+                    "type": "Issue",
+                    "repository": "owner/repo",
+                    "number": 49,
+                    "title": "Child",
+                    "url": "https://github.com/owner/repo/issues/49",
+                    "body": """## Automation Manifest Metadata
+- Suggested points: `1`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+
+## Parent Issue
+Parent issue: #5
+https://github.com/owner/repo/issues/5
+""",
+                },
+                labels=["points:1", "agent:one-point"],
+            )
+
+            decisions = self.reconcile.metadata_decisions(
+                "owner",
+                1,
+                config,
+                [parent, child],
+                {("owner/repo", 5): "OPEN", ("owner/repo", 49): "OPEN"},
+                hydrate_metadata=True,
+            )
+
+            child_decision = next(decision for decision in decisions if decision.number == 49)
+            self.assertEqual(child_decision.field_updates["Workstream"], "WS2-RUNTIME-SAFETY")
+            self.assertEqual(child_decision.field_updates["TargetRepo"], "owner/repo")
+            self.assertEqual(child_decision.field_updates["ExecutionRepo"], "owner/repo")
+            self.assertEqual(child_decision.field_updates["BaseBranch"], "main")
+            self.assertEqual(child_decision.field_updates["PlanKey"], "PLAN-1")
+            self.assertEqual(child_decision.field_updates["ParentEpic"], "https://github.com/owner/repo/issues/1")
+            self.assertEqual(child_decision.field_updates["ReviewGates"], "G-BACKEND-BUILD")
+            self.assertEqual(child_decision.field_updates["GateTier"], "T0")
             self.assertEqual(child_decision.field_updates["Risk"], "High")
             self.assertEqual(child_decision.field_updates["RiskTags"], "needs-ci-validation, migration")
             self.assertEqual(child_decision.field_updates["ValidationScope"], "ci")

@@ -127,6 +127,29 @@ def issue_key(item: dict[str, Any]) -> tuple[str, int] | None:
     return None
 
 
+def issue_filter(raw: str) -> tuple[str | None, int]:
+    text = str(raw).strip()
+    url_match = re.match(r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/issues/(?P<number>\d+)(?:\b|$)", text)
+    if url_match:
+        return url_match.group("repo"), int(url_match.group("number"))
+    if text.startswith("#"):
+        text = text[1:]
+    ref_match = re.match(r"^(?:(?P<repo>[^#\s]+/[^#\s]+)#)?(?P<number>\d+)$", text)
+    if not ref_match:
+        raise ValueError(f"Issue filter must be NUMBER, #NUMBER, OWNER/REPO#NUMBER, or a GitHub issue URL: {raw}")
+    return ref_match.group("repo"), int(ref_match.group("number"))
+
+
+def item_matches_issue_filters(item: dict[str, Any], filters: set[tuple[str | None, int]]) -> bool:
+    if not filters:
+        return True
+    key = issue_key(item)
+    if not key:
+        return False
+    repo, number = key
+    return any(number == filter_number and (filter_repo is None or repo == filter_repo) for filter_repo, filter_number in filters)
+
+
 def issue_ref(item: dict[str, Any]) -> str:
     key = issue_key(item)
     if not key:
@@ -293,9 +316,14 @@ def parent_issue_refs(item: dict[str, Any]) -> list[tuple[str, int]]:
 
 
 INHERITED_PROJECT_FIELDS = (
+    "Workstream",
+    "TargetRepo",
+    "ExecutionRepo",
+    "BaseBranch",
     "PlanKey",
     "ParentEpic",
     "ReviewGates",
+    "GateTier",
     "Risk",
     "RiskTags",
     "ValidationScope",
@@ -305,6 +333,42 @@ INHERITED_PROJECT_FIELDS = (
 
 def item_project_value(item: dict[str, Any], field: str) -> str:
     return item_value(item, field).strip()
+
+
+def item_body_value(item: dict[str, Any], field: str) -> str:
+    body = str((item.get("content") or {}).get("body") or "")
+    title = issue_title(item)
+    labels = labels_for_item(item)
+    repo = str((item.get("content") or {}).get("repository") or "")
+    if field == "Workstream":
+        return normalized_workstream(labels, title)
+    if field == "TargetRepo":
+        return first_body_field(body, "Target repo(s)", "Target repo") or repo
+    if field == "ExecutionRepo":
+        target_repo = first_body_field(body, "Target repo(s)", "Target repo") or repo
+        return first_body_field(body, "Execution repo") or target_repo
+    if field == "BaseBranch":
+        return first_body_field(body, "Base branch")
+    if field == "PlanKey":
+        return first_body_field(body, "Plan key")
+    if field == "ParentEpic":
+        return section_url(body, "Parent Epic")
+    if field == "ReviewGates":
+        return section_text(body, "Named Gates") or section_text(body, "Required Gates")
+    if field == "GateTier":
+        return gate_tier_from(labels)
+    if field == "RiskTags":
+        return first_body_field(body, "Risk tags")
+    if field == "Risk":
+        return risk_from_tags(first_body_field(body, "Risk tags"))
+    if field == "ValidationScope":
+        return first_body_field(body, "Validation scope")
+    if field == "Priority":
+        priority = first_body_field(body, "Priority") or label_value(labels, "priority:")
+        if priority:
+            return priority.upper()
+        return priority_from_gate_tier(gate_tier_from(labels))
+    return ""
 
 
 def priority_workstream_key(workstream: str) -> str:
@@ -323,11 +387,11 @@ def inherited_project_metadata(
         if not parent:
             continue
         for field in INHERITED_PROJECT_FIELDS:
-            value = item_project_value(parent, field)
+            value = item_project_value(parent, field) or item_body_value(parent, field)
             if value and field not in inherited:
                 inherited[field] = value
     workstream = priority_workstream_key(
-        item_project_value(item, "Workstream") or normalized_workstream(labels_for_item(item), issue_title(item))
+        item_project_value(item, "Workstream") or item_body_value(item, "Workstream")
     )
     if workstream and "Priority" not in inherited:
         priority = priority_by_workstream.get(workstream)
@@ -753,6 +817,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Populate missing/stale issue row metadata such as ItemType, repos, Workstream, ActivePR, and lifecycle fields.",
     )
+    parser.add_argument(
+        "--issue",
+        action="append",
+        default=[],
+        help="Limit reconciliation to one issue. Repeatable. Accepts NUMBER, #NUMBER, OWNER/REPO#NUMBER, or issue URL.",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument(
         "--dry-run",
@@ -767,17 +837,23 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    issue_filters = {issue_filter(raw) for raw in args.issue}
     configs: dict[tuple[str, int], ProjectConfig] = {}
     decisions: list[ProjectDecision] = []
     for owner, project_number in project_targets(args.projects_file, args.owner, args.project_number):
         config = project_config(owner, project_number)
         configs[(owner, project_number)] = config
+        items = [
+            item
+            for item in project_items(owner, project_number, args.limit)
+            if item_matches_issue_filters(item, issue_filters)
+        ]
         decisions.extend(
             decide(
                 owner,
                 project_number,
                 config,
-                project_items(owner, project_number, args.limit),
+                items,
                 hydrate_metadata=args.hydrate_metadata,
             )
         )
