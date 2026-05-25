@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:f4afee78a93a1bf1e28d196f69a386970f5153f3329981d3c17d390cfdcb7fb9
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:a065bc36e19d8768241efab37da759442f0548f75aa828a1077b5755be423046
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -2311,6 +2311,24 @@ def collect_field_values(lines: list[str], *prefixes: str) -> list[str]:
     return values
 
 
+def field_declared(lines: list[str], *prefixes: str) -> bool:
+    normalized_prefixes = tuple(prefix.strip().lower() for prefix in prefixes if prefix.strip())
+    for line in lines:
+        field_match = re.match(r"^(?P<indent>\s*)-\s+(?P<key>[^:]+):\s*(?P<value>.*)$", line)
+        if not field_match:
+            continue
+        key = field_match.group("key").strip().lower()
+        if any(
+            key == prefix
+            or key.startswith(f"{prefix} ")
+            or key.startswith(f"{prefix}(")
+            or key.startswith(f"{prefix} /")
+            for prefix in normalized_prefixes
+        ):
+            return True
+    return False
+
+
 def extract_review_gates_from_workstream_lines(lines: list[str]) -> list[str]:
     """Collect `G-*` gate ids from nested bullets under `Review gates (...):`."""
     gates: list[str] = []
@@ -3486,6 +3504,7 @@ def build_manifest_leaf_children(
             repo_targets = normalize_repo_target_values(
                 [repo_for_path(item) for item in write_scope if item]
             )
+        dependency_field_present = field_declared(lines, "depends on", "dependencies")
         dependency_analysis = analyze_manifest_dependency_values(
             collect_field_values(lines, "depends on", "dependencies"),
             manifest_source_ids=manifest_source_ids,
@@ -3546,6 +3565,13 @@ def build_manifest_leaf_children(
         points = points_for_issue(title, repo_targets, gates, lines)
         automation_blockers = ordered_unique(
             [
+                *(
+                    [
+                        "Add explicit manifest dependency metadata (`Depends on: none` or concrete leaf ids/issue refs) before auto-dispatch."
+                    ]
+                    if not dependency_field_present
+                    else []
+                ),
                 *(
                     f"Convert dependency token `{token}` into an explicit issue ref or Automation Issue Manifest leaf id before auto-dispatch."
                     for token in dependency_analysis.unsupported_tokens

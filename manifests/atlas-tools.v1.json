@@ -44,8 +44,16 @@
       "path": "skills/local-automation-runtime-upgrade"
     },
     {
+      "name": "local-plan-agent-runtime",
+      "path": "skills/local-plan-agent-runtime"
+    },
+    {
       "name": "plan",
       "path": "skills/plan"
+    },
+    {
+      "name": "plan-execution-readiness",
+      "path": "skills/plan-execution-readiness"
     },
     {
       "name": "plan-to-issues",
@@ -143,6 +151,16 @@
     ],
     "local-automation-runtime-upgrade": [
       "runtime-upgrade"
+    ],
+    "local-plan-agent-runtime": [
+      "agentic-plan-review",
+      "agentic-review-mode",
+      "parallel-plan-review"
+    ],
+    "plan-execution-readiness": [
+      "plan-stress-review",
+      "plan-readiness-review",
+      "execution-readiness-review"
     ]
   },
   "adapters": {

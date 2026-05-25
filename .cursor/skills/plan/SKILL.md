@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:026f3b2a0f74c1e0e7ab1a13cde70209b059e4e79d06e9dca5e7135af5884683
+# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:b0139128e8a4807e1f6089f04bcdbb1779ad89d2cc870cf2159a08bea0bdcffe
 # atlas-tools-generated-end
 name: plan
 description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by Cursor) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
@@ -9,6 +9,13 @@ description: Orchestrate the /plan workflow to create or update the current plan
 
 ## Purpose
 Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface; in `registry-first`, a successful compile later hands planning authority to compiled registry YAML. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
+
+## Agentic review mode
+When the user says `Use $plan with agentic review mode`, asks for parallel plan review, asks to review an old plan before trusting it, or asks to run the local agentic planning workflow on a markdown plan, `$plan` remains the public workflow and canonical writer. Invoke `/local-plan-agent-runtime` as an internal review layer after the authoring artifact is selected and before preserving approval/readiness state.
+
+Agentic review mode must run as dry-run review/proposal work unless the user explicitly approves `$plan`-routed edits. It snapshots the selected plan, runs independent reviewer personas, validates structured proposal packets, reconciles conflicts, and returns findings, decisions, and patch candidates. The runtime and its sub-agents must not write the canonical plan, flip gates, approve projection, approve dispatch, or encode human-agency decisions. `$plan` owns all accepted edits, Decision Log updates, gate updates, review freshness, and user Q/A.
+
+Use this mode for new plans, old plans that are not in current shape, and previously reviewed or approved plans. For old or approved plans, treat existing `Pass`, `Approved`, projection, and dispatch claims as stale until the re-entry audit and agentic review findings are dispositioned. If implementation-critical intent is missing, interrogate the user with targeted questions and keep the plan blocked until the answer is recorded.
 
 ## Core rules
 - The current markdown plan artifact is the planning write surface; do not assume a fixed filename.
@@ -57,7 +64,7 @@ Create or update the current markdown plan artifact and move it through Problem,
    - Ask for the feature idea / goal statement (1-2 sentences) and any hard constraints (optional).
    - Create a new plan doc using the template in `reference.md`.
 4) Echo the selection in chat: `AuthoringArtifact = <path>`.
-5) Determine `CurrentStage`.
+5) Determine `CurrentStage`. If the user requested agentic review mode, run `/local-plan-agent-runtime` in dry-run against the selected artifact before trusting readiness, review, projection, or dispatch state; use `/plan-execution-readiness` as the critical review persona/checklist when focused execution-readiness review is needed.
 6) If the plan is in Reviews/Approved re-entry state, run `/review mode=zero-context` as a fresh re-entry audit before trusting existing `Pass` or approval values. Treat all existing pass claims as stale until the audit answers the seven required questions above with concrete, plan-cited answers. If the audit is weak, route remediation to the owner skill for the weak section(s), set affected gates to `Fail`, and do not preserve or set approval state.
 7) Run validators in stage order up to the current stage.
 8) Route to the first failing gate and call the owner skill as a sub-agent to produce a draft section. Provide any known agent roster or `## Context Snapshot` so ownership can be assigned correctly.
@@ -247,6 +254,8 @@ Human-agency items MUST be explicitly decided by the user (use structured questi
 - `/implementation-planning` -> sub-agent, Q/A gated (inline loop when needed)
 - `/automation-decomposition` -> sub-agent when `AutomationTarget != none`, Q/A gated when dispatch policy or scope is ambiguous
 - `/planning-reviews` -> inline or sub-agent, Q/A gated (inline loop when needed)
+- `/local-plan-agent-runtime` -> optional internal review layer when the user requests agentic review mode; returns validated findings/proposals only
+- `/plan-execution-readiness` -> standalone or runtime persona/checklist for critical plan execution-readiness review
 
 ## Output
 - Patch the current plan artifact only.

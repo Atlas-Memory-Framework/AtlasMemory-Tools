@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Inspect or flush queued GitHub Project field updates."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import atlas_agent_common as common
+
+
+def valid_record(record: dict[str, Any]) -> bool:
+    return (
+        record.get("kind") == "project_field_update"
+        and bool(record.get("repo"))
+        and bool(record.get("number"))
+        and bool(record.get("project_owner"))
+        and bool(record.get("project_number"))
+        and isinstance(record.get("fields"), dict)
+    )
+
+
+def queue_paths(args: argparse.Namespace) -> list[Path] | None:
+    if not args.file:
+        return None
+    return [Path(raw) for raw in args.file]
+
+
+def print_status(args: argparse.Namespace) -> int:
+    records = common.iter_project_sync_records(queue_paths(args))
+    valid = [record for _path, _line, record in records if valid_record(record)]
+    invalid = len(records) - len(valid)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "queue_dir": str(common.project_sync_dir()),
+                    "records": len(records),
+                    "valid_records": len(valid),
+                    "invalid_records": invalid,
+                    "files": sorted({str(path) for path, _line, _record in records}),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    print(f"queue_dir: {common.project_sync_dir()}")
+    print(f"records: {len(records)}")
+    print(f"valid_records: {len(valid)}")
+    print(f"invalid_records: {invalid}")
+    for path in sorted({path for path, _line, _record in records}):
+        print(f"file: {path}")
+    return 0
+
+
+def flush(args: argparse.Namespace) -> int:
+    applied = 0
+    skipped = 0
+    lock = None
+    if not args.dry_run:
+        lock = common.acquire_json_lock(common.project_sync_dir() / "append.lock")
+    records = common.iter_project_sync_records(queue_paths(args))
+    original_mode = os.environ.get("AGENT_PROJECT_STATE_UPDATE_MODE")
+    original_updates = os.environ.get("AGENT_PROJECT_STATE_UPDATES")
+    completed = False
+    os.environ["AGENT_PROJECT_STATE_UPDATE_MODE"] = "direct"
+    os.environ["AGENT_PROJECT_STATE_UPDATES"] = "true"
+    try:
+        for path, line, record in records:
+            if not valid_record(record):
+                skipped += 1
+                print(f"skip invalid record: {path}:{line}", flush=True)
+                continue
+            if args.dry_run:
+                print(json.dumps(record, sort_keys=True))
+                applied += 1
+                continue
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+                handle.write(f"{record['project_owner']}/{record['project_number']}\n")
+                projects_file = handle.name
+            try:
+                common.update_issue_project_fields(
+                    str(record["repo"]),
+                    int(record["number"]),
+                    {str(name): str(value) for name, value in record["fields"].items()},
+                    projects_file=projects_file,
+                )
+                applied += 1
+            finally:
+                Path(projects_file).unlink(missing_ok=True)
+        completed = True
+    finally:
+        if original_mode is None:
+            os.environ.pop("AGENT_PROJECT_STATE_UPDATE_MODE", None)
+        else:
+            os.environ["AGENT_PROJECT_STATE_UPDATE_MODE"] = original_mode
+        if original_updates is None:
+            os.environ.pop("AGENT_PROJECT_STATE_UPDATES", None)
+        else:
+            os.environ["AGENT_PROJECT_STATE_UPDATES"] = original_updates
+        if completed and records and not args.dry_run and skipped == 0:
+            suffix = f".flushed-{common.now_id()}"
+            for path in sorted({path for path, _line, _record in records}):
+                if path.exists():
+                    path.rename(path.with_name(path.name + suffix))
+        if lock is not None:
+            lock.unlink(missing_ok=True)
+    print(f"applied: {applied}")
+    print(f"skipped: {skipped}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--file", action="append", help="Specific JSONL queue file to read. Repeatable.")
+    parser.add_argument("--json", action="store_true", help="Print JSON status for the status command.")
+    subparsers = parser.add_subparsers(dest="command")
+    status_parser = subparsers.add_parser("status", help="Summarize queued updates without calling GitHub.")
+    status_parser.add_argument("--json", action="store_true", help="Print JSON status.")
+    flush_parser = subparsers.add_parser("flush", help="Apply queued updates through gh project item-edit.")
+    flush_parser.add_argument("--dry-run", action="store_true", help="Print records that would be applied.")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if args.command == "flush":
+        return flush(args)
+    return print_status(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

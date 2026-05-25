@@ -412,6 +412,7 @@ def desired_metadata(
     points = common.issue_points({"body": body, "labels": [{"name": label} for label in labels]})
     dispatch_mode = first_body_field(body, "Dispatch mode")
     dispatch_recommendation = first_body_field(body, "Dispatch recommendation")
+    open_dependencies = first_body_field(body, "Open dependencies")
     target_repo = first_body_field(body, "Target repo(s)", "Target repo") or repo
     execution_repo = first_body_field(body, "Execution repo") or target_repo
     plan_key = first_body_field(body, "Plan key")
@@ -439,6 +440,7 @@ def desired_metadata(
         "GateTier": gate_tier_from(labels),
         "DispatchMode": dispatch_mode,
         "DispatchRecommendation": dispatch_recommendation,
+        "DependsOn": "" if open_dependencies.lower() in {"", "none", "n/a", "na", "-"} else open_dependencies,
         "Priority": priority.upper() if priority else "",
         "Risk": risk_from_tags(risk_tags),
         "RiskTags": risk_tags,

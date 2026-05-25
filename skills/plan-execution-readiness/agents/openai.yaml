@@ -1,0 +1,3 @@
+display_name: Plan Execution Readiness
+short_description: Critically review plans before execution.
+default_prompt: Review the selected markdown plan for execution readiness: contradictions, missing decisions, weak gates, hidden coupling, validation gaps, and places where agents would invent behavior.

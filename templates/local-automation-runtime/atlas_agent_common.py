@@ -28,6 +28,15 @@ def now_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def now_rfc3339() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def duration_ms(start_time: float, end_time: float | None = None) -> int:
+    finish = time.monotonic() if end_time is None else end_time
+    return max(0, int(round((finish - start_time) * 1000)))
+
+
 def config_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name) or read_config().get(name)
     if raw is None:
@@ -129,11 +138,76 @@ def github_throttle_paths() -> tuple[pathlib.Path, pathlib.Path]:
     return root / "state.json", root / "state.lock"
 
 
+def pid_is_alive(pid: Any) -> bool:
+    try:
+        value = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if value <= 0:
+        return False
+    try:
+        os.kill(value, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def json_lock_is_stale(path: pathlib.Path, stale_seconds: float) -> bool:
+    if not path.exists():
+        return False
+    age = time.time() - path.stat().st_mtime
+    if age > stale_seconds:
+        return True
+    payload = read_json_file(path)
+    pid = payload.get("pid")
+    return pid is not None and not pid_is_alive(pid)
+
+
+def github_throttle_status(stale_seconds: float = 120.0) -> dict[str, Any]:
+    state_path, lock_path = github_throttle_paths()
+    state = read_json_file(state_path)
+    now = time.time()
+    lock_state: dict[str, Any] = {
+        "path": str(lock_path),
+        "exists": lock_path.exists(),
+        "stale": False,
+        "age_seconds": None,
+    }
+    if lock_path.exists():
+        age = max(0.0, now - lock_path.stat().st_mtime)
+        payload = read_json_file(lock_path)
+        lock_state.update(
+            {
+                "age_seconds": age,
+                "stale": age > stale_seconds
+                or (payload.get("pid") is not None and not pid_is_alive(payload.get("pid"))),
+                "payload": payload,
+            }
+        )
+    pause_until = float(state.get("pause_until") or 0)
+    next_allowed_at = float(state.get("next_allowed_at") or 0)
+    return {
+        "state_path": str(state_path),
+        "exists": state_path.exists(),
+        "pause_until": pause_until or None,
+        "pause_remaining_seconds": max(0.0, pause_until - now) if pause_until else 0.0,
+        "next_allowed_at": next_allowed_at or None,
+        "next_allowed_remaining_seconds": max(0.0, next_allowed_at - now) if next_allowed_at else 0.0,
+        "stale_lock": lock_state,
+        "last_command": state.get("last_command"),
+        "last_rate_limit_command": state.get("last_rate_limit_command"),
+        "last_rate_limit_at": state.get("last_rate_limit_at"),
+        "updated_at": state.get("updated_at"),
+    }
+
+
 def acquire_json_lock(path: pathlib.Path, stale_seconds: float = 120.0, wait_seconds: float = 300.0) -> pathlib.Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + wait_seconds
     while True:
-        if path.exists() and time.time() - path.stat().st_mtime > stale_seconds:
+        if json_lock_is_stale(path, stale_seconds):
             path.unlink(missing_ok=True)
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
@@ -178,6 +252,80 @@ def project_targets(path: str | pathlib.Path | None = None) -> list[tuple[str, i
         except ValueError:
             continue
     return targets
+
+
+def project_sync_dir() -> pathlib.Path:
+    return jobs_dir() / "project-sync"
+
+
+def project_sync_queue_path() -> pathlib.Path:
+    return project_sync_dir() / f"{datetime.now(timezone.utc).strftime('%Y%m%d')}.jsonl"
+
+
+def project_state_update_mode() -> str:
+    raw = os.environ.get("AGENT_PROJECT_STATE_UPDATE_MODE") or read_config().get("AGENT_PROJECT_STATE_UPDATE_MODE")
+    legacy = os.environ.get("AGENT_PROJECT_STATE_UPDATES") or read_config().get("AGENT_PROJECT_STATE_UPDATES")
+    value = str(raw or legacy or "direct").strip().strip('"').strip("'").lower()
+    if value in {"queue", "queued", "dirty", "jsonl"}:
+        return "queue"
+    return "direct"
+
+
+def append_project_sync_update(
+    repo: str,
+    number: int,
+    fields: dict[str, str],
+    *,
+    projects_file: str | pathlib.Path | None = None,
+    source: str = "update_issue_project_fields",
+) -> list[pathlib.Path]:
+    updates = {name: value for name, value in fields.items() if value}
+    if not updates:
+        return []
+    targets = project_targets(projects_file)
+    if not targets:
+        return []
+    queue_path = project_sync_queue_path()
+    lock = acquire_json_lock(project_sync_dir() / "append.lock")
+    written: list[pathlib.Path] = []
+    try:
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        with queue_path.open("a", encoding="utf-8") as handle:
+            for owner, project_number in targets:
+                record = {
+                    "version": 1,
+                    "kind": "project_field_update",
+                    "created_at": now_id(),
+                    "repo": repo,
+                    "number": int(number),
+                    "project_owner": owner,
+                    "project_number": int(project_number),
+                    "fields": updates,
+                    "source": source,
+                }
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+                written.append(queue_path)
+    finally:
+        lock.unlink(missing_ok=True)
+    return written
+
+
+def iter_project_sync_records(paths: list[pathlib.Path] | None = None) -> list[tuple[pathlib.Path, int, dict[str, Any]]]:
+    candidates = paths or sorted(project_sync_dir().glob("*.jsonl"))
+    records: list[tuple[pathlib.Path, int, dict[str, Any]]] = []
+    for path in candidates:
+        if not path.exists():
+            continue
+        for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                payload = {"kind": "invalid", "raw": line}
+            records.append((path, line_number, payload if isinstance(payload, dict) else {"kind": "invalid"}))
+    return records
 
 
 def project_info(owner: str, project_number: int) -> dict[str, Any] | None:
@@ -243,8 +391,13 @@ def update_issue_project_fields(
     *,
     projects_file: str | pathlib.Path | None = None,
 ) -> None:
+    if projects_file is None and not config_bool("AGENT_PROJECT_STATE_UPDATES", False):
+        return
     updates = {name: value for name, value in fields.items() if value}
     if not updates:
+        return
+    if project_state_update_mode() == "queue":
+        append_project_sync_update(repo, number, updates, projects_file=projects_file)
         return
     for owner, project_number in project_targets(projects_file):
         try:
@@ -294,6 +447,35 @@ def update_issue_automation_state(
     if status:
         fields["Status"] = status
     update_issue_project_fields(repo, number, fields, projects_file=projects_file)
+
+
+def label_cache_path(repo: str) -> pathlib.Path:
+    return jobs_dir() / "label-cache" / f"{safe_repo_name(repo)}.json"
+
+
+def ensure_labels_cached(repo: str, labels: dict[str, str]) -> None:
+    if not labels:
+        return
+    cache_path = label_cache_path(repo)
+    lock = acquire_json_lock(cache_path.with_suffix(".lock"))
+    try:
+        cache = read_json_file(cache_path)
+        ensured = cache.get("labels") if isinstance(cache.get("labels"), dict) else {}
+        changed = False
+        for label, color in labels.items():
+            if ensured.get(label) == color:
+                continue
+            proc = run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+            output = getattr(proc, "stdout", "") or ""
+            returncode = getattr(proc, "returncode", 0)
+            if returncode == 0 or "already exists" in output.lower():
+                ensured[label] = color
+                changed = True
+        if changed:
+            cache.update({"repo": repo, "labels": ensured, "updated_at": now_id()})
+            write_json(cache_path, cache)
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def github_throttle_before(parts: list[str] | None) -> None:

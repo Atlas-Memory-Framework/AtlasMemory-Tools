@@ -117,7 +117,7 @@ def queue_blockers(issue: dict[str, Any], labels_after_cleanup: set[str]) -> lis
 
 
 def ensure_labels(repo: str) -> None:
-    common.run(["gh", "label", "create", PR_OPEN_LABEL, "--repo", repo, "--color", "1D76DB"], check=False)
+    common.ensure_labels_cached(repo, {PR_OPEN_LABEL: "1D76DB"})
 
 
 def decide_issue(repo: str, issue: dict[str, Any]) -> ReconcileDecision | None:

@@ -37,6 +37,20 @@ class ShiftSupervisorTests(unittest.TestCase):
         self.assertIn("--apply", command)
         self.assertNotIn("--", command)
 
+    def test_build_unattended_command_can_force_project_reconcile_checkpoint(self) -> None:
+        command = self.shift.build_unattended_command(["--apply"], project_reconcile_checkpoint=True)
+
+        self.assertIn("--project-reconcile-every", command)
+        every_index = command.index("--project-reconcile-every") + 1
+        self.assertEqual(command[every_index], "1")
+
+    def test_project_reconcile_checkpoint_interval_uses_shift_cycle_number(self) -> None:
+        args = self.shift.build_parser().parse_args(["--project-reconcile-every", "3"])
+
+        self.assertFalse(self.shift.project_reconcile_checkpoint_enabled(args, 1))
+        self.assertFalse(self.shift.project_reconcile_checkpoint_enabled(args, 2))
+        self.assertTrue(self.shift.project_reconcile_checkpoint_enabled(args, 3))
+
     def test_parse_deadline_accepts_utc_z_suffix(self) -> None:
         deadline = self.shift.parse_deadline("2026-05-23T12:00:00Z")
 

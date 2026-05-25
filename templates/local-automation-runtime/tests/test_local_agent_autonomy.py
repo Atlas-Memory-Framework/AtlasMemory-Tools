@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -197,15 +198,71 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         self.assertIn("pause_until", state)
         self.assertEqual(state["last_rate_limit_command"], "gh issue list --json number")
 
-    def test_common_updates_issue_project_automation_state(self) -> None:
+    def test_common_reports_throttle_status_without_github(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            try:
+                state_path, lock_path = common.github_throttle_paths()
+                common.write_json(
+                    state_path,
+                    {
+                        "pause_until": 100.0,
+                        "next_allowed_at": 200.0,
+                        "last_command": "gh issue list",
+                        "last_rate_limit_command": "gh api graphql",
+                    },
+                )
+                common.write_json(lock_path, {"pid": 123})
+                os.utime(lock_path, (1, 1))
+
+                status = common.github_throttle_status(stale_seconds=1)
+            finally:
+                common.jobs_dir = original_jobs_dir
+
+        self.assertEqual(status["last_command"], "gh issue list")
+        self.assertEqual(status["last_rate_limit_command"], "gh api graphql")
+        self.assertTrue(status["stale_lock"]["exists"])
+        self.assertTrue(status["stale_lock"]["stale"])
+
+    def test_common_reports_dead_pid_lock_as_stale(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            try:
+                _state_path, lock_path = common.github_throttle_paths()
+                common.write_json(lock_path, {"pid": 999999999})
+
+                status = common.github_throttle_status(stale_seconds=120.0)
+            finally:
+                common.jobs_dir = original_jobs_dir
+
+        self.assertTrue(status["stale_lock"]["exists"])
+        self.assertTrue(status["stale_lock"]["stale"])
+
+    def test_common_skips_issue_project_automation_state_by_default(self) -> None:
+        common = self.orchestrator.common
+        original_targets = common.project_targets
+        try:
+            common.project_targets = lambda _path=None: [("owner", 2)]
+
+            common.update_issue_automation_state("owner/repo", 9, "Running", status="In Progress")
+        finally:
+            common.project_targets = original_targets
+
+    def test_common_updates_issue_project_automation_state_when_explicit(self) -> None:
         common = self.orchestrator.common
         original_targets = common.project_targets
         original_info = common.project_info
         original_fields = common.project_fields
         original_items = common.project_items
         original_run = common.run
+        original_env = os.environ.copy()
         calls: list[list[str]] = []
         try:
+            os.environ["AGENT_PROJECT_STATE_UPDATE_MODE"] = "direct"
             common.project_targets = lambda _path=None: [("owner", 2)]
             common.project_info = lambda _owner, _number: {"id": "PROJECT"}
             common.project_fields = lambda _owner, _number: [
@@ -217,18 +274,80 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             ]
             common.run = lambda args, **_kwargs: calls.append(args)
 
-            common.update_issue_automation_state("owner/repo", 9, "Running", status="In Progress")
+            common.update_issue_automation_state(
+                "owner/repo",
+                9,
+                "Running",
+                status="In Progress",
+                projects_file="projects.txt",
+            )
         finally:
             common.project_targets = original_targets
             common.project_info = original_info
             common.project_fields = original_fields
             common.project_items = original_items
             common.run = original_run
+            os.environ.clear()
+            os.environ.update(original_env)
 
         self.assertEqual(len(calls), 2)
         self.assertIn("--single-select-option-id", calls[0])
         self.assertIn("RUNNING", calls[0])
         self.assertIn("INPROGRESS", calls[1])
+
+    def test_common_queues_issue_project_automation_state_without_github(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        original_targets = common.project_targets
+        original_info = common.project_info
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            common.project_targets = lambda _path=None: [("owner", 2)]
+            common.project_info = lambda _owner, _number: self.fail("queue mode should not inspect GitHub Projects")
+            os.environ["AGENT_PROJECT_STATE_UPDATES"] = "true"
+            os.environ["AGENT_PROJECT_STATE_UPDATE_MODE"] = "queue"
+            try:
+                common.update_issue_automation_state("owner/repo", 9, "Running", status="In Progress")
+                records = common.iter_project_sync_records()
+            finally:
+                common.jobs_dir = original_jobs_dir
+                common.project_targets = original_targets
+                common.project_info = original_info
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertEqual(len(records), 1)
+        record = records[0][2]
+        self.assertEqual(record["kind"], "project_field_update")
+        self.assertEqual(record["repo"], "owner/repo")
+        self.assertEqual(record["project_owner"], "owner")
+        self.assertEqual(record["project_number"], 2)
+        self.assertEqual(record["fields"], {"AutomationState": "Running", "Status": "In Progress"})
+
+    def test_common_label_cache_skips_repeated_label_create(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        original_run = common.run
+        calls: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, "already exists\n")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            common.run = fake_run
+            try:
+                common.ensure_labels_cached("owner/repo", {"agent:ready": "0E8A16", "agent:failed": "B60205"})
+                common.ensure_labels_cached("owner/repo", {"agent:ready": "0E8A16", "agent:failed": "B60205"})
+                cache = json.loads((Path(tmp) / "label-cache" / "owner__repo.json").read_text(encoding="utf-8"))
+            finally:
+                common.jobs_dir = original_jobs_dir
+                common.run = original_run
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(cache["labels"], {"agent:failed": "B60205", "agent:ready": "0E8A16"})
 
     def test_orchestrator_treats_approved_review_wait_as_recoverable(self) -> None:
         reasons = self.orchestrator.hard_non_execution_reasons(
@@ -446,6 +565,74 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             paths = self.worker.executable_paths(repo)
 
         self.assertEqual(paths, ["run.sh"])
+
+    def test_worker_policy_gate_record_captures_required_labels_and_diff_stats(self) -> None:
+        original_env = os.environ.copy()
+        os.environ.update(
+            {
+                "AGENT_ALLOW_WORKFLOWS_LABEL": "agent:allow-workflows",
+                "AGENT_ALLOW_INFRA_LABEL": "agent:allow-infra",
+            }
+        )
+        try:
+            requirements = self.worker.blocked_policy_requirements(
+                [".github/workflows/ci.yml", "infra/main.tf"],
+                labels=[],
+            )
+
+            with tempfile.TemporaryDirectory() as tmp:
+                job_dir = Path(tmp)
+                policy_errors = [f"{item['path']} requires {item['label']}" for item in requirements]
+                record = self.worker.write_policy_gate_record(
+                    job_dir=job_dir,
+                    issue=issue(number=7, title="[WS] Gate", body="Body"),
+                    repo="owner/repo",
+                    job_id="20260523T000000Z",
+                    base_sha="abc123",
+                    paths=[".github/workflows/ci.yml", "infra/main.tf"],
+                    statuses=["M", "A"],
+                    required_labels=[item["label"] for item in requirements],
+                    diff_stat=" .github/workflows/ci.yml | 4 ++\n infra/main.tf | 8 ++++++\n",
+                    diff_lines=42,
+                    policy_errors=policy_errors,
+                )
+                persisted = json.loads((job_dir / "policy-gate.json").read_text(encoding="utf-8"))
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+        self.assertEqual(record, persisted)
+        self.assertEqual(persisted["issue"]["number"], 7)
+        self.assertEqual(persisted["repo"], "owner/repo")
+        self.assertEqual(persisted["job_id"], "20260523T000000Z")
+        self.assertEqual(persisted["required_labels"], ["agent:allow-infra", "agent:allow-workflows"])
+        self.assertEqual(
+            persisted["changed_files"],
+            [
+                {"path": ".github/workflows/ci.yml", "status": "M"},
+                {"path": "infra/main.tf", "status": "A"},
+            ],
+        )
+        self.assertEqual(persisted["diff_stats"]["file_count"], 2)
+        self.assertEqual(persisted["diff_stats"]["line_count"], 42)
+        self.assertIn("rerun from scratch", persisted["next_action"])
+
+    def test_worker_policy_gate_comment_says_awaiting_human_approval(self) -> None:
+        body = self.worker.build_policy_gate_comment(
+            number=7,
+            job_id="20260523T000000Z",
+            base_sha="abc123",
+            required_labels=["agent:allow-infra"],
+            policy_errors=["infra/main.tf requires agent:allow-infra"],
+            status="A infra/main.tf\n",
+            job_dir=Path("/tmp/job"),
+        )
+
+        self.assertIn("awaiting human policy approval", body)
+        self.assertIn("`agent:allow-infra`", body)
+        self.assertIn("requeue the issue", body)
+        self.assertIn("will not auto-apply this saved diff", body)
+        self.assertIn("/tmp/job/policy-gate.json", body)
 
     def test_repo_env_overlay_copies_secret_files_into_worktree(self) -> None:
         original_env = os.environ.copy()
@@ -845,6 +1032,70 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertEqual(processed, 0)
         self.assertEqual(calls, [["gh", "issue", "edit", "9", "--repo", "owner/repo", "--remove-label", "agent:ready"]])
+
+    def test_process_once_writes_dispatch_preview_with_policy_blockers(self) -> None:
+        body_ready = "Open dependencies: none\nManual gates remaining: none\n"
+        calls: list[list[str]] = []
+        originals = {
+            "target_repos": self.orchestrator.target_repos,
+            "ensure_agent_labels": self.orchestrator.ensure_agent_labels,
+            "queue_candidate_issues": self.orchestrator.queue_candidate_issues,
+            "failed_issues": self.orchestrator.failed_issues,
+            "ready_issues": self.orchestrator.ready_issues,
+            "has_open_pr_for_issue": self.orchestrator.has_open_pr_for_issue,
+            "run_worker": self.orchestrator.run_worker,
+            "run": self.orchestrator.common.run,
+            "trusted_authors": self.orchestrator.common.trusted_authors,
+        }
+        self.orchestrator.target_repos = lambda _path: ["owner/repo"]
+        self.orchestrator.ensure_agent_labels = lambda _repo: None
+        self.orchestrator.queue_candidate_issues = lambda _repo, _label, _limit: []
+        self.orchestrator.failed_issues = lambda _repo, _limit: []
+        self.orchestrator.ready_issues = lambda _repo, _limit: [
+            issue(labels=["agent:ready", "points:1"], body=body_ready, number=9, title="Runnable"),
+            issue(labels=["agent:ready", "points:1"], body=body_ready + "Touches infra", number=10, title="Needs allow"),
+        ]
+        self.orchestrator.has_open_pr_for_issue = lambda _repo, _number: False
+        self.orchestrator.run_worker = lambda *_args, **_kwargs: 0
+        self.orchestrator.common.run = lambda args, **_kwargs: calls.append(args)
+        self.orchestrator.common.trusted_authors = lambda: {"trusted-user"}
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "triage.json"
+            args = types.SimpleNamespace(
+                triage_needs_human=False,
+                triage_summary=str(summary),
+                repos_file=None,
+                auto_queue_label=None,
+                auto_queue_max=1,
+                limit=20,
+                inspect_failed=False,
+                auto_queue_skip_open_pr=True,
+                publish=False,
+                dry_run=True,
+                max_items=3,
+                max_per_repo=1,
+                dispatch_deploy_candidates=False,
+                require_one_point=True,
+            )
+            try:
+                processed = self.orchestrator.process_once(args)
+            finally:
+                self.orchestrator.target_repos = originals["target_repos"]
+                self.orchestrator.ensure_agent_labels = originals["ensure_agent_labels"]
+                self.orchestrator.queue_candidate_issues = originals["queue_candidate_issues"]
+                self.orchestrator.failed_issues = originals["failed_issues"]
+                self.orchestrator.ready_issues = originals["ready_issues"]
+                self.orchestrator.has_open_pr_for_issue = originals["has_open_pr_for_issue"]
+                self.orchestrator.run_worker = originals["run_worker"]
+                self.orchestrator.common.run = originals["run"]
+                self.orchestrator.common.trusted_authors = originals["trusted_authors"]
+
+            payload = json.loads(summary.read_text(encoding="utf-8"))
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(payload["dispatch_preview"]["next_runnable"][0]["number"], 9)
+        self.assertEqual(payload["dispatch_preview"]["blocked"][0]["number"], 10)
+        self.assertIn("missing policy allow label", payload["dispatch_preview"]["blocked"][0]["reasons"][0])
 
     def test_common_git_identity_defaults_are_available(self) -> None:
         name, email = self.orchestrator.common.git_identity()

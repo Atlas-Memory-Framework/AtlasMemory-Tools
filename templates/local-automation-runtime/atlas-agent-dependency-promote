@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Promote dependency-gated Project issues when upstream work is complete."""
+"""Promote dependency-gated issues when upstream work is complete."""
 
 from __future__ import annotations
 
 import argparse
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -98,7 +99,9 @@ def target_repos(path: str | None) -> list[str]:
     return read_lines(path, "repos.txt")
 
 
-def project_targets(path: str | None) -> list[ProjectTarget]:
+def project_targets(path: str | None, *, use_default: bool = False) -> list[ProjectTarget]:
+    if not path and not use_default:
+        return []
     targets: list[ProjectTarget] = []
     for raw in read_lines(path, "projects.txt"):
         if "/" in raw:
@@ -353,7 +356,21 @@ def resolution_dict(resolution: Resolution) -> dict[str, Any]:
     }
 
 
-def is_non_execution(issue: dict[str, Any], item: dict[str, Any]) -> bool:
+def issue_item(issue: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "content": {
+            "type": "Issue",
+            "repository": "",
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "url": issue.get("url"),
+        },
+        "labels": sorted(common.label_names(issue)),
+    }
+
+
+def is_non_execution(issue: dict[str, Any], item: dict[str, Any] | None = None) -> bool:
+    item = item or {}
     labels = common.label_names(issue) | set(str(label) for label in item.get("labels") or [])
     title = str(issue.get("title") or item_value(item, "Title") or "")
     item_type = item_value(item, "ItemType").lower()
@@ -367,14 +384,16 @@ def is_non_execution(issue: dict[str, Any], item: dict[str, Any]) -> bool:
     )
 
 
-def has_required_metadata(issue: dict[str, Any], item: dict[str, Any]) -> list[str]:
+def has_required_metadata(issue: dict[str, Any], item: dict[str, Any] | None = None) -> list[str]:
+    item = item or {}
     reasons: list[str] = []
     point_blockers = common.issue_point_blockers(issue, require_one_point=True)
     if point_blockers:
         size = item_value(item, "Size")
         if size != "1":
             reasons.extend(point_blockers)
-    if item_value(item, "OnePRContract").lower() != "yes":
+    one_pr_contract = item_value(item, "OnePRContract")
+    if one_pr_contract and one_pr_contract.lower() not in {"yes", "n/a", "na"}:
         reasons.append("OnePRContract is not Yes")
     write_scope = item_value(item, "WriteScope") or "\n".join(common.markdown_section_items(str(issue.get("body") or ""), "Write Scope"))
     if not write_scope:
@@ -409,7 +428,9 @@ def changed_body_fields(body: str) -> dict[str, str]:
     return updates
 
 
-def project_updates_for(item: dict[str, Any]) -> dict[str, str]:
+def project_updates_for(item: dict[str, Any] | None) -> dict[str, str]:
+    if not item or not item.get("id"):
+        return {}
     updates: dict[str, str] = {}
     for field, target in READY_PROJECT_FIELDS.items():
         current = item_value(item, field)
@@ -424,14 +445,16 @@ def project_updates_for(item: dict[str, Any]) -> dict[str, str]:
 def classify_issue(
     repo: str,
     issue: dict[str, Any],
-    item: dict[str, Any],
-    project: ProjectTarget,
-    dependency_map: dict[str, list[Ref]],
+    dependency_map: dict[str, list[Ref]] | None = None,
+    item: dict[str, Any] | None = None,
+    project: ProjectTarget | None = None,
 ) -> PromotionDecision:
+    dependency_map = dependency_map or {}
+    item = item or issue_item(issue)
     body = str(issue.get("body") or "")
     labels = common.label_names(issue)
     number = int(issue["number"])
-    dependency_texts = field_texts(body_field_first(body, "Open dependencies"), item_value(item, "DependsOn"))
+    dependency_texts = field_texts(body_field_first(body, "Open dependencies"))
     manual_texts = field_texts(body_field_first(body, "Manual gates remaining"))
     if item_value(item, "BlockerType").lower() == "manual":
         manual_texts.extend(field_texts(item_value(item, "BlockerReason"), item_value(item, "Blocks"), item_value(item, "AutomationBlockers")))
@@ -497,18 +520,20 @@ def classify_issue(
         dependencies=[resolution_dict(resolution) for resolution in dep_resolutions],
         manual_gates=[resolution_dict(resolution) for resolution in manual_resolutions],
         item_id=str(item.get("id") or "") or None,
-        project_owner=project.owner,
-        project_number=project.number,
+        project_owner=project.owner if project else None,
+        project_number=project.number if project else None,
     )
 
 
 def ensure_labels(repo: str) -> None:
-    for label, color in (
-        ("status:ready", "D4C5F9"),
-        ("agent:approved-dispatch", "0E8A16"),
-        ("agent:ready", "0E8A16"),
-    ):
-        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+    common.ensure_labels_cached(
+        repo,
+        {
+            "status:ready": "D4C5F9",
+            "agent:approved-dispatch": "0E8A16",
+            "agent:ready": "0E8A16",
+        },
+    )
 
 
 def apply_project_field(config: FieldConfig, item_id: str, field_name: str, value: str) -> None:
@@ -539,7 +564,7 @@ def apply_project_field(config: FieldConfig, item_id: str, field_name: str, valu
     common.run(cmd, retries=3)
 
 
-def apply_decision(decision: PromotionDecision, issue: dict[str, Any], config: FieldConfig) -> None:
+def apply_decision(decision: PromotionDecision, issue: dict[str, Any], config: FieldConfig | None = None) -> None:
     ensure_labels(decision.repo)
     if decision.body_updates:
         body = body_with_ready_fields(str(issue.get("body") or ""))
@@ -554,7 +579,24 @@ def apply_decision(decision: PromotionDecision, issue: dict[str, Any], config: F
             ["gh", "issue", "edit", str(decision.number), "--repo", decision.repo, "--add-label", label],
             retries=3,
         )
-    if decision.item_id:
+    if decision.project_updates and common.project_state_update_mode() == "queue":
+        projects_file = None
+        if decision.project_owner and decision.project_number:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+                handle.write(f"{decision.project_owner}/{decision.project_number}\n")
+                projects_file = handle.name
+        try:
+            common.append_project_sync_update(
+                decision.repo,
+                decision.number,
+                decision.project_updates,
+                projects_file=projects_file,
+                source="dependency-promote",
+            )
+        finally:
+            if projects_file:
+                Path(projects_file).unlink(missing_ok=True)
+    elif decision.item_id and config is not None:
         for field_name, value in decision.project_updates.items():
             apply_project_field(config, decision.item_id, field_name, value)
 
@@ -580,12 +622,17 @@ def decision_record(decision: PromotionDecision) -> dict[str, Any]:
     }
 
 
+def project_mode_enabled(args: argparse.Namespace) -> bool:
+    return bool(args.projects_file or getattr(args, "project_mode", False))
+
+
 def scan(args: argparse.Namespace) -> tuple[list[PromotionDecision], dict[tuple[str, int], FieldConfig], dict[tuple[str, int], dict[tuple[str, int], dict[str, Any]]]]:
     repos = set(target_repos(args.repos_file))
     configs: dict[tuple[str, int], FieldConfig] = {}
     item_sets: dict[tuple[str, int], list[dict[str, Any]]] = {}
     all_items: list[dict[str, Any]] = []
-    for project in project_targets(args.projects_file):
+    projects = project_targets(args.projects_file, use_default=bool(getattr(args, "project_mode", False))) if project_mode_enabled(args) else []
+    for project in projects:
         key = (project.owner, project.number)
         configs[key] = project_config(project.owner, project.number)
         items = project_items(project.owner, project.number, args.limit)
@@ -595,7 +642,8 @@ def scan(args: argparse.Namespace) -> tuple[list[PromotionDecision], dict[tuple[
 
     decisions: list[PromotionDecision] = []
     issue_cache: dict[tuple[str, int], dict[str, Any]] = {}
-    for project in project_targets(args.projects_file):
+    seen: set[tuple[str, int]] = set()
+    for project in projects:
         for item in item_sets[(project.owner, project.number)]:
             key = item_repo_number(item)
             if not key or key[0] not in repos:
@@ -607,8 +655,24 @@ def scan(args: argparse.Namespace) -> tuple[list[PromotionDecision], dict[tuple[
             issue = issue_detail(repo, number) or content
             if str(issue.get("state") or "OPEN").upper() != "OPEN":
                 continue
+            seen.add((repo, number))
             issue_cache[(repo, number)] = issue
-            decisions.append(classify_issue(repo, issue, item, project, dependency_map))
+            decisions.append(classify_issue(repo, issue, dependency_map, item, project))
+    for repo in sorted(repos):
+        for issue in open_issues(repo, args.limit):
+            number = int(issue["number"])
+            if (repo, number) in seen:
+                continue
+            body = str(issue.get("body") or "")
+            labels = common.label_names(issue)
+            if not (
+                "agent:dependency-gated" in labels
+                or "status:blocked" in labels
+                or field_texts(body_field_first(body, "Open dependencies"))
+                or field_texts(body_field_first(body, "Manual gates remaining"))
+            ):
+                continue
+            decisions.append(classify_issue(repo, issue, dependency_map))
     items_by_project = {
         key: {item_repo_number(item): item for item in items if item_repo_number(item)}
         for key, items in item_sets.items()
@@ -634,7 +698,15 @@ def write_summary(path: str, decisions: list[PromotionDecision]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
-    parser.add_argument("--projects-file", default=str(common.RUNTIME_DIR / "projects.txt"))
+    parser.add_argument("--projects-file")
+    parser.add_argument(
+        "--project-mode",
+        action="store_true",
+        help=(
+            "Enable GitHub Project scanning using --projects-file or the default projects.txt. "
+            "Project DependsOn is advisory only; issue body fields remain the source of dispatch blockers."
+        ),
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -660,11 +732,13 @@ def main() -> None:
             flush=True,
         )
         if args.apply and decision.action == "promote":
-            key = (str(decision.project_owner), int(decision.project_number or 0))
             issue = issue_detail(decision.repo, decision.number)
             if not issue:
                 raise RuntimeError(f"Could not reload issue before applying: {decision.repo}#{decision.number}")
-            apply_decision(decision, issue, configs[key])
+            config = None
+            if decision.project_owner and decision.project_number:
+                config = configs[(str(decision.project_owner), int(decision.project_number))]
+            apply_decision(decision, issue, config)
 
 
 if __name__ == "__main__":

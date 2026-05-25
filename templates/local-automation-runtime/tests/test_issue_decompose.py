@@ -237,6 +237,52 @@ https://github.com/owner/repo/issues/1
         self.assertEqual(calls, ["status:ready", "status:draft"])
         self.assertEqual(payload["counts"], {"mark-one-point": 1, "decompose": 1})
 
+    def test_run_can_target_explicit_issue_refs_without_label_scan(self) -> None:
+        original_fetch = self.decompose.fetch_issue
+        original_candidates = self.decompose.candidate_issues_for_labels
+        self.decompose.fetch_issue = lambda repo, number: issue(body="Points: 3", number=number) if repo == "owner/repo" else None
+        self.decompose.candidate_issues_for_labels = lambda *_args, **_kwargs: self.fail("label scan should be bypassed")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repos = Path(tmp) / "repos.txt"
+                repos.write_text("owner/repo\n", encoding="utf-8")
+                args = self.decompose.build_parser().parse_args(
+                    ["--repos-file", str(repos), "--issue", "7", "--issue", "owner/repo#8", "--dry-run"]
+                )
+                payload = self.decompose.run(args)
+        finally:
+            self.decompose.fetch_issue = original_fetch
+            self.decompose.candidate_issues_for_labels = original_candidates
+
+        self.assertEqual([record["number"] for record in payload["records"]], [7, 8])
+        self.assertEqual(payload["counts"], {"decompose": 2})
+
+    def test_run_mixed_explicit_issue_refs_do_not_apply_unqualified_refs_to_extra_repos(self) -> None:
+        fetched: list[tuple[str, int]] = []
+        original_fetch = self.decompose.fetch_issue
+        original_candidates = self.decompose.candidate_issues_for_labels
+
+        def fetch(repo, number):
+            fetched.append((repo, number))
+            return issue(body="Points: 3", number=number)
+
+        self.decompose.fetch_issue = fetch
+        self.decompose.candidate_issues_for_labels = lambda *_args, **_kwargs: self.fail("label scan should be bypassed")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repos = Path(tmp) / "repos.txt"
+                repos.write_text("owner/repo\n", encoding="utf-8")
+                args = self.decompose.build_parser().parse_args(
+                    ["--repos-file", str(repos), "--issue", "7", "--issue", "other/repo#8", "--dry-run"]
+                )
+                payload = self.decompose.run(args)
+        finally:
+            self.decompose.fetch_issue = original_fetch
+            self.decompose.candidate_issues_for_labels = original_candidates
+
+        self.assertEqual(fetched, [("owner/repo", 7), ("other/repo", 8)])
+        self.assertEqual([(record["repo"], record["number"]) for record in payload["records"]], [("owner/repo", 7), ("other/repo", 8)])
+
 
 if __name__ == "__main__":
     unittest.main()

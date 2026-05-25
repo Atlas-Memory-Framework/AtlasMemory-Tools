@@ -1,0 +1,5 @@
+<!-- atlas-tools-generated: source=skills/local-plan-agent-runtime/agents/openai.yaml manifest=atlas-tools.v1 checksum=sha256:80e5a10abb176dc732a84ef55ad568d4335ce56e6df8969c6b5b37bb0c8846d0 -->
+<!-- atlas-tools-generated-end -->
+display_name: Local Plan Agent Runtime
+short_description: Orchestrate local agent planning runs.
+default_prompt: Run an orchestrated local planning review over the selected markdown plan: snapshot it, fan out independent agents, collect structured proposals, reconcile conflicts, and route accepted edits through $plan.

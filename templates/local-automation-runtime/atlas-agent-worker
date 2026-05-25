@@ -174,6 +174,10 @@ def executable_paths(repo_dir):
 
 
 def blocked_policy_violations(paths, labels):
+    return [f"{item['path']} requires {item['label']}" for item in blocked_policy_requirements(paths, labels)]
+
+
+def blocked_policy_requirements(paths, labels):
     workflow_patterns = [
         ".github/workflows/**",
         ".github/actions/**",
@@ -187,16 +191,86 @@ def blocked_policy_violations(paths, labels):
         "terraform/**",
     ]
 
-    violations = []
+    requirements = []
     allow_workflows = os.environ["AGENT_ALLOW_WORKFLOWS_LABEL"] in labels
     allow_infra = os.environ["AGENT_ALLOW_INFRA_LABEL"] in labels
 
     for path in paths:
         if not allow_workflows and any(fnmatch.fnmatch(path, pat) for pat in workflow_patterns):
-            violations.append(f"{path} requires {os.environ['AGENT_ALLOW_WORKFLOWS_LABEL']}")
+            requirements.append({"path": path, "label": os.environ["AGENT_ALLOW_WORKFLOWS_LABEL"]})
         if not allow_infra and any(fnmatch.fnmatch(path, pat) for pat in infra_patterns):
-            violations.append(f"{path} requires {os.environ['AGENT_ALLOW_INFRA_LABEL']}")
-    return violations
+            requirements.append({"path": path, "label": os.environ["AGENT_ALLOW_INFRA_LABEL"]})
+    return requirements
+
+
+def changed_file_records(paths, statuses):
+    records = []
+    for index, path in enumerate(paths):
+        records.append({"path": path, "status": statuses[index] if index < len(statuses) else ""})
+    return records
+
+
+def write_policy_gate_record(
+    job_dir,
+    issue,
+    repo,
+    job_id,
+    base_sha,
+    paths,
+    statuses,
+    required_labels,
+    diff_stat,
+    diff_lines,
+    policy_errors,
+):
+    record = {
+        "issue": {
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "url": issue.get("url"),
+            "labels": sorted(label_names(issue)),
+        },
+        "repo": repo,
+        "job_id": job_id,
+        "base_sha": base_sha,
+        "changed_files": changed_file_records(paths, statuses),
+        "required_labels": sorted(set(required_labels)),
+        "diff_stats": {
+            "stat": diff_stat,
+            "line_count": diff_lines,
+            "file_count": len(paths),
+        },
+        "policy_errors": policy_errors,
+        "next_action": "Add the required approval labels, then requeue the issue. The worker will rerun from scratch.",
+    }
+    (job_dir / "policy-gate.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return record
+
+
+def build_policy_gate_comment(number, job_id, base_sha, required_labels, policy_errors, status, job_dir):
+    return f"""Agent stopped for issue #{number}: awaiting human policy approval.
+
+Job: `{job_id}`
+Base: `{base_sha}`
+
+Required approval labels:
+{bullet_list(required_labels)}
+
+Policy errors:
+```text
+{chr(10).join(policy_errors)[:5000]}
+```
+
+Changed files:
+```text
+{status[:3000]}
+```
+
+Resumable record:
+`{job_dir}/policy-gate.json`
+
+Next action: add the required approval label(s), then requeue the issue. The worker will rerun from scratch and will not auto-apply this saved diff.
+"""
 
 
 def build_prompt(issue, repo):
@@ -494,7 +568,8 @@ def process_issue(issue, publish):
         max_lines = env_int("AGENT_MAX_DIFF_LINES", "1200")
         allow_large = os.environ["AGENT_ALLOW_LARGE_LABEL"] in labels
 
-        policy_errors = blocked_policy_violations(paths, labels)
+        policy_requirements = blocked_policy_requirements(paths, labels)
+        policy_errors = [f"{item['path']} requires {item['label']}" for item in policy_requirements]
         new_execs = executable_paths(worktree_dir)
         if new_execs:
             policy_errors.extend(f"{path} is a new executable file" for path in new_execs)
@@ -526,6 +601,39 @@ Codex log:
             return
 
         if policy_errors:
+            recoverable_policy_gate = bool(policy_requirements) and len(policy_errors) == len(policy_requirements)
+            if recoverable_policy_gate:
+                required_labels = sorted({item["label"] for item in policy_requirements})
+                write_policy_gate_record(
+                    job_dir,
+                    issue_full,
+                    repo,
+                    job_id,
+                    base_sha,
+                    paths,
+                    statuses,
+                    required_labels,
+                    diff_stat,
+                    diff_lines,
+                    policy_errors,
+                )
+                comment_issue(
+                    repo,
+                    number,
+                    job_dir,
+                    build_policy_gate_comment(
+                        number,
+                        job_id,
+                        base_sha,
+                        required_labels,
+                        policy_errors,
+                        status,
+                        job_dir,
+                    ),
+                )
+                clear_running_labels(repo, number, failed=True)
+                return
+
             comment_issue(
                 repo,
                 number,

@@ -1028,15 +1028,8 @@ def post_review_comment(decision: ReviewDecision) -> None:
     common.run(["gh", "pr", "comment", str(decision.number), "--repo", decision.repo, "--body", body], check=False)
 
 
-_LABELS_READY: set[str] = set()
-
-
 def ensure_review_labels(repo: str) -> None:
-    if repo in _LABELS_READY:
-        return
-    for label, color in {**REVIEW_LABELS, **REVIEW_AUX_LABELS}.items():
-        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
-    _LABELS_READY.add(repo)
+    common.ensure_labels_cached(repo, {**REVIEW_LABELS, **REVIEW_AUX_LABELS})
 
 
 def apply_decision(decision: ReviewDecision, *, comment: bool) -> None:

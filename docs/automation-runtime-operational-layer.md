@@ -79,15 +79,16 @@ Queue and worker paths now update Project state directly for `Queued`, `Running`
 The default unattended stage order is:
 
 ```text
-reconcile -> project-reconcile -> decompose -> project-reconcile ->
-workstream-review -> dependency-promote -> dispatch -> review ->
+reconcile -> decompose -> workstream-review -> dependency-promote -> dispatch -> review ->
 semantic-review -> review -> local-validate -> review -> semantic-review ->
 review -> deployed-validate -> review -> semantic-review -> review ->
-repair -> review -> semantic-review -> review -> finalize ->
-project-reconcile -> summary
+repair -> review -> semantic-review -> review -> finalize -> summary
 ```
 
 The loop is intentionally redundant around review and semantic-review gates so state changes from one stage are classified before later stages act.
+GitHub Project reconciliation is intentionally omitted from the hot path. Use `--project-reconcile-every N` for
+end-of-cycle checkpoint syncs, or add `project-reconcile` to `--stages` for a supervised inline sync when Project
+fields must be repaired immediately.
 
 ## Parallelism And Locks
 
@@ -115,6 +116,15 @@ Keep these defaults enabled for parallel lanes:
 - `AGENT_GITHUB_RATE_LIMIT_BACKOFF_SECONDS=900`
 
 When GitHub returns a rate-limit response, later runtime calls pause instead of hammering the token.
+Use `atlas-agent-throttle-status` to inspect the local throttle state and stale lock age without making a GitHub request.
+
+## Project Sync Queue
+
+The hot path keeps GitHub Project writes disabled by default with `AGENT_PROJECT_STATE_UPDATES=false`.
+For supervised direct updates, set `AGENT_PROJECT_STATE_UPDATES=true`. For eventual sync, set
+`AGENT_PROJECT_STATE_UPDATE_MODE=queue`; runtime stages append desired Project field updates under
+`jobs/project-sync/*.jsonl` instead of calling `gh project`. Use `atlas-agent-project-sync status` offline
+and `atlas-agent-project-sync flush` when the lane is idle or the GitHub token has recovered.
 
 ## Project Metadata Hydration
 

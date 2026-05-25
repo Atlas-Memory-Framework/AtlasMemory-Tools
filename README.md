@@ -119,7 +119,7 @@ The simplified skill hierarchy is:
 - `$plan`: the single user-facing planning command and canonical writer.
 - `local-plan-agent-runtime`: the internal agentic review mode used by `$plan` when parallel/local-file review is requested.
 - `plan-execution-readiness`: the critical review checklist/persona used standalone or inside the runtime.
-- `plan-stress-review`: compatibility alias only; prefer `plan-execution-readiness`.
+- `plan-stress-review`: legacy phrase/alias for `plan-execution-readiness`; do not add a separate workflow around it.
 
 Keep these systems repo-first. Source skills, scripts, references, and runtime protocol files belong under this repo's `skills/` tree. Local Codex copies are install artifacts used for execution. Update the repo-native source first, then install or sync into the local Codex skill directory.
 
@@ -128,7 +128,7 @@ Keep these systems repo-first. Source skills, scripts, references, and runtime p
 The runtime template now supports the full unattended loop:
 
 ```text
-reconcile -> project-reconcile -> decompose -> workstream-review -> dependency-promote ->
+reconcile -> decompose -> workstream-review -> dependency-promote ->
 dispatch -> review -> semantic-review -> local/deployed validation -> repair -> finalize -> summary
 ```
 
@@ -137,6 +137,7 @@ Current runtime behavior includes:
 - per-stage concurrency controls such as `--dispatch-max-per-repo`, `--semantic-review-concurrency`, `--local-validate-concurrency`, `--repair-concurrency`, and `--deployed-validate-concurrency`
 - repo/base/write-scope locks so disjoint one-point issues can run in parallel while overlapping scopes wait
 - shared GitHub CLI throttling under `jobs/github-api-throttle/` to avoid GraphQL and secondary rate limits
+- local-first unattended defaults, with GitHub Project sync moved to explicit `project-reconcile` stages or `--project-reconcile-every N` checkpoints
 - Project item scans controlled by `AGENT_PROJECT_ITEM_LIMIT`, default `500`
 - direct Project `AutomationState` updates for `Queued`, `Running`, `PR Open`, `Failed`, and `Done`
 - decomposition metadata inheritance so child issues retain plan key, parent epic, gates, risk, validation scope, and priority context

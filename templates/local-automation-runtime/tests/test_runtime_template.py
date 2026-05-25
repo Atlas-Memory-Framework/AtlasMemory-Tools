@@ -254,6 +254,8 @@ class RuntimeTemplateTests(unittest.TestCase):
             "atlas-agent-deployed-validate",
             "atlas-agent-worker",
             "atlas-agent-cycle-summary",
+            "atlas-agent-throttle-status",
+            "atlas-agent-project-sync",
             "atlas_agent_common.py",
         ):
             self.assertEqual(

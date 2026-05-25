@@ -324,10 +324,7 @@ def approve_review_before_dispatch(records: list[dict[str, Any]], *, comment: bo
         repo = record["repo"]
         number = str(record["number"])
         if repo not in ensured_repos:
-            common.run(
-                ["gh", "label", "create", APPROVED_DISPATCH_LABEL, "--repo", repo, "--color", "C5DEF5"],
-                check=False,
-            )
+            common.ensure_labels_cached(repo, {APPROVED_DISPATCH_LABEL: "C5DEF5"})
             ensured_repos.add(repo)
         common.run(["gh", "issue", "edit", number, "--repo", repo, "--add-label", APPROVED_DISPATCH_LABEL], retries=3)
         common.run(["gh", "issue", "edit", number, "--repo", repo, "--remove-label", "needs-human"], check=False)

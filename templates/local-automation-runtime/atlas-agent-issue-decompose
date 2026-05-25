@@ -70,6 +70,56 @@ def candidate_issues_for_labels(repo: str, labels: list[str], limit: int) -> lis
     return issues
 
 
+def issue_ref_parts(raw: str, default_repo: str | None) -> tuple[str, int]:
+    text = str(raw).strip()
+    url_match = re.match(r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/issues/(?P<number>\d+)(?:\b|$)", text)
+    if url_match:
+        return url_match.group("repo"), int(url_match.group("number"))
+    if text.startswith("#"):
+        text = text[1:]
+    ref_match = re.match(r"^(?:(?P<repo>[^#\s]+/[^#\s]+)#)?(?P<number>\d+)$", text)
+    if not ref_match:
+        raise ValueError(f"Issue reference must be NUMBER, #NUMBER, OWNER/REPO#NUMBER, or a GitHub issue URL: {raw}")
+    repo = ref_match.group("repo") or default_repo
+    if not repo:
+        raise ValueError(f"Unqualified issue reference requires exactly one repo in --repos-file: {raw}")
+    return repo, int(ref_match.group("number"))
+
+
+def fetch_issue(repo: str, number: int) -> dict[str, Any] | None:
+    return common.gh_json_or_none(
+        [
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,title,body,labels,author,url",
+        ],
+        retries=2,
+    )
+
+
+def candidate_issues_for_explicit_refs(
+    repo: str, refs: list[str], limit: int, default_repo: str | None
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for raw in refs:
+        if len(issues) >= limit:
+            break
+        ref_repo, number = issue_ref_parts(raw, default_repo)
+        if ref_repo != repo or number in seen:
+            continue
+        issue = fetch_issue(repo, number)
+        if not issue:
+            continue
+        seen.add(number)
+        issues.append(issue)
+    return issues
+
+
 def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
     labels = common.label_names(issue)
     point_values = common.issue_point_values(issue)
@@ -100,13 +150,15 @@ def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
 
 
 def ensure_labels(repo: str) -> None:
-    for label, color in (
-        (ONE_POINT_LABEL, "0E8A16"),
-        (DECOMPOSITION_REQUIRED_LABEL, "B60205"),
-        (DECOMPOSED_LABEL, "5319E7"),
-        ("points:1", "0E8A16"),
-    ):
-        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+    common.ensure_labels_cached(
+        repo,
+        {
+            ONE_POINT_LABEL: "0E8A16",
+            DECOMPOSITION_REQUIRED_LABEL: "B60205",
+            DECOMPOSED_LABEL: "5319E7",
+            "points:1": "0E8A16",
+        },
+    )
 
 
 def mark_one_point(repo: str, number: int) -> None:
@@ -698,10 +750,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     remaining = args.max
     candidate_labels = args.candidate_label or ["status:ready"]
-    for repo in target_repos(args.repos_file):
+    repos = target_repos(args.repos_file)
+    explicit_refs = list(getattr(args, "issue", None) or [])
+    explicit_repos: list[str] = []
+    if explicit_refs:
+        default_repo = repos[0] if len(repos) == 1 else None
+        for raw in explicit_refs:
+            ref_repo, _number = issue_ref_parts(raw, default_repo)
+            if ref_repo not in explicit_repos:
+                explicit_repos.append(ref_repo)
+    for repo in list(dict.fromkeys([*repos, *explicit_repos])):
         if remaining <= 0:
             break
-        for issue in candidate_issues_for_labels(repo, candidate_labels, remaining):
+        if explicit_refs:
+            issues = candidate_issues_for_explicit_refs(repo, explicit_refs, remaining, default_repo)
+        else:
+            issues = candidate_issues_for_labels(repo, candidate_labels, remaining)
+        for issue in issues:
             record = classify_issue(repo, issue)
             if args.apply:
                 record = apply_issue_action(repo, issue, record, args)
@@ -724,6 +789,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         help="Label to scan for decomposition candidates. Repeatable; defaults to status:ready.",
+    )
+    parser.add_argument(
+        "--issue",
+        action="append",
+        default=None,
+        help="Explicit issue reference to classify/decompose. Repeatable; bypasses label scanning.",
     )
     parser.add_argument("--max", type=int, default=10)
     parser.add_argument("--max-children", type=int, default=8)

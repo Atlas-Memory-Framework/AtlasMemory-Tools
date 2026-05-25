@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:bc1c9af19ff2fd10a1794c5b9d712380857b61b099ae8a35340cb5d8f278e830
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:f2cd1d6bd05c282bd67720f4f0e3c395d35f4c9625cbccf9236bf95a175b3860
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -869,6 +869,7 @@ tracking:
   - Dispatch: agent-ready
   - Points: 5
   - Target repo: service
+  - Depends on: none
   - Files in scope:
     - `src/app.ts`
   - Validation:
@@ -1831,6 +1832,7 @@ tracking:
   - Dispatch: agent-ready
   - Points: 1
   - Target repo: service
+  - Depends on: none
   - Files in scope:
     - `skills/plan-to-issues/scripts/plan_to_issues.py`
     - `skills/plan-to-issues/scripts/test_plan_to_issues.py`
@@ -1889,6 +1891,54 @@ tracking:
     assert "- Open dependencies: `LEAF-001; OWNER/service#42`" in payload["children"][1]["body"]
     assert "Decompose `points:2` issue into one-point child issues before local automation dispatch." in payload["children"][1]["body"]
     assert len(payload["children"]) == 2
+
+
+def test_leaf_issues_strategy_blocks_missing_dependency_metadata(tmp_path: Path) -> None:
+    plan_path = tmp_path / "automation_manifest_missing_dependencies.plan.md"
+    plan_path.write_text(
+        """---
+name: automation manifest missing dependency metadata
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Automation manifest missing dependency metadata
+
+## Implementation Plan
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: Missing dependency field
+  - Dispatch: agent-ready
+  - Points: 1
+  - Target repo: service
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+  - Validation:
+    - `pytest skills/plan-to-issues/scripts/test_plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "OWNER/service",
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    child = payload["children"][0]
+    assert child["dependencies"] == []
+    assert child["status_label"] == "status:blocked"
+    assert child["dispatch_recommendation"] == "tracking-only"
+    assert "- Open dependencies: `none`" in child["body"]
+    assert "Add explicit manifest dependency metadata" in child["body"]
+    assert child["automation_blockers"] == [
+        "Add explicit manifest dependency metadata (`Depends on: none` or concrete leaf ids/issue refs) before auto-dispatch."
+    ]
 
 
 def test_leaf_issues_strategy_blocks_opaque_and_unsupported_dependencies(tmp_path: Path) -> None:

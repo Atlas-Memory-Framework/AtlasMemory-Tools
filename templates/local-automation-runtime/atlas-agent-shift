@@ -71,13 +71,24 @@ def clean_passthrough_args(args: list[str]) -> list[str]:
     return [arg for arg in args if arg != "--"]
 
 
-def build_unattended_command(passthrough_args: list[str]) -> list[str]:
-    return [
+def build_unattended_command(
+    passthrough_args: list[str],
+    *,
+    project_reconcile_checkpoint: bool = False,
+) -> list[str]:
+    command = [
         str(common.RUNTIME_DIR / "atlas-agent-unattended"),
         "--cycles",
         "1",
         *clean_passthrough_args(passthrough_args),
     ]
+    if project_reconcile_checkpoint:
+        command.extend(["--project-reconcile-every", "1"])
+    return command
+
+
+def project_reconcile_checkpoint_enabled(args: argparse.Namespace, cycle: int) -> bool:
+    return bool(args.project_reconcile_every and cycle % args.project_reconcile_every == 0)
 
 
 def extract_chain_dir(log_file: Path) -> str | None:
@@ -222,6 +233,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--stop-before-deadline-seconds must be >= 0")
     if args.cycle_timeout_seconds is not None and args.cycle_timeout_seconds <= 0:
         raise SystemExit("--cycle-timeout-seconds must be > 0")
+    if args.project_reconcile_every < 0:
+        raise SystemExit("--project-reconcile-every must be >= 0")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -234,6 +247,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--deadline", help="Stop starting new cycles after this ISO-8601 deadline.")
     parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Pause between one-cycle unattended runs.")
     parser.add_argument("--cycle-timeout-seconds", type=float, help="Kill one unattended cycle after this many seconds.")
+    parser.add_argument(
+        "--project-reconcile-every",
+        type=int,
+        default=common.config_int("AGENT_PROJECT_RECONCILE_EVERY", 0),
+        help=(
+            "Run a GitHub Project reconcile checkpoint every N shift cycles. "
+            "Default 0 disables checkpoint Project sync."
+        ),
+    )
     parser.add_argument(
         "--stop-before-deadline-seconds",
         type=float,
@@ -266,6 +288,7 @@ def main() -> int:
     handoff_file = Path(args.handoff_file) if args.handoff_file else common.jobs_dir() / f"shift-{shift_id}-handoff.md"
     deadline = computed_deadline(args)
     command = build_unattended_command(passthrough_args)
+    last_command = command
     lock_path = common.jobs_dir() / "atlas-agent-shift.lock"
     lock = common.acquire_json_lock(
         lock_path,
@@ -294,7 +317,12 @@ def main() -> int:
                 stop_reason = "deadline reached before next cycle"
                 break
             print(f"=== shift {shift_id}: unattended cycle {cycle}/{args.cycles} ===", flush=True)
-            result = run_cycle(cycle, shift_id, command, timeout_seconds=args.cycle_timeout_seconds)
+            cycle_command = build_unattended_command(
+                passthrough_args,
+                project_reconcile_checkpoint=project_reconcile_checkpoint_enabled(args, cycle),
+            )
+            last_command = cycle_command
+            result = run_cycle(cycle, shift_id, cycle_command, timeout_seconds=args.cycle_timeout_seconds)
             cycles.append(result)
             if result.returncode != 0 and not args.continue_on_error:
                 state = "failed"
@@ -308,7 +336,7 @@ def main() -> int:
                 deadline=deadline,
                 cycle_limit=args.cycles,
                 cycles=cycles,
-                last_command=command,
+                last_command=cycle_command,
             )
             common.write_json(heartbeat_file, {"shift_id": shift_id, "state": state, "updated_at": iso_now()})
             if cycle < args.cycles and args.sleep_seconds:
@@ -324,7 +352,7 @@ def main() -> int:
             deadline=deadline,
             cycle_limit=args.cycles,
             cycles=cycles,
-            last_command=command,
+            last_command=last_command,
             stop_reason=stop_reason,
         )
         common.write_json(heartbeat_file, {"shift_id": shift_id, "state": state, "updated_at": iso_now()})
@@ -337,7 +365,13 @@ def main() -> int:
                 state=state,
                 stop_reason=stop_reason,
                 cycles=cycles,
-                next_command=[str(common.RUNTIME_DIR / "atlas-agent-shift"), "--cycles", str(args.cycles), *passthrough_args],
+                next_command=[
+                    str(common.RUNTIME_DIR / "atlas-agent-shift"),
+                    "--cycles",
+                    str(args.cycles),
+                    *(["--project-reconcile-every", str(args.project_reconcile_every)] if args.project_reconcile_every else []),
+                    *passthrough_args,
+                ],
             )
         print(f"Shift {state}. Status: {status_file}", flush=True)
         if not args.no_handoff:

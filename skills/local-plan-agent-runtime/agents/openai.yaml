@@ -1,0 +1,3 @@
+display_name: Local Plan Agent Runtime
+short_description: Orchestrate local agent planning runs.
+default_prompt: Run an orchestrated local planning review over the selected markdown plan: snapshot it, fan out independent agents, collect structured proposals, reconcile conflicts, and route accepted edits through $plan.

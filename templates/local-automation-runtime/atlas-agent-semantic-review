@@ -27,8 +27,7 @@ PR_FIELDS = (
 
 
 def ensure_labels(repo: str) -> None:
-    for label, color in LABELS.items():
-        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+    common.ensure_labels_cached(repo, LABELS)
 
 
 def linked_issue_number(pr: dict[str, Any]) -> int | None:
