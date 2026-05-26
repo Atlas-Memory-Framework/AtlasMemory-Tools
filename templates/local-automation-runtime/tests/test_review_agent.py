@@ -450,6 +450,28 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decision.label, "agent:superseded")
 
+    def test_review_ignores_superseded_terms_in_code_pr_body(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(body="Adds SemanticRelationship.SUPERSEDES and SemanticRelationship.SUPERSEDED support."),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+
+    def test_review_honors_explicit_superseded_body_marker(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(body="Superseded by #42"),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+        )
+
+        self.assertEqual(decision.label, "agent:superseded")
+
     def test_review_blocks_failed_checks_for_repair(self) -> None:
         decision = self.review.classify(
             "owner/repo",

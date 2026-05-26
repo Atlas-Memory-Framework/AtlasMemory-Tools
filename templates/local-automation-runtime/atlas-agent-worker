@@ -361,7 +361,8 @@ def extract_codex_final_response(codex_log, limit=5000):
     start = max(0, len(lines) - 80)
     heading = re.compile(r"^(Implemented|Changed|Summary|Tests|Verification|Fixed|Added|Updated)\b", re.I)
     for index in range(len(lines) - 1, -1, -1):
-        if heading.match(lines[index].strip()):
+        candidate = lines[index].strip().strip("*").strip()
+        if heading.match(candidate):
             start = index
             break
     return compact_lines("\n".join(lines[start:]), limit)
@@ -372,12 +373,12 @@ def extract_validation_section(final_response):
     start = None
     inline_value = ""
     for index, line in enumerate(lines):
-        inline_match = re.match(r"^\s*(?:#{1,6}\s*)?(Tests|Verification)\s*:\s*(\S.*)$", line, re.I)
+        inline_match = re.match(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?(Tests|Verification)(?:\*\*)?\s*:\s*(\S.*)$", line, re.I)
         if inline_match:
             start = index
             inline_value = inline_match.group(2).strip()
             break
-        if re.match(r"^\s*(?:#{1,6}\s*)?(Tests|Verification)\s*:?\s*$", line, re.I):
+        if re.match(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?(Tests|Verification)(?:\*\*)?\s*:?\s*$", line, re.I):
             start = index
             break
     if start is None:
@@ -385,7 +386,8 @@ def extract_validation_section(final_response):
     collected = [inline_value] if inline_value else []
     for line in lines[start + 1 :]:
         stripped = line.strip()
-        if re.match(r"^\s*(?:#{1,6}\s*)?[A-Z][A-Za-z ]+\s*:?\s*$", stripped):
+        heading_text = re.sub(r"^\s*#{1,6}\s*", "", stripped).strip().strip("*").strip()
+        if re.match(r"^[A-Z][A-Za-z ]+\s*:?\s*$", heading_text):
             break
         if not collected and not stripped:
             continue
@@ -624,6 +626,17 @@ def clear_running_labels(repo, number, done=False, failed=False, pr_open=False):
         common.update_issue_automation_state(repo, int(number), "Done", status="Done")
 
 
+def configure_worktree_identity(worktree_dir):
+    run(
+        f"git config user.name {shlex.quote(os.environ.get('AGENT_GIT_USER_NAME', 'Atlas Local Codex Agent'))}",
+        cwd=worktree_dir,
+    )
+    run(
+        f"git config user.email {shlex.quote(os.environ.get('AGENT_GIT_USER_EMAIL', 'atlas-local-codex-agent@users.noreply.github.com'))}",
+        cwd=worktree_dir,
+    )
+
+
 def process_issue(issue, publish):
     repo = require_env("AGENT_REPO")
     base_branch = os.environ.get("AGENT_BASE_BRANCH", "main")
@@ -675,6 +688,7 @@ def process_issue(issue, publish):
 
         base_sha = run("git rev-parse HEAD", cwd=worktree_dir).strip()
         run(f"git checkout -B {shlex.quote(branch)}", cwd=worktree_dir)
+        configure_worktree_identity(worktree_dir)
         overlay_paths = common.apply_repo_env_overlay(repo, worktree_dir)
         if overlay_paths:
             (job_dir / "repo-env-overlay.txt").write_text("\n".join(overlay_paths) + "\n", encoding="utf-8")

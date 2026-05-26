@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import argparse
+import json
 import sys
 import tempfile
 import unittest
@@ -75,6 +76,23 @@ class IssueDecomposeTests(unittest.TestCase):
         self.assertEqual(record["reason"], "conflicting point metadata")
         self.assertEqual(record["point_values"], [1, 5])
 
+    def test_classify_reports_dispatch_blockers_separately_from_decomposition(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(
+                body="""Points: 3
+Dispatch recommendation: `tracking-only`
+Open dependencies: `#12`
+Manual gates remaining: `none`
+""",
+                labels=["status:ready"],
+            ),
+        )
+
+        self.assertEqual(record["action"], "decompose")
+        self.assertEqual(record["dispatch_blockers"], ["open-dependencies", "dispatch-recommendation:tracking-only"])
+        self.assertFalse(record["dispatchable_after_decomposition"])
+
     def test_run_filters_label_scan_to_project_issues(self) -> None:
         originals = {
             "target_repos": self.decompose.target_repos,
@@ -110,6 +128,31 @@ class IssueDecomposeTests(unittest.TestCase):
                     setattr(self.decompose, name, value)
 
         self.assertEqual([record["number"] for record in result["records"]], [74])
+
+    def test_project_issue_keys_can_use_snapshot_without_project_api(self) -> None:
+        original_project_items = self.decompose.common.project_items
+        self.decompose.common.project_items = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("project API should not be called")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "project.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"content": {"repository": "owner/repo", "number": 74}},
+                            {"content": {"repository": "owner/other", "number": 2}},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            try:
+                keys = self.decompose.project_issue_keys(None, str(snapshot))
+            finally:
+                self.decompose.common.project_items = original_project_items
+
+        self.assertEqual(keys, {("owner/repo", 74), ("owner/other", 2)})
 
     def test_extract_json_object_handles_repeated_planner_json(self) -> None:
         raw = (
@@ -151,6 +194,21 @@ class IssueDecomposeTests(unittest.TestCase):
         body = self.decompose.child_body(parent, "owner/repo", child)
         self.assertIn("- Open dependencies: `#7; #9`", body)
         self.assertIn("- Dispatch recommendation: `dependency-gated`", body)
+
+    def test_planning_prompt_uses_blocked_child_status_for_gated_parent(self) -> None:
+        prompt = self.decompose.planning_prompt(
+            issue(
+                body="""Points: 3
+Open dependencies: `#7`
+Manual gates remaining: `none`
+""",
+                labels=["status:ready"],
+            ),
+            4,
+        )
+
+        self.assertIn("`status:blocked`", prompt)
+        self.assertIn("children must remain blocked until gates clear", prompt)
 
     def test_child_labels_inherit_parent_project_routing_metadata(self) -> None:
         parent = issue(
@@ -252,6 +310,38 @@ https://github.com/owner/repo/issues/1
         self.assertIn("## Named Gates\n- G-BACKEND-BUILD", body)
         self.assertIn("## Parent Epic\nhttps://github.com/owner/repo/issues/1", body)
         self.assertIn("Parent issue: #5", body)
+
+    def test_child_body_includes_scheduler_metadata(self) -> None:
+        parent = issue(
+            body="""## Automation Manifest Metadata
+- Highest tier: `T0`
+- Depends on: `CORE-001`
+- Blocks: `UI-002`
+- Parallel group: `pg-ui-contract`
+- Critical path rank: `3`
+- Merge group: `mg-contract`
+- Combine policy: `one-issue-one-pr`
+- Conflict class: `src-api`
+- Validation tier: `T0`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            labels=["points:5"],
+        )
+        child = {"body": "Scope: src/api/workflows.ts", "labels": ["points:1"]}
+
+        body = self.decompose.child_body(parent, "owner/repo", child)
+
+        self.assertIn("- Depends on: `CORE-001`", body)
+        self.assertIn("- Blocks: `UI-002`", body)
+        self.assertIn("- Parallel group: `pg-ui-contract`", body)
+        self.assertIn("- Critical path rank: `3`", body)
+        self.assertIn("- Merge group: `mg-contract`", body)
+        self.assertIn("- Combine policy: `one-issue-one-pr`", body)
+        self.assertIn("- Conflict class: `src-api`", body)
+        self.assertIn("- Validation tier: `T0`", body)
 
     def test_dry_run_writes_summary_without_mutations(self) -> None:
         original_candidates = self.decompose.candidate_issues

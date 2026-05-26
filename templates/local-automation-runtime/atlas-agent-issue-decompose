@@ -72,7 +72,16 @@ def candidate_issues_for_labels(repo: str, labels: list[str], limit: int) -> lis
     return issues
 
 
-def project_issue_keys(projects_file: str | None) -> set[tuple[str, int]] | None:
+def project_issue_keys(projects_file: str | None, project_snapshot: str | None = None) -> set[tuple[str, int]] | None:
+    if project_snapshot:
+        keys: set[tuple[str, int]] = set()
+        for item in common.project_snapshot_items(project_snapshot):
+            content = item.get("content") or {}
+            repo = content.get("repository")
+            number = content.get("number")
+            if repo and number:
+                keys.add((str(repo), int(number)))
+        return keys
     if not projects_file:
         return None
     keys: set[tuple[str, int]] = set()
@@ -154,6 +163,16 @@ def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
     labels = common.label_names(issue)
     point_values = common.issue_point_values(issue)
     points = issue_points(issue)
+    open_dependencies = parent_field_text(issue, "Open dependencies")
+    manual_gates = parent_field_text(issue, "Manual gates remaining")
+    dispatch_recommendation = parent_field_text(issue, "Dispatch recommendation")
+    dispatch_blockers: list[str] = []
+    if open_dependencies != "none":
+        dispatch_blockers.append("open-dependencies")
+    if manual_gates != "none":
+        dispatch_blockers.append("manual-gates")
+    if dispatch_recommendation in {"tracking-only", "dependency-gated", "review-before-dispatch"}:
+        dispatch_blockers.append(f"dispatch-recommendation:{dispatch_recommendation}")
     action = "needs-points"
     reason = ""
     if DECOMPOSED_LABEL in labels:
@@ -172,6 +191,8 @@ def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
         "url": issue.get("url"),
         "points": points,
         "action": action,
+        "dispatch_blockers": dispatch_blockers,
+        "dispatchable_after_decomposition": action in {"decompose", "mark-one-point"} and not dispatch_blockers,
     }
     if reason:
         record["reason"] = reason
@@ -229,14 +250,22 @@ def mark_decomposition_required(repo: str, number: int, candidate_labels: list[s
 
 
 def planning_prompt(issue: dict[str, Any], max_children: int) -> str:
+    blocked = child_blocked_by_parent(issue)
+    child_status = "status:blocked" if blocked else "status:ready"
+    dispatch_note = (
+        "The parent is dependency/manual-gated, so children must remain blocked until gates clear."
+        if blocked
+        else "The parent has no dependency/manual gate, so children may be ready if independently scoped."
+    )
     return f"""Use the planning skill to decompose this GitHub issue into one-point child issues.
 
 Rules:
 - Return JSON only.
 - Each child must be independently implementable in one PR.
-- Each child must include `points:1`, `status:ready`, and `{ONE_POINT_LABEL}` labels.
+- Each child must include `points:1`, `{child_status}`, and `{ONE_POINT_LABEL}` labels.
 - Keep each child surgically scoped with explicit acceptance criteria and validation.
 - If the issue is not decomposable from the available context, return an empty `children` list and explain why.
+- {dispatch_note}
 
 Schema:
 {{"children":[{{"title":"...","body":"...","labels":["points:1","status:ready","{ONE_POINT_LABEL}"]}}],"notes":["..."]}}
@@ -296,6 +325,11 @@ def parent_field_text(parent: dict[str, Any], field: str) -> str:
 
 
 def parent_field_or(parent: dict[str, Any], field: str, fallback: str) -> str:
+    value = parent_field_text(parent, field)
+    return fallback if value == "none" else value
+
+
+def parent_scheduler_field(parent: dict[str, Any], field: str, fallback: str = "") -> str:
     value = parent_field_text(parent, field)
     return fallback if value == "none" else value
 
@@ -394,6 +428,14 @@ def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
     risk_tags = parent_field_text(parent, "Risk tags")
     highest_tier = parent_field_text(parent, "Highest tier")
     priority = parent_field_text(parent, "Priority")
+    depends_on = parent_scheduler_field(parent, "Depends on", dependencies)
+    blocks = parent_scheduler_field(parent, "Blocks", "")
+    parallel_group = parent_scheduler_field(parent, "Parallel group", parent_field_text(parent, "Workstream"))
+    critical_path_rank = parent_scheduler_field(parent, "Critical path rank", "")
+    merge_group = parent_scheduler_field(parent, "Merge group", "")
+    combine_policy = parent_scheduler_field(parent, "Combine policy", "one-issue-one-pr")
+    conflict_class = parent_scheduler_field(parent, "Conflict class", "")
+    validation_tier = parent_scheduler_field(parent, "Validation tier", highest_tier)
     source_plan = parent_source_plan(parent)
     parent_epic = parent_section_text(parent, "Parent Epic")
     named_gates = parent_section_text(parent, "Named Gates")
@@ -422,6 +464,14 @@ def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
         *([f"- Risk tags: `{risk_tags}`"] if risk_tags != "none" else []),
         *([f"- Highest tier: `{highest_tier}`"] if highest_tier != "none" else []),
         *([f"- Priority: `{priority}`"] if priority != "none" else []),
+        f"- Depends on: `{depends_on or 'none'}`",
+        f"- Blocks: `{blocks or 'none'}`",
+        f"- Parallel group: `{parallel_group or 'none'}`",
+        f"- Critical path rank: `{critical_path_rank or 'none'}`",
+        f"- Merge group: `{merge_group or 'none'}`",
+        f"- Combine policy: `{combine_policy or 'one-issue-one-pr'}`",
+        f"- Conflict class: `{conflict_class or 'none'}`",
+        f"- Validation tier: `{validation_tier or 'none'}`",
         "- One PR contract: `yes`",
         "",
         "## Execution State",
@@ -801,7 +851,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     candidate_labels = args.candidate_label or ["status:ready"]
     repos = target_repos(args.repos_file)
     explicit_refs = list(getattr(args, "issue", None) or [])
-    allowed_issue_keys = None if explicit_refs else project_issue_keys(args.projects_file)
+    allowed_issue_keys = None if explicit_refs else project_issue_keys(args.projects_file, getattr(args, "project_snapshot", None))
     explicit_repos: list[str] = []
     if explicit_refs:
         default_repo = repos[0] if len(repos) == 1 else None
@@ -860,6 +910,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--projects-file",
         help="Optional project targets to add created child issues to, one per line as OWNER/NUMBER.",
+    )
+    parser.add_argument(
+        "--project-snapshot",
+        help="Optional saved gh project item-list JSON snapshot used to filter candidates without Project v2 API calls.",
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

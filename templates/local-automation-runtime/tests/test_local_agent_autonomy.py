@@ -71,6 +71,28 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         self.assertEqual(record["reasons"], ["review_before_dispatch", "needs_human_label"])
         self.assertTrue(self.triage.can_approve_review_before_dispatch(record))
 
+    def test_operator_env_overrides_runtime_state_paths(self) -> None:
+        original_jobs = os.environ.get("AGENT_JOBS")
+        original_logs = os.environ.get("AGENT_LOGS")
+        original_repos = os.environ.get("AGENT_REPOS")
+        os.environ["AGENT_JOBS"] = "/tmp/runtime-jobs-test"
+        os.environ["AGENT_LOGS"] = "/tmp/runtime-logs-test"
+        os.environ["AGENT_REPOS"] = "/tmp/runtime-repos-test"
+        try:
+            self.assertEqual(self.triage.common.jobs_dir(), Path("/tmp/runtime-jobs-test"))
+            self.assertEqual(self.triage.common.logs_dir(), Path("/tmp/runtime-logs-test"))
+            self.assertEqual(self.triage.common.repo_dir("owner/repo"), Path("/tmp/runtime-repos-test/owner__repo"))
+        finally:
+            for key, value in {
+                "AGENT_JOBS": original_jobs,
+                "AGENT_LOGS": original_logs,
+                "AGENT_REPOS": original_repos,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def test_triage_requeues_stale_wait_human_pause_without_hard_blockers(self) -> None:
         record = self.triage.classify_issue(
             "owner/repo",
@@ -182,6 +204,35 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(original_env)
+
+    def test_worker_configures_worktree_git_identity(self) -> None:
+        original_env = os.environ.copy()
+        original_run = self.worker.run
+        calls: list[tuple[str, Path]] = []
+        worktree = Path("/tmp/worktree")
+
+        def fake_run(command, cwd=None, **_kwargs):
+            calls.append((command, cwd))
+            return ""
+
+        try:
+            os.environ["AGENT_GIT_USER_NAME"] = "Custom Agent"
+            os.environ["AGENT_GIT_USER_EMAIL"] = "custom-agent@example.invalid"
+            self.worker.run = fake_run
+
+            self.worker.configure_worktree_identity(worktree)
+        finally:
+            self.worker.run = original_run
+            os.environ.clear()
+            os.environ.update(original_env)
+
+        self.assertEqual(
+            calls,
+            [
+                ("git config user.name 'Custom Agent'", worktree),
+                ("git config user.email custom-agent@example.invalid", worktree),
+            ],
+        )
 
     def test_worker_container_volumes_mount_git_cache_and_tools_readonly(self) -> None:
         original_env = os.environ.copy()
@@ -832,6 +883,30 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         self.assertEqual(gate["status"], "passed")
         self.assertTrue(gate["publish_allowed"])
         self.assertIn("Not run - documentation only change.", gate["validation"])
+
+    def test_worker_validation_gate_accepts_bold_tests_heading(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated route.\n\n**Tests**\n- `pytest tests/test_routes.py` passed: `4 passed`.",
+        )
+
+        self.assertEqual(gate["status"], "passed")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("pytest tests/test_routes.py", gate["validation"])
+
+    def test_worker_final_response_extracts_bold_tests_heading(self) -> None:
+        final_response = self.worker.extract_codex_final_response(
+            "noise\n"
+            "Summary:\n"
+            "- Updated route.\n\n"
+            "**Tests**\n"
+            "- `pytest tests/test_routes.py` passed: `4 passed`.\n"
+            "tokens used\n"
+            "123"
+        )
+
+        self.assertTrue(final_response.startswith("**Tests**"))
+        self.assertIn("pytest tests/test_routes.py", final_response)
 
     def test_worker_validation_gate_allows_body_waiver_for_missing_evidence(self) -> None:
         gate = self.worker.classify_validation_gate(

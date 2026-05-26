@@ -154,7 +154,16 @@ def no_checks_expected_for_paths(repo: str, labels: set[str], files: list[str], 
     return True, "no checks expected by path policy"
 
 
-def project_issue_keys(projects_file: str | None) -> set[tuple[str, int]] | None:
+def project_issue_keys(projects_file: str | None, project_snapshot: str | None = None) -> set[tuple[str, int]] | None:
+    if project_snapshot:
+        keys: set[tuple[str, int]] = set()
+        for item in common.project_snapshot_items(project_snapshot):
+            content = item.get("content") or {}
+            repo = content.get("repository")
+            number = content.get("number")
+            if repo and number:
+                keys.add((str(repo), int(number)))
+        return keys
     if not projects_file:
         return None
     keys: set[tuple[str, int]] = set()
@@ -757,21 +766,33 @@ def policy_decision_for(decision: ReviewDecision) -> str:
 
 
 def has_superseded_signal(pr: dict[str, Any], issue: dict[str, Any] | None) -> bool:
-    text = " ".join(
+    labels = common.label_names(pr) | (common.label_names(issue) if issue else set())
+    if "agent:superseded" in labels:
+        return True
+
+    titles = " ".join(
         [
             str(pr.get("title") or ""),
-            str(pr.get("body") or ""),
             str(issue.get("title") or "") if issue else "",
-            str(issue.get("body") or "") if issue else "",
         ]
     ).lower()
-    labels = common.label_names(pr) | (common.label_names(issue) if issue else set())
-    return bool(
-        "agent:superseded" in labels
-        or "superseded" in text
-        or "stale duplicate" in text
-        or "stale/superseded" in text
+    if any(marker in titles for marker in ("superseded", "stale duplicate", "stale/superseded")):
+        return True
+
+    explicit_markers = re.compile(
+        r"^(?:[-*]\s*)?(?:"
+        r"agent:superseded|"
+        r"stale duplicate\b|"
+        r"stale/superseded\b|"
+        r"superseded(?:\s+by\b|:|\s*$)|"
+        r"(?:automation\s+)?status:\s*superseded\b"
+        r")",
+        re.I,
     )
+    bodies = [str(pr.get("body") or "")]
+    if issue:
+        bodies.append(str(issue.get("body") or ""))
+    return any(explicit_markers.search(line.strip()) for body in bodies for line in body.splitlines())
 
 
 def overlapping_prs(
@@ -1085,7 +1106,7 @@ def apply_decision(decision: ReviewDecision, *, comment: bool) -> None:
 
 def scan(args: argparse.Namespace) -> list[ReviewDecision]:
     decisions: list[ReviewDecision] = []
-    allowed_issue_keys = project_issue_keys(getattr(args, "projects_file", None))
+    allowed_issue_keys = project_issue_keys(getattr(args, "projects_file", None), getattr(args, "project_snapshot", None))
     for repo in target_repos(args.repos_file):
         repo_decisions: list[ReviewDecision] = []
         summaries = [pr for pr in open_prs(repo, args.limit) if is_local_agent_pr(pr)]
@@ -1183,6 +1204,7 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--comment", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--projects-file", help="Only review PRs linked to issues in these GitHub Projects.")
+    parser.add_argument("--project-snapshot", help="Saved gh project item-list JSON used with --projects-file filtering.")
     parser.add_argument("--summary", help="Write structured review decisions to this JSON path.")
     args = parser.parse_args()
 

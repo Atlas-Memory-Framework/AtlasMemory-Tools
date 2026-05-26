@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:d7627b956ce7ce18252a470145120deddeabee2589c4c85811ac164cb4189f3c
+# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:fabc7abaf72fc60be55a4d8b877a5fedb151c01cd6326131f3a2322686b878f5
 # atlas-tools-generated-end
 name: plan-to-issues
 description: Sync or materialize GitHub issues and optional project tracking from the current plan artifact. Use when the user asks to create or update issues from a plan, wants a dry-run issue breakdown, or wants to project workstreams into a GitHub Project without replacing planning authority.
@@ -27,7 +27,9 @@ Use this skill for:
 - Default to dry-run. Only mutate GitHub when the user explicitly asks to apply or sync.
 - Do not close or delete issues unless the user explicitly asks for pruning.
 - Do not silently choose a repo or project. If unclear, ask.
-- GitHub Projects v2 is execution UI/signal only. Board membership or field state must not be treated as planning input.
+- GitHub Projects v2 is execution UI/signal only. Board membership or field state must not be treated as planning input or planning truth.
+- Before any apply/sync mutation, audit existing target issues and Project rows for duplicate or conflicting `SourceId` / plan-source mappings. A passing dry-run is not enough.
+- After any apply/sync mutation, run a post-sync audit and fail hard on missing `Priority`, duplicate `SourceId`, `agent-ready`/ready states on issues larger than one point, Project-only rows without an issue-body source, or Project `Size` that disagrees with issue body/labels.
 - If issues are added to multiple projects, distinguish the designated execution project from any advisory memberships and report that distinction back to the user.
 
 ## Inputs
@@ -87,15 +89,26 @@ Use the plan's existing identifiers wherever possible:
    - points
    - dependencies
    - blockers, merge points, named gates, repo-boundary hints, and deployed/manual validation requirements
-8. If the user explicitly approves apply mode, run:
+8. Before apply/sync, audit the target repo and execution Project for idempotency hazards:
+   - no duplicate `SourceId`, manifest leaf id, workstream id, or `trackingIssue` mapping across open issues or Project rows
+   - every existing issue that would be updated has an issue-body source marker matching the plan item
+   - no Project-only row is treated as proof that an issue exists or is safe to update
+   - any conflict stops the run until the mapping is corrected or the user explicitly chooses the source to trust
+9. If the user explicitly approves apply mode and the pre-apply audit passes, run:
    - `python skills/plan-to-issues/scripts/plan_to_issues.py --plan "<path>" --repo "<owner/repo>" --apply`
-9. For the local Codex automation lane, use the installed runtime, not the source template:
+10. Immediately after apply/sync, run `project-queue-audit` on the created/updated issues and execution Project. Treat these as hard failures, not warnings:
+   - missing `Priority`
+   - duplicate `SourceId`
+   - `agent-ready`, `agent:ready`, `IssueReady=true`, or `AutomationState=Ready` on issues with `Points` / `Size` greater than `1`
+   - Project-only rows with no matching GitHub issue body source marker
+   - Project `Size` that disagrees with issue body `Points` or `points:*` labels
+11. For the local Codex automation lane, use the installed runtime, not the source template:
    - `python scripts/runtime_control.py queue --plan "<path>" --repo "<owner/repo>" --max-queue 1 --yes`
    - Set `ATLAS_RUNTIME_DIR` or pass `--runtime-dir "<runtime-path>"` before the subcommand when the target runtime is not the default Atlas runtime.
    - Do not run `templates/local-automation-runtime/atlas-agent-*` directly; those files are source material and direct execution writes `jobs/`, `repos/`, and local config into the template tree.
    - Add `--publish` only when eligible queued issues should immediately run local workers and publish draft PRs.
-10. If a project is provided, add the created issues to the project using `gh` after issue creation.
-11. Report the created or updated issues back to the user.
+12. If a project is provided, add the created issues to the project using `gh` after issue creation, then rerun the post-sync audit for the affected rows.
+13. Report the created or updated issues back to the user, including pre-apply and post-sync audit results.
 
 ## Parser Notes
 
@@ -105,6 +118,7 @@ Use the plan's existing identifiers wherever possible:
 - For unattended local automation, prefer one-point manifest leaves (`Points: 1`). Larger leaves should stay tracking/manual until decomposed into one-point child issues.
 - Manifest leaf issues emit automation metadata in dry-run JSON and issue bodies: `dispatch_mode`, `write_scope`, `validation_commands`, dependencies, gates, repo/base-branch routing, and dispatch guardrails.
 - Generated executable issues must include runtime execution-state fields: `Open dependencies:` and `Manual gates remaining:`. These are the local automation dispatch contract; `## Dependencies` and Project fields are human/operator context.
+- Generated executable issues must include a stable body source marker such as `SourceId` / manifest leaf id / workstream id. Project fields may mirror it, but they must not be the only place it exists.
 - `Dispatch: agent-ready` with `Points` greater than `1` is not unattended-ready. Treat it as tracking/manual until decomposed, even if other metadata looks queueable.
 - Leaf dependencies may be GitHub issue refs or sibling manifest leaf ids. Opaque text, merge points, gate ids, decisions, assumptions, and risks are treated as guardrails and force `tracking-only` dispatch until converted into explicit issue refs or runnable leaf ids.
 - Cross-walk subsections whose titles contain `->` (for example `### WS2 -> WS3 -> WS4 Status Mapping`) are not treated as workstreams even if they match a loose `WS*` prefix.
@@ -121,6 +135,7 @@ Use the plan's existing identifiers wherever possible:
 
 - Use `gh` for GitHub mutations.
 - Never write to GitHub in ask-only situations.
+- Never dispatch from Project v2 fields alone. The reconciler must make issue body markers, labels, and Project fields agree before any `agent:ready` or `agent:approved-dispatch` state is applied.
 - Keep issue bodies concise and link back to the plan instead of copying the entire plan.
 - For unstable plans, create draft-like tracking only; avoid mass rewrites of titles or issue bodies.
 - If the plan and existing issues disagree on scope or ownership, stop and ask the user which source to trust.

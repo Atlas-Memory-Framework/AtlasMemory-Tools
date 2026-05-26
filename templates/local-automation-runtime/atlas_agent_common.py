@@ -366,6 +366,31 @@ def project_items(owner: str, project_number: int, limit: int | None = None) -> 
     return (payload or {}).get("items") or []
 
 
+def read_project_snapshot(path: pathlib.Path | str) -> dict[str, Any]:
+    snapshot_path = pathlib.Path(path)
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        return {"items": payload}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Project snapshot must be a JSON object or item list: {snapshot_path}")
+    return payload
+
+
+def project_snapshot_items(path: pathlib.Path | str, owner: str | None = None, project_number: int | None = None) -> list[dict[str, Any]]:
+    payload = read_project_snapshot(path)
+    project = payload.get("project") or {}
+    if owner and project.get("owner") and str(project.get("owner")) != owner:
+        return []
+    if project_number is not None and project.get("number") and int(project.get("number") or 0) != int(project_number):
+        return []
+    return list(payload.get("items") or [])
+
+
+def project_snapshot_fields(path: pathlib.Path | str) -> list[dict[str, Any]]:
+    payload = read_project_snapshot(path)
+    return list(payload.get("fields") or (payload.get("project") or {}).get("fields") or [])
+
+
 def issue_project_item(items: list[dict[str, Any]], repo: str, number: int) -> dict[str, Any] | None:
     for item in items:
         content = item.get("content") or {}
@@ -723,7 +748,7 @@ def default_base_branch(repo: str) -> str:
 
 def repo_dir(repo: str) -> pathlib.Path:
     cfg = read_config()
-    base = pathlib.Path(os.path.expandvars(cfg.get("AGENT_REPOS", str(RUNTIME_DIR / "repos"))))
+    base = pathlib.Path(os.path.expandvars(os.environ.get("AGENT_REPOS") or cfg.get("AGENT_REPOS", str(RUNTIME_DIR / "repos"))))
     return base / repo.replace("/", "__")
 
 
@@ -759,12 +784,12 @@ def apply_repo_env_overlay(repo: str, worktree: pathlib.Path) -> list[str]:
 
 def jobs_dir() -> pathlib.Path:
     cfg = read_config()
-    return pathlib.Path(os.path.expandvars(cfg.get("AGENT_JOBS", str(RUNTIME_DIR / "jobs"))))
+    return pathlib.Path(os.path.expandvars(os.environ.get("AGENT_JOBS") or cfg.get("AGENT_JOBS", str(RUNTIME_DIR / "jobs"))))
 
 
 def logs_dir() -> pathlib.Path:
     cfg = read_config()
-    return pathlib.Path(os.path.expandvars(cfg.get("AGENT_LOGS", str(RUNTIME_DIR / "logs"))))
+    return pathlib.Path(os.path.expandvars(os.environ.get("AGENT_LOGS") or cfg.get("AGENT_LOGS", str(RUNTIME_DIR / "logs"))))
 
 
 def local_worker() -> pathlib.Path:

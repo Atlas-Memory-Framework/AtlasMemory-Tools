@@ -100,6 +100,7 @@ REPO_SLUG_ALIASES = {
 }
 DEFAULT_BRANCH_HINTS: dict[str, str] = {}
 ALLOWED_POINT_VALUES = {1, 2, 3, 5, 8, 13}
+GITHUB_LABEL_NAME_MAX_LENGTH = 50
 
 # Frozen join-metadata transport (DR-017 / WS2). Escaped-byte budgets apply to full
 # `<!-- ... -->` segments after JSON serialization of the inner envelope object.
@@ -402,6 +403,7 @@ class IssueDraft:
     dependency_issue_refs: list[str] = field(default_factory=list)
     blocker_issue_refs: list[str] = field(default_factory=list)
     automation_blockers: list[str] = field(default_factory=list)
+    priority: str | None = None
 
 
 @dataclass
@@ -1148,11 +1150,6 @@ def build_registry_story_drafts(
             for g in (story.get("typed_gate_evidence") or [])
             if isinstance(g, dict)
         ) if story.get("typed_gate_evidence") else True
-        status_label = status_label_for_issue(
-            issue_ready=issue_ready,
-            azure_closeout_only=False,
-            explicit_blockers=[],
-        )
         validation_requirements: list[str] = []
         validation_scope = infer_validation_scope(
             title=title,
@@ -1183,6 +1180,24 @@ def build_registry_story_drafts(
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
         )
+        status_label = runtime_status_label(
+            issue_ready=issue_ready,
+            azure_closeout_only=False,
+            blockers=[],
+            automation_blockers=automation_blockers,
+            dispatch_recommendation=dispatch_recommendation,
+        )
+        priority = infer_priority_value(
+            explicit_priority=None,
+            title=title,
+            excerpt=title,
+            highest_tier=infer_highest_tier(gates),
+            risk_tags=risk_tags,
+            blockers=[],
+            automation_blockers=automation_blockers,
+            validation_scope=validation_scope,
+            gates=gates,
+        )
         labels = infer_labels(
             title,
             title,
@@ -1192,6 +1207,7 @@ def build_registry_story_drafts(
             highest_tier=infer_highest_tier(gates),
             status_label=status_label,
             points=points,
+            priority=priority,
         )
         meta_suffix, diag = build_registry_join_metadata_block(
             story,
@@ -1207,9 +1223,10 @@ def build_registry_story_drafts(
             "",
             "## Suggested Draft Metadata",
             f"- Suggested points: `{points}`",
-            f"- Issue ready: `{'true' if issue_ready else 'false'}`",
+            f"- Issue ready: `{'true' if status_label == 'status:ready' else 'false'}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
+            f"- Priority: `{priority}`",
         ]
         if risk_tags:
             body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
@@ -1267,6 +1284,7 @@ def build_registry_story_drafts(
                 validation_scope=validation_scope,
                 risk_tags=risk_tags,
                 automation_blockers=automation_blockers,
+                priority=priority,
                 legacy_issue_repo=story.get("_legacy_issue_repo"),
                 legacy_issue_number=story.get("_legacy_issue_number"),
             )
@@ -1951,6 +1969,55 @@ def point_dispatch_guardrails(points: int | None) -> list[str]:
     return []
 
 
+def requires_decomposition(points: int | None, automation_blockers: Iterable[str] = ()) -> bool:
+    return bool(points is not None and points > 1) or any(
+        blocker.startswith("Decompose `points:") for blocker in automation_blockers
+    )
+
+
+def non_decomposition_automation_blockers(
+    automation_blockers: Iterable[str],
+) -> list[str]:
+    return [
+        blocker
+        for blocker in automation_blockers
+        if not blocker.startswith("Decompose `points:")
+    ]
+
+
+def runtime_status_label(
+    *,
+    issue_ready: bool,
+    azure_closeout_only: bool,
+    blockers: list[str],
+    automation_blockers: list[str],
+    dispatch_recommendation: str,
+) -> str:
+    if azure_closeout_only or not issue_ready:
+        return "status:draft"
+    if blockers or non_decomposition_automation_blockers(automation_blockers):
+        return "status:blocked"
+    if dispatch_recommendation in {"auto-dispatch", "auto-dispatch-pilot"}:
+        return "status:ready"
+    return "status:draft"
+
+
+def effective_dispatch_mode(
+    requested_mode: str | None,
+    *,
+    issue_ready: bool,
+    blockers: list[str],
+    automation_blockers: list[str],
+) -> str | None:
+    if requested_mode is None:
+        return None
+    if requested_mode == "blocked":
+        return "tracking-only"
+    if not issue_ready or blockers or automation_blockers:
+        return "tracking-only"
+    return requested_mode
+
+
 def runtime_field_value(values: list[str]) -> str:
     cleaned = ordered_unique([value.replace("`", "").strip() for value in values if value.strip()])
     return "none" if not cleaned else "; ".join(cleaned)
@@ -2270,6 +2337,74 @@ def infer_dispatch_recommendation(
     if any(tag in risk_tags for tag in ("infra", "ci-cd", "migration", "auth", "tier:t4+")):
         return "review-before-dispatch"
     return "auto-dispatch"
+
+
+def normalize_priority_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    token = value.replace("`", "").strip().lower()
+    if not token or token in {"none", "n/a", "na"}:
+        return None
+    aliases = {
+        "critical": "P0",
+        "blocker": "P0",
+        "highest": "P0",
+        "high": "P1",
+        "urgent": "P1",
+        "medium": "P2",
+        "normal": "P2",
+        "default": "P2",
+        "low": "P3",
+    }
+    if token in aliases:
+        return aliases[token]
+    match = re.search(r"\bp([0-3])\b", token, flags=re.IGNORECASE)
+    if match:
+        return f"P{match.group(1)}"
+    numeric = parse_int_value(token)
+    if numeric is not None and 0 <= numeric <= 3:
+        return f"P{numeric}"
+    return None
+
+
+def explicit_priority_from_lines(lines: list[str]) -> str | None:
+    for value in reversed(collect_field_values(lines, "priority", "issue priority")):
+        priority = normalize_priority_value(value)
+        if priority:
+            return priority
+    return None
+
+
+def infer_priority_value(
+    *,
+    explicit_priority: str | None,
+    title: str,
+    excerpt: str,
+    highest_tier: str | None,
+    risk_tags: list[str],
+    blockers: list[str],
+    automation_blockers: list[str],
+    validation_scope: str,
+    gates: list[str],
+) -> str:
+    if explicit_priority:
+        return explicit_priority
+    joined = "\n".join([title, excerpt, *gates]).lower()
+    if any(token in joined for token in ("critical", "blocker", "sev0", "severity 0")):
+        return "P1"
+    tier_level = highest_tier_level(highest_tier)
+    high_risk_tags = {"auth", "secrets", "migration", "cross-repo", "needs-deployed-validation"}
+    if tier_level is not None and tier_level <= 1:
+        return "P1"
+    if tier_level is not None and tier_level <= 3:
+        return "P2"
+    if tier_level is not None:
+        return "P3"
+    if set(risk_tags) & high_risk_tags or validation_scope == "deployed":
+        return "P1"
+    if blockers or automation_blockers:
+        return "P2"
+    return "P2"
 
 
 def parse_named_items(pattern: re.Pattern[str], text: str) -> dict[str, str]:
@@ -3047,6 +3182,7 @@ def infer_labels(
     highest_tier: str | None = None,
     status_label: str = "status:draft",
     points: int | None = None,
+    priority: str | None = None,
 ) -> list[str]:
     workstream_token = (workstream_label_scope or plan_key).strip()
     labels = [f"type:{kind}", f"workstream:{workstream_label_value(workstream_token)}"]
@@ -3075,6 +3211,10 @@ def infer_labels(
         labels.append(f"tier:{highest_tier.lower()}")
     if points in ALLOWED_POINT_VALUES:
         labels.append(f"points:{points}")
+    if requires_decomposition(points):
+        labels.extend(["agent:decomposed", "decomposition:required"])
+    if priority:
+        labels.append(f"priority:{priority.lower()}")
     return sorted(set(labels))
 
 
@@ -3296,11 +3436,6 @@ def build_children(
             collect_field_values(lines, "azure closeout only", "deployed closeout only", "provider closeout only"),
             default=False,
         )
-        status_label = status_label_for_issue(
-            issue_ready=issue_ready,
-            azure_closeout_only=azure_closeout_only,
-            explicit_blockers=explicit_blockers,
-        )
         highest_tier = normalize_highest_tier(collect_field_values(lines, "highest tier")) or infer_highest_tier(gates)
         if highest_tier is None and source_id.endswith("E"):
             highest_tier = "T5"
@@ -3327,17 +3462,6 @@ def build_children(
             ),
             default_base_branch=plan_base_branch or frontmatter.get("tracking.baseBranch"),
         )
-        risk_tags = infer_risk_tags(
-            title=title,
-            excerpt=excerpt,
-            repo_targets=repo_targets,
-            highest_tier=highest_tier,
-            blockers=blockers,
-            azure_closeout_only=azure_closeout_only,
-            issue_ready=issue_ready,
-            validation_scope=validation_scope,
-            gates=gates,
-        )
         automation_blockers = ordered_unique(
             [
                 *(
@@ -3352,6 +3476,17 @@ def build_children(
         )
         points = points_for_issue(title, repo_targets, gates, lines)
         automation_blockers = ordered_unique([*automation_blockers, *point_dispatch_guardrails(points)])
+        risk_tags = infer_risk_tags(
+            title=title,
+            excerpt=excerpt,
+            repo_targets=repo_targets,
+            highest_tier=highest_tier,
+            blockers=[*blockers, *automation_blockers],
+            azure_closeout_only=azure_closeout_only,
+            issue_ready=issue_ready,
+            validation_scope=validation_scope,
+            gates=gates,
+        )
         dispatch_recommendation = infer_dispatch_recommendation(
             issue_ready=issue_ready,
             azure_closeout_only=azure_closeout_only,
@@ -3361,6 +3496,24 @@ def build_children(
             risk_tags=risk_tags,
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
+        )
+        status_label = runtime_status_label(
+            issue_ready=issue_ready,
+            azure_closeout_only=azure_closeout_only,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            dispatch_recommendation=dispatch_recommendation,
+        )
+        priority = infer_priority_value(
+            explicit_priority=explicit_priority_from_lines(lines),
+            title=title,
+            excerpt=excerpt,
+            highest_tier=highest_tier,
+            risk_tags=risk_tags,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            validation_scope=validation_scope,
+            gates=gates,
         )
         labels = infer_labels(
             title,
@@ -3373,6 +3526,7 @@ def build_children(
             highest_tier=highest_tier,
             status_label=status_label,
             points=points,
+            priority=priority,
         )
         body_lines = [
             "## Source Plan",
@@ -3381,9 +3535,10 @@ def build_children(
             "",
             "## Suggested Draft Metadata",
             f"- Suggested points: `{points}`",
-            f"- Issue ready: `{'true' if issue_ready else 'false'}`",
+            f"- Issue ready: `{'true' if status_label == 'status:ready' else 'false'}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
+            f"- Priority: `{priority}`",
         ]
         if risk_tags:
             body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
@@ -3491,6 +3646,7 @@ def build_children(
                 dependency_issue_refs=dependency_analysis.issue_refs,
                 blocker_issue_refs=blocker_analysis.issue_refs,
                 automation_blockers=automation_blockers,
+                priority=priority,
             )
         )
     return drafts
@@ -3629,14 +3785,6 @@ def build_manifest_leaf_children(
                 ),
             ]
         )
-        if requested_dispatch_mode == "blocked" or blockers or automation_blockers:
-            status_label = "status:blocked"
-        else:
-            status_label = status_label_for_issue(
-                issue_ready=issue_ready,
-                azure_closeout_only=False,
-                explicit_blockers=[],
-            )
         automation_blockers = ordered_unique([*automation_blockers, *point_dispatch_guardrails(points)])
         risk_tags = infer_risk_tags(
             title=title,
@@ -3663,6 +3811,30 @@ def build_manifest_leaf_children(
             requested_dispatch_mode,
             dispatch_recommendation,
         )
+        runtime_dispatch_mode = effective_dispatch_mode(
+            requested_dispatch_mode,
+            issue_ready=issue_ready,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+        )
+        status_label = runtime_status_label(
+            issue_ready=issue_ready,
+            azure_closeout_only=False,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            dispatch_recommendation=dispatch_recommendation,
+        )
+        priority = infer_priority_value(
+            explicit_priority=explicit_priority_from_lines(lines),
+            title=title,
+            excerpt=excerpt,
+            highest_tier=highest_tier,
+            risk_tags=risk_tags,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            validation_scope=validation_scope,
+            gates=gates,
+        )
         labels = infer_labels(
             title,
             excerpt,
@@ -3674,6 +3846,7 @@ def build_manifest_leaf_children(
             highest_tier=highest_tier,
             status_label=status_label,
             points=points,
+            priority=priority,
         )
         body_lines = [
             "## Source Plan",
@@ -3682,10 +3855,12 @@ def build_manifest_leaf_children(
             "",
             "## Automation Manifest Metadata",
             f"- Suggested points: `{points}`",
-            f"- Issue ready: `{'true' if issue_ready else 'false'}`",
-            f"- Dispatch mode: `{requested_dispatch_mode}`",
+            f"- Issue ready: `{'true' if status_label == 'status:ready' else 'false'}`",
+            f"- Requested dispatch mode: `{requested_dispatch_mode}`",
+            f"- Dispatch mode: `{runtime_dispatch_mode}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
+            f"- Priority: `{priority}`",
         ]
         if parallel_group:
             body_lines.append(f"- Parallel group: `{parallel_group}`")
@@ -3790,7 +3965,7 @@ def build_manifest_leaf_children(
                 issue_ready=issue_ready,
                 status_label=status_label,
                 dispatch_recommendation=dispatch_recommendation,
-                dispatch_mode=requested_dispatch_mode,
+                dispatch_mode=runtime_dispatch_mode,
                 write_scope=write_scope,
                 validation_commands=validation_commands,
                 validation_scope=validation_scope,
@@ -3804,6 +3979,7 @@ def build_manifest_leaf_children(
                 dependency_issue_refs=dependency_analysis.issue_refs,
                 blocker_issue_refs=blocker_analysis.issue_refs,
                 automation_blockers=automation_blockers,
+                priority=priority,
             )
         )
     return drafts
@@ -4001,7 +4177,9 @@ def first_label_value(labels: list[str], prefix: str) -> str | None:
 
 
 def issue_ready_project_value(draft: IssueDraft) -> str:
-    if draft.status_label == "status:blocked" or draft.blockers or draft.automation_blockers:
+    if requires_decomposition(draft.suggested_points, draft.automation_blockers):
+        return "Draft"
+    if draft.status_label == "status:blocked" or draft.blockers or non_decomposition_automation_blockers(draft.automation_blockers):
         return "Blocked"
     if draft.issue_ready and draft.status_label == "status:ready":
         return "Ready"
@@ -4021,6 +4199,8 @@ def item_type_project_value(draft: IssueDraft) -> str:
 def automation_state_project_value(draft: IssueDraft) -> str:
     if draft.kind == "epic":
         return "Planned"
+    if requires_decomposition(draft.suggested_points, draft.automation_blockers):
+        return "Manual"
     if draft.status_label == "status:blocked" or draft.blockers or draft.automation_blockers:
         return "Blocked"
     if draft.status_label == "status:draft":
@@ -4099,7 +4279,7 @@ def project_field_values(
         "DispatchRecommendation": draft.dispatch_recommendation,
         "IssueReady": issue_ready_project_value(draft),
         "AutomationState": automation_state_project_value(draft),
-        "Priority": (first_label_value(labels, "priority:") or "").upper() or None,
+        "Priority": draft.priority or (first_label_value(labels, "priority:") or "").upper() or None,
         "Size": draft.suggested_points,
         "Risk": risk_project_value(draft),
         "RiskTags": ", ".join(draft.risk_tags),
@@ -4419,7 +4599,21 @@ def plan_path_matches(issue_plan_path: str | None, relative_plan_path: str) -> b
 
 
 def managed_label(name: str) -> bool:
-    return name.startswith(("type:", "workstream:", "repo:", "tier:", "status:", "area:", "owner:"))
+    return name.startswith(
+        (
+            "type:",
+            "workstream:",
+            "repo:",
+            "tier:",
+            "status:",
+            "area:",
+            "owner:",
+            "points:",
+            "priority:",
+            "agent:",
+            "decomposition:",
+        )
+    )
 
 
 def merged_labels_for_sync(existing_labels: list[str], desired_labels: list[str]) -> list[str]:
@@ -4432,6 +4626,73 @@ def desired_body_for_sync(draft: IssueDraft, *, parent_epic_url: str | None = No
         return draft.body
     stripped = draft.body.rstrip()
     return "\n".join([stripped, "", "## Parent Epic", parent_epic_url])
+
+
+def projection_preflight_report(drafts: list[IssueDraft]) -> dict[str, object]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    source_ids: dict[str, list[IssueDraft]] = {}
+    invalid_labels: list[dict[str, object]] = []
+    for draft in drafts:
+        source_ids.setdefault(draft.source_id, []).append(draft)
+        for label in draft.labels:
+            if not label or len(label) > GITHUB_LABEL_NAME_MAX_LENGTH:
+                invalid_labels.append(
+                    {
+                        "source_id": draft.source_id,
+                        "label": label,
+                        "length": len(label),
+                        "max_length": GITHUB_LABEL_NAME_MAX_LENGTH,
+                    }
+                )
+        if draft.status_label == "status:ready" and draft.dispatch_recommendation not in {
+            "auto-dispatch",
+            "auto-dispatch-pilot",
+        }:
+            errors.append(
+                f"{draft.source_id}: status:ready requires an auto-dispatch recommendation."
+            )
+        if draft.dispatch_mode == "agent-ready" and (
+            draft.kind == "epic"
+            or requires_decomposition(draft.suggested_points, draft.automation_blockers)
+        ):
+            errors.append(
+                f"{draft.source_id}: agent-ready is unsafe for parent or multi-point rows."
+            )
+        if draft.priority is None and draft.kind != "epic":
+            warnings.append(
+                f"{draft.source_id}: priority is missing; dry-run should infer or require it before apply."
+            )
+    duplicate_source_ids = [
+        {
+            "source_id": source_id,
+            "titles": [draft.title for draft in matches],
+        }
+        for source_id, matches in sorted(source_ids.items())
+        if len(matches) > 1
+    ]
+    for duplicate in duplicate_source_ids:
+        errors.append(
+            f"Duplicate SourceId {duplicate['source_id']!r} appears in the projected rows."
+        )
+    for label in invalid_labels:
+        errors.append(
+            f"{label['source_id']}: label {label['label']!r} is {label['length']} characters; "
+            f"GitHub label names must be <= {label['max_length']} characters."
+        )
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "duplicate_source_ids": duplicate_source_ids,
+        "invalid_labels": invalid_labels,
+    }
+
+
+def enforce_projection_preflight(preflight: dict[str, object]) -> None:
+    errors = preflight.get("errors")
+    if isinstance(errors, list) and errors:
+        raise SystemExit("Projection preflight failed:\n- " + "\n- ".join(str(e) for e in errors))
 
 
 def find_matching_issue(
@@ -4487,8 +4748,16 @@ def find_matching_issue(
         raise SystemExit(
             f"legacy registry match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
         )
+    if len(exact_title_matches) > 1:
+        raise SystemExit(
+            f"title match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+        )
     if exact_title_matches:
         return exact_title_matches[0]
+    if len(metadata_matches) > 1:
+        raise SystemExit(
+            f"SourceId/source metadata match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+        )
     if metadata_matches:
         return metadata_matches[0]
     return None
@@ -4990,14 +5259,13 @@ def run_registry_projection(
 
     epic = build_registry_epic(portfolio, issue_repo=repo, plan_execution=plan_execution)
     stability = build_registry_stability_summary(repo=repo, children=children, plan_execution=plan_execution)
-    epic_status_label = (
-        "status:ready" if stability["plan_status"] == "ready-for-apply" else "status:draft"
-    )
+    epic_status_label = "status:draft"
     epic.labels = sorted(
         set([label for label in epic.labels if not label.startswith("status:")] + [epic_status_label])
     )
     epic.status_label = epic_status_label
     relative_registry_anchor = display_plan_path(registry_root)
+    preflight = projection_preflight_report([epic, *children])
 
     payload: dict[str, object] = {
         "plan": relative_registry_anchor,
@@ -5033,6 +5301,7 @@ def run_registry_projection(
         },
         "plan_execution": plan_execution,
         "stability": stability,
+        "preflight": preflight,
     }
 
     plan_path_anchor = registry_root
@@ -5060,6 +5329,8 @@ def run_registry_projection(
         json.dump(payload, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
+
+    enforce_projection_preflight(preflight)
 
     if args.sync_apply:
         issues_by_repo = load_existing_issues_map(
@@ -5255,13 +5526,12 @@ def main() -> int:
         explicit_blockers=global_blockers,
         plan_execution=plan_execution,
     )
-    epic_status_label = (
-        "status:ready" if stability["plan_status"] == "ready-for-apply" else "status:draft"
-    )
+    epic_status_label = "status:draft"
     epic.labels = sorted(
         set([label for label in epic.labels if not label.startswith("status:")] + [epic_status_label])
     )
     epic.status_label = epic_status_label
+    preflight = projection_preflight_report([epic, *children])
 
     payload = {
         "plan": plan_display_path,
@@ -5277,6 +5547,7 @@ def main() -> int:
         },
         "plan_execution": plan_execution,
         "stability": stability,
+        "preflight": preflight,
     }
 
     if args.dry_run:
@@ -5302,6 +5573,8 @@ def main() -> int:
         json.dump(payload, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
+
+    enforce_projection_preflight(preflight)
 
     if args.sync_apply:
         issues_by_repo = load_existing_issues_map(

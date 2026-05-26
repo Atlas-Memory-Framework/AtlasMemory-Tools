@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan-to-issues/reference.md manifest=atlas-tools.v1 checksum=sha256:157c46f2fc2ef54e597ab8ba47cb6a3bb4b6a44bd2fc1513f6be2ef9e3ce2a8f -->
+<!-- atlas-tools-generated: source=skills/plan-to-issues/reference.md manifest=atlas-tools.v1 checksum=sha256:98c30a63d11a13391fd119fa1b996036e02fdb78b5fde2a2663543e7e550e5d0 -->
 <!-- atlas-tools-generated-end -->
 # Plan-To-Issues Reference
 
@@ -98,6 +98,7 @@ Story body should include:
 Manifest leaf issue body should include:
 
 - source `## Automation Issue Manifest` / `### Leaf issues` leaf id
+- stable `SourceId` / plan-source marker in the issue body
 - dispatch mode and dispatch recommendation
 - scheduler metadata when present: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, validation tier
 - execution repo and base branch
@@ -127,7 +128,16 @@ Always run dry-run first. Preview:
 - inferred workstream ids
 - unresolved gaps that need user input
 
-Only apply after the user explicitly confirms.
+Before apply, audit existing target issues and Project rows for duplicate or conflicting source mappings.
+Fail the apply if any `SourceId`, manifest leaf id, workstream id, or `trackingIssue` mapping points to
+more than one open issue/row, or if a Project row has no matching issue-body source marker.
+
+Only apply after the user explicitly confirms and the duplicate/source-id audit passes.
+
+After apply, run `project-queue-audit` against the created or updated issues and execution Project.
+Treat these as hard failures: missing `Priority`, duplicate `SourceId`, ready/agent-ready state on an
+issue larger than one point, Project-only rows, and Project `Size` mismatches against body `Points` or
+`points:*` labels.
 
 ## Automation Issue Manifest
 

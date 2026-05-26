@@ -223,6 +223,24 @@ class FinalizerReviewGateTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "merge")
 
+    def test_no_checks_path_policy_can_override_required_checks_for_allowed_paths(self) -> None:
+        decision = self.finalize.decide(
+            "OWNER/REPO",
+            green_pr(
+                labels=["reviewed", "agent:no-checks-expected"],
+                statusCheckRollup=[],
+                files=[{"path": "docs/readme.md"}],
+            ),
+            allow_no_checks=False,
+            merge=True,
+            required_check_names=["ci"],
+            required_checks_file=str(ROOT / "config" / "required-checks.example.json"),
+            check_dependencies=False,
+            require_review_label="reviewed",
+        )
+
+        self.assertEqual(decision.action, "merge")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -150,6 +150,16 @@ class UnattendedLoopTests(unittest.TestCase):
         assert command.summary_file is not None
         self.assertEqual(command.summary_file.name, "decompose-cycle-1.json")
 
+    def test_build_decompose_command_forwards_project_snapshot(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            ["--dry-run", "--repos-file", "repos.txt", "--project-snapshot", "/tmp/project.json"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_decompose_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("--project-snapshot", command.args)
+        self.assertEqual(command.args[command.args.index("--project-snapshot") + 1], "/tmp/project.json")
+
     def test_dry_run_dispatch_command_cannot_launch_mutating_orchestrator_path(self) -> None:
         args = self.loop.build_parser().parse_args(
             ["--dry-run", "--publish", "--repos-file", "repos.txt", "--auto-queue-label", "status:ready"]
@@ -237,6 +247,14 @@ class UnattendedLoopTests(unittest.TestCase):
         limit_index = command.args.index("--limit") + 1
         self.assertEqual(command.args[limit_index], "750")
 
+    def test_project_reconcile_command_forwards_project_snapshot(self) -> None:
+        args = self.loop.build_parser().parse_args(["--project-snapshot", "/tmp/project.json"])
+        with tempfile.TemporaryDirectory() as tmp:
+            command = self.loop.build_project_reconcile_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("--project-snapshot", command.args)
+        self.assertEqual(command.args[command.args.index("--project-snapshot") + 1], "/tmp/project.json")
+
     def test_project_reconcile_checkpoint_uses_distinct_artifacts(self) -> None:
         args = self.loop.build_parser().parse_args(["--project-item-limit", "750"])
         with tempfile.TemporaryDirectory() as tmp:
@@ -321,6 +339,19 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("--projects-file", finalize.args)
         self.assertEqual(review.args[review.args.index("--projects-file") + 1], "projects.txt")
         self.assertEqual(finalize.args[finalize.args.index("--projects-file") + 1], "projects.txt")
+
+    def test_review_and_finalize_forward_project_snapshot(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            ["--dry-run", "--repos-file", "repos.txt", "--project-snapshot", "/tmp/project.json"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            review = self.loop.build_review_command(args, Path(tmp), "chain", 1, "pass")
+            finalize = self.loop.build_finalize_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("--project-snapshot", review.args)
+        self.assertIn("--project-snapshot", finalize.args)
+        self.assertEqual(review.args[review.args.index("--project-snapshot") + 1], "/tmp/project.json")
+        self.assertEqual(finalize.args[finalize.args.index("--project-snapshot") + 1], "/tmp/project.json")
 
     def test_decompose_command_creates_subissues_by_default_when_apply_is_used(self) -> None:
         args = self.loop.build_parser().parse_args(["--apply", "--repos-file", "repos.txt"])

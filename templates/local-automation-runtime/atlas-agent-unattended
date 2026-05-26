@@ -241,6 +241,8 @@ def build_project_reconcile_command(
         cmd.extend(["--projects-file", str(args.projects_file)])
     else:
         cmd.extend(["--owner", str(args.project_owner), "--project-number", str(args.project_number)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     if project_reconcile_apply_enabled(args):
         cmd.append("--apply")
     return CommandSpec(
@@ -297,6 +299,8 @@ def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id:
         projects_file = chain_dir / f"decompose-projects-cycle-{cycle}.txt"
         projects_file.write_text(f"{args.project_owner}/{args.project_number}\n", encoding="utf-8")
         cmd.extend(["--projects-file", str(projects_file)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     return CommandSpec(
         name="decompose",
         args=cmd,
@@ -392,6 +396,8 @@ def build_review_command(args: argparse.Namespace, chain_dir: Path, chain_id: st
         cmd.append("--allow-no-checks")
     if args.projects_file:
         cmd.extend(["--projects-file", str(args.projects_file)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     return CommandSpec(
         name=f"review-{pass_name}",
         args=cmd,
@@ -421,6 +427,8 @@ def build_finalize_command(args: argparse.Namespace, chain_dir: Path, chain_id: 
         cmd.append("--allow-no-checks")
     if args.projects_file:
         cmd.extend(["--projects-file", str(args.projects_file)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     if args.require_review_approval:
         cmd.extend(["--require-review-label", args.review_label])
     return CommandSpec(
@@ -1357,6 +1365,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project-owner", default=cfg.get("AGENT_PROJECT_OWNER", "OWNER"))
     parser.add_argument("--project-number", type=int, default=int(cfg.get("AGENT_PROJECT_NUMBER", "1")))
     parser.add_argument("--projects-file", help="Optional file of GitHub Project targets for project-reconcile.")
+    parser.add_argument(
+        "--project-snapshot",
+        help="Optional saved gh project item-list JSON snapshot to reuse for project-reconcile and decompose reads.",
+    )
     parser.add_argument(
         "--project-item-limit",
         type=int,

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -123,6 +125,35 @@ class ProjectReconcileTests(unittest.TestCase):
         self.assertIn("src/types/blindConfigTree.types.ts", metadata["WriteScope"])
         self.assertIn("npm run build", metadata["Validation"])
 
+    def test_desired_metadata_uses_explicit_completion_evidence(self) -> None:
+        row = item(
+            28,
+            content={
+                **item(28)["content"],
+                "body": item(28)["content"]["body"]
+                + """
+
+## Completion Evidence
+- Completion mode: `merge-group`
+- Completed by:
+  - https://github.com/owner/repo/pull/35
+  - https://github.com/owner/repo/pull/36
+""",
+            },
+        )
+
+        metadata = self.reconcile.desired_metadata(row, "CLOSED", None)
+
+        self.assertEqual(metadata["Status"], "Done")
+        self.assertEqual(metadata["AutomationState"], "Done")
+        self.assertEqual(metadata["ReviewVerdict"], "Merged")
+        self.assertEqual(metadata["CompletionMode"], "merge-group")
+        self.assertEqual(
+            metadata["CompletedBy"],
+            "https://github.com/owner/repo/pull/35\nhttps://github.com/owner/repo/pull/36",
+        )
+        self.assertEqual(metadata["ActivePR"], metadata["CompletedBy"])
+
     def test_issue_states_for_items_batches_by_repo(self) -> None:
         calls = []
         original_gh_json_or_none = self.reconcile.common.gh_json_or_none
@@ -190,6 +221,96 @@ class ProjectReconcileTests(unittest.TestCase):
             self.assertEqual(updates["Status"], "Done")
         finally:
             self.reconcile.latest_pr_for_issue = original_latest_pr
+
+    def test_metadata_decision_skips_pr_search_when_completion_evidence_exists(self) -> None:
+        original_latest_pr = self.reconcile.latest_pr_for_issue
+        self.reconcile.latest_pr_for_issue = lambda _repo, _number: (_ for _ in ()).throw(
+            AssertionError("PR search should not run")
+        )
+        fields = {
+            name: {"id": name, "options": []}
+            for name in ("Status", "AutomationState", "ReviewVerdict", "ActivePR", "CompletionMode", "CompletedBy")
+        }
+        fields["Status"]["options"] = [{"name": "Done", "id": "done"}]
+        fields["AutomationState"]["options"] = [{"name": "Done", "id": "done"}]
+        try:
+            config = self.reconcile.ProjectConfig(
+                project_id="PROJECT",
+                status_field_id="Status",
+                status_options={"Done": "done"},
+                execution_state_field_id=None,
+                execution_state_options={},
+                fields=fields,
+            )
+            row = item(
+                28,
+                content={
+                    **item(28)["content"],
+                    "body": item(28)["content"]["body"]
+                    + "\n- Completion mode: `direct-pr`\n- Completed by: https://github.com/owner/repo/pull/35\n",
+                },
+                activePR="",
+            )
+            decisions = self.reconcile.metadata_decisions(
+                "owner",
+                1,
+                config,
+                [row],
+                {("owner/repo", 28): "CLOSED"},
+                hydrate_metadata=True,
+            )
+        finally:
+            self.reconcile.latest_pr_for_issue = original_latest_pr
+
+        self.assertEqual(decisions[0].field_updates["ActivePR"], "https://github.com/owner/repo/pull/35")
+        self.assertEqual(decisions[0].field_updates["CompletionMode"], "direct-pr")
+        self.assertEqual(decisions[0].field_updates["CompletedBy"], "https://github.com/owner/repo/pull/35")
+
+    def test_metadata_decision_can_disable_pr_lookup_for_snapshot_dry_runs(self) -> None:
+        original_latest_pr = self.reconcile.latest_pr_for_issue
+        self.reconcile.latest_pr_for_issue = lambda _repo, _number: (_ for _ in ()).throw(
+            AssertionError("PR search should not run")
+        )
+        fields = {
+            name: {"id": name, "options": []}
+            for name in ("Status", "AutomationState", "ReviewVerdict", "ActivePR")
+        }
+        fields["Status"]["options"] = [{"name": "Done", "id": "done"}]
+        fields["AutomationState"]["options"] = [{"name": "Done", "id": "done"}]
+        try:
+            config = self.reconcile.ProjectConfig(
+                project_id="PROJECT",
+                status_field_id="Status",
+                status_options={"Done": "done"},
+                execution_state_field_id=None,
+                execution_state_options={},
+                fields=fields,
+            )
+            decisions = self.reconcile.metadata_decisions(
+                "owner",
+                1,
+                config,
+                [item(28)],
+                {("owner/repo", 28): "CLOSED"},
+                hydrate_metadata=True,
+                pr_lookup=False,
+            )
+        finally:
+            self.reconcile.latest_pr_for_issue = original_latest_pr
+
+        self.assertEqual(decisions[0].field_updates["Status"], "Done")
+        self.assertNotIn("ActivePR", decisions[0].field_updates)
+
+    def test_snapshot_project_config_infers_fields_for_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "project.json"
+            snapshot.write_text(json.dumps({"items": [item(28)]}), encoding="utf-8")
+
+            config = self.reconcile.snapshot_project_config(str(snapshot), "owner", 1, allow_inferred=True)
+
+        self.assertIn("Status", config.fields)
+        self.assertIn("AutomationState", config.fields)
+        self.assertEqual(config.status_options["Done"], "Done")
 
     def test_metadata_decision_inherits_parent_project_fields_for_decomposed_children(self) -> None:
         original_latest_pr = self.reconcile.latest_pr_for_issue
@@ -437,6 +558,208 @@ https://github.com/owner/repo/issues/5
             self.assertEqual(decisions[0].field_updates["Priority"], "P1")
         finally:
             self.reconcile.latest_pr_for_issue = original_latest_pr
+
+    def test_audit_blocks_duplicate_source_ids_and_excludes_size(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={
+                "AutomationState": {"id": "AutomationState", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "IssueReady": {"id": "IssueReady", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "Size": {"id": "Size", "options": []},
+            },
+        )
+
+        decisions = self.reconcile.project_audit_decisions(
+            "owner",
+            1,
+            config,
+            [item(28, size="1"), item(29, size="1")],
+        )
+
+        duplicate_decisions = [decision for decision in decisions if decision.action == "audit-duplicate-source-id"]
+        self.assertEqual(len(duplicate_decisions), 2)
+        self.assertTrue(all("Duplicate Project SourceId" in decision.reasons[0] for decision in duplicate_decisions))
+        self.assertTrue(all(decision.field_updates["AutomationState"] == "Blocked" for decision in duplicate_decisions))
+        self.assertTrue(all(decision.field_updates["IssueReady"] == "Blocked" for decision in duplicate_decisions))
+        self.assertTrue(all(decision.field_updates["Size"] == "" for decision in duplicate_decisions))
+
+    def test_audit_flags_project_only_rows_and_clears_size(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={
+                "AutomationState": {"id": "AutomationState", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "IssueReady": {"id": "IssueReady", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "Size": {"id": "Size", "options": []},
+            },
+        )
+        row = {"id": "MIRROR", "title": "[WS1-CONFIG-TYPES-05] Mirror", "sourceId": "WS1-CONFIG-TYPES-05", "size": "5"}
+
+        decisions = self.reconcile.project_audit_decisions("owner", 1, config, [row])
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].repo, "project-only")
+        self.assertIn("not backed by an issue parser record", decisions[0].reasons[0])
+        self.assertEqual(decisions[0].field_updates["Size"], "")
+
+    def test_metadata_clears_parent_size_when_children_exist(self) -> None:
+        original_latest_pr = self.reconcile.latest_pr_for_issue
+        self.reconcile.latest_pr_for_issue = lambda _repo, _number: None
+        fields = {"Size": {"id": "Size", "options": []}}
+        try:
+            config = self.reconcile.ProjectConfig(
+                project_id="PROJECT",
+                status_field_id="Status",
+                status_options={},
+                execution_state_field_id=None,
+                execution_state_options={},
+                fields=fields,
+            )
+            parent = item(5, size="5", labels=["points:5", "type:story"])
+
+            decisions = self.reconcile.metadata_decisions(
+                "owner",
+                1,
+                config,
+                [parent],
+                {("owner/repo", 5): "OPEN"},
+                hydrate_metadata=True,
+                parent_keys_with_children={("owner/repo", 5)},
+            )
+
+            self.assertEqual(decisions[0].field_updates["Size"], "")
+        finally:
+            self.reconcile.latest_pr_for_issue = original_latest_pr
+
+    def test_ready_audit_blocks_missing_priority_without_conservative_inference(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={
+                "AutomationState": {"id": "AutomationState", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "IssueReady": {"id": "IssueReady", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "Priority": {"id": "Priority", "options": [{"name": "P1", "id": "p1"}]},
+            },
+        )
+        row = item(50, labels=["status:ready", "type:story", "points:1", "agent:one-point"])
+
+        decisions = self.reconcile.project_audit_decisions("owner", 1, config, [row])
+
+        self.assertEqual(len(decisions), 1)
+        self.assertIn("missing Priority metadata", "\n".join(decisions[0].reasons))
+        self.assertEqual(decisions[0].field_updates["AutomationState"], "Blocked")
+
+    def test_ready_audit_blocks_project_body_dependency_drift(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={
+                "AutomationState": {"id": "AutomationState", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "IssueReady": {"id": "IssueReady", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "Priority": {"id": "Priority", "options": [{"name": "P1", "id": "p1"}]},
+            },
+        )
+        row = item(52, dependsOn="#41")
+
+        decisions = self.reconcile.project_audit_decisions("owner", 1, config, [row])
+
+        self.assertEqual(len(decisions), 1)
+        self.assertIn("Project DependsOn disagrees with body Open dependencies", "\n".join(decisions[0].reasons))
+        self.assertEqual(decisions[0].field_updates["AutomationState"], "Blocked")
+
+    def test_ready_audit_blocks_unsafe_multi_point_ready_state(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={
+                "AutomationState": {"id": "AutomationState", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "IssueReady": {"id": "IssueReady", "options": [{"name": "Blocked", "id": "blocked"}]},
+                "Size": {"id": "Size", "options": []},
+                "Priority": {"id": "Priority", "options": [{"name": "P1", "id": "p1"}]},
+            },
+        )
+        row = item(
+            51,
+            content={
+                "type": "Issue",
+                "repository": "owner/repo",
+                "number": 51,
+                "title": "[WS1-CONFIG-TYPES-05] Add factory export metadata type fields",
+                "url": "https://github.com/owner/repo/issues/51",
+                "body": """## Automation Manifest Metadata
+- Issue ready: `true`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            },
+            labels=["status:ready", "tier:t0", "type:story", "points:3"],
+        )
+
+        decisions = self.reconcile.project_audit_decisions("owner", 1, config, [row])
+
+        self.assertEqual(len(decisions), 1)
+        self.assertIn("multi-point Size 3", "\n".join(decisions[0].reasons))
+        self.assertEqual(decisions[0].field_updates["AutomationState"], "Blocked")
+        self.assertEqual(decisions[0].field_updates["Size"], "")
+
+    def test_apply_project_field_skips_stale_project_items(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={"Status": {"id": "FIELD", "options": [{"name": "Done", "id": "done"}]}},
+        )
+        original_run = self.reconcile.common.run
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            raise RuntimeError("GraphQL: Could not resolve to a node with the global id of 'PVTI_stale'")
+
+        self.reconcile.common.run = fake_run
+        try:
+            self.reconcile.apply_project_field(config, "PVTI_stale", "Status", "Done")
+        finally:
+            self.reconcile.common.run = original_run
+
+        self.assertEqual(len(calls), 1)
+
+    def test_apply_project_field_reraises_other_runtime_errors(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={"Status": {"id": "FIELD", "options": [{"name": "Done", "id": "done"}]}},
+        )
+        original_run = self.reconcile.common.run
+        self.reconcile.common.run = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("rate limit"))
+        try:
+            with self.assertRaisesRegex(RuntimeError, "rate limit"):
+                self.reconcile.apply_project_field(config, "ITEM", "Status", "Done")
+        finally:
+            self.reconcile.common.run = original_run
 
 
 if __name__ == "__main__":

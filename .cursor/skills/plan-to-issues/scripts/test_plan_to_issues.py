@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:8e6cd7fba3f305e35a77cda7de57d8825c3073619e570d506220f16e25bcd8ef
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:aad6850dc9996b380143217e46a09c6e4d7e88b4375671cd0bc6fdf95302d5a2
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -889,13 +889,167 @@ tracking:
     )
 
     child = payload["children"][0]
-    assert child["dispatch_mode"] == "agent-ready"
+    assert child["dispatch_mode"] == "tracking-only"
     assert child["dispatch_recommendation"] == "tracking-only"
+    assert child["status_label"] == "status:draft"
     assert child["suggested_points"] == 5
     assert child["automation_blockers"] == [
         "Decompose `points:5` issue into one-point child issues before local automation dispatch."
     ]
+    assert "agent:decomposed" in child["labels"]
+    assert "decomposition:required" in child["labels"]
+    assert "priority:p2" in child["labels"]
+    assert "Issue ready: `false`" in child["body"]
+    assert "Requested dispatch mode: `agent-ready`" in child["body"]
+    assert "Dispatch mode: `tracking-only`" in child["body"]
     assert "## Dispatch Guardrails" in child["body"]
+    assert payload["preflight"]["ok"] is True
+
+
+def test_dry_run_preflight_reports_duplicate_source_ids(tmp_path: Path) -> None:
+    plan_path = tmp_path / "duplicate_source_ids.plan.md"
+    plan_path.write_text(
+        """---
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Duplicate source ids
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: First projected row
+  - Dispatch: manual-review
+  - Points: 1
+  - Target repo: service
+  - Depends on: none
+- LEAF-001: Second projected row
+  - Dispatch: manual-review
+  - Points: 1
+  - Target repo: service
+  - Depends on: none
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "OWNER/service",
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    assert payload["preflight"]["ok"] is False
+    assert payload["preflight"]["duplicate_source_ids"] == [
+        {
+            "source_id": "LEAF-001",
+            "titles": ["[LEAF-001] First projected row", "[LEAF-001] Second projected row"],
+        }
+    ]
+    assert any("Duplicate SourceId" in error for error in payload["preflight"]["errors"])
+
+
+def test_projection_preflight_reports_invalid_label_length() -> None:
+    mod = load_plan_to_issues_module()
+    draft = mod.IssueDraft(
+        title="[WS1] Long label",
+        body="body",
+        labels=["type:story", "owner:" + "x" * 60],
+        kind="story",
+        source_id="WS1",
+        priority="P2",
+    )
+
+    preflight = mod.projection_preflight_report([draft])
+
+    assert preflight["ok"] is False
+    assert preflight["invalid_labels"] == [
+        {
+            "source_id": "WS1",
+            "label": "owner:" + "x" * 60,
+            "length": 66,
+            "max_length": 50,
+        }
+    ]
+    assert "GitHub label names must be <= 50 characters" in preflight["errors"][0]
+
+
+def test_priority_inference_keeps_p0_explicit_only_and_maps_gate_tiers() -> None:
+    mod = load_plan_to_issues_module()
+
+    assert (
+        mod.infer_priority_value(
+            explicit_priority="P0",
+            title="Routine work",
+            excerpt="",
+            highest_tier="T4",
+            risk_tags=[],
+            blockers=[],
+            automation_blockers=[],
+            validation_scope="local",
+            gates=[],
+        )
+        == "P0"
+    )
+    assert (
+        mod.infer_priority_value(
+            explicit_priority=None,
+            title="Critical blocker fix",
+            excerpt="",
+            highest_tier=None,
+            risk_tags=[],
+            blockers=[],
+            automation_blockers=[],
+            validation_scope="local",
+            gates=[],
+        )
+        == "P1"
+    )
+    assert (
+        mod.infer_priority_value(
+            explicit_priority=None,
+            title="T0 lane",
+            excerpt="",
+            highest_tier="T0",
+            risk_tags=[],
+            blockers=[],
+            automation_blockers=[],
+            validation_scope="local",
+            gates=[],
+        )
+        == "P1"
+    )
+    assert (
+        mod.infer_priority_value(
+            explicit_priority=None,
+            title="T2 lane",
+            excerpt="",
+            highest_tier="T2",
+            risk_tags=[],
+            blockers=[],
+            automation_blockers=[],
+            validation_scope="local",
+            gates=[],
+        )
+        == "P2"
+    )
+    assert (
+        mod.infer_priority_value(
+            explicit_priority=None,
+            title="T5 lane",
+            excerpt="",
+            highest_tier="T5",
+            risk_tags=[],
+            blockers=[],
+            automation_blockers=[],
+            validation_scope="local",
+            gates=[],
+        )
+        == "P3"
+    )
 
 
 def test_dry_run_uses_repo_relative_plan_path_for_git_checkout(tmp_path: Path) -> None:
@@ -1231,7 +1385,8 @@ tracking:
     assert len(payload["stability"]["unstable_items"]) == 1
     assert payload["epic"]["status_label"] == "status:draft"
     by_id = {child["source_id"]: child for child in payload["children"]}
-    assert by_id["WS8-A"]["status_label"] == "status:ready"
+    assert by_id["WS8-A"]["status_label"] == "status:draft"
+    assert "decomposition:required" in by_id["WS8-A"]["labels"]
     assert by_id["WS8-F1"]["status_label"] == "status:draft"
     assert by_id["WS8-F1"]["azure_closeout_only"] is True
 
@@ -1884,8 +2039,10 @@ tracking:
     assert "- Manual gates remaining: `none`" in payload["children"][0]["body"]
     assert payload["children"][1]["dependencies"] == ["LEAF-001", "OWNER/service#42"]
     assert payload["children"][1]["dependency_issue_refs"] == ["OWNER/service#42"]
-    assert payload["children"][1]["dispatch_mode"] == "manual-review"
+    assert payload["children"][1]["dispatch_mode"] == "tracking-only"
     assert payload["children"][1]["dispatch_recommendation"] == "tracking-only"
+    assert payload["children"][1]["status_label"] == "status:draft"
+    assert "decomposition:required" in payload["children"][1]["labels"]
     assert payload["children"][1]["suggested_points"] == 2
     assert "points:2" in payload["children"][1]["labels"]
     assert "- Open dependencies: `LEAF-001; OWNER/service#42`" in payload["children"][1]["body"]

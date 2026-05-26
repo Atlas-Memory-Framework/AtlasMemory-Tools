@@ -77,7 +77,16 @@ def pr_view(repo: str, number: int) -> dict[str, Any] | None:
     )
 
 
-def project_issue_keys(projects_file: str | None) -> set[tuple[str, int]] | None:
+def project_issue_keys(projects_file: str | None, project_snapshot: str | None = None) -> set[tuple[str, int]] | None:
+    if project_snapshot:
+        keys: set[tuple[str, int]] = set()
+        for item in common.project_snapshot_items(project_snapshot):
+            content = item.get("content") or {}
+            repo = content.get("repository")
+            number = content.get("number")
+            if repo and number:
+                keys.add((str(repo), int(number)))
+        return keys
     if not projects_file:
         return None
     keys: set[tuple[str, int]] = set()
@@ -320,12 +329,12 @@ def decide(
         reasons.append(f"mergeable is {mergeable}")
     check_state, check_details = check_rollup_state(pr, required_check_names)
     if check_state == "none":
-        if required_check_names:
+        if no_checks_expected_for_pr(repo, pr, required_checks_file)[0]:
+            no_check_expected = True
+        elif required_check_names:
             reasons.append("no checks reported")
         elif deployed_validation_passed_for_head(pr):
             no_check_deployed_validated = True
-        elif not required_check_names and no_checks_expected_for_pr(repo, pr, required_checks_file)[0]:
-            no_check_expected = True
         elif not required_check_names and local_validation_passed_for_head(pr):
             no_check_local_validated = True
         elif allow_no_checks and not merge:
@@ -474,7 +483,7 @@ def finalize_decision(
 
 def scan(args: argparse.Namespace) -> list[FinalizeDecision]:
     decisions: list[FinalizeDecision] = []
-    allowed_issue_keys = project_issue_keys(getattr(args, "projects_file", None))
+    allowed_issue_keys = project_issue_keys(getattr(args, "projects_file", None), getattr(args, "project_snapshot", None))
     for repo in target_repos(args.repos_file):
         for summary in open_prs(repo, args.limit):
             if not is_local_agent_pr(summary):
@@ -544,6 +553,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--issue", type=int, help="Only finalize PRs linked to this issue number.")
     parser.add_argument("--projects-file", help="Only finalize PRs linked to issues in these GitHub Projects.")
+    parser.add_argument("--project-snapshot", help="Saved gh project item-list JSON used with --projects-file filtering.")
     parser.add_argument("--allow-no-checks", action="store_true", help="Allow finalizing PRs with no reported checks.")
     parser.add_argument("--required-checks-file", help="JSON map of repo full name to required PR check names.")
     parser.add_argument(

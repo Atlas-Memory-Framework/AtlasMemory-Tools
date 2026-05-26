@@ -165,6 +165,14 @@ Project scans read up to `AGENT_PROJECT_ITEM_LIMIT`, default `500`. Raise it if 
 
 Priority rules are conservative: explicit `priority:*` labels or body fields win; unambiguous same-workstream priority can be inherited; otherwise `GateTier` maps to priority (`T0/T1 -> P1`, `T2/T3 -> P2`, `T4+ -> P3`). `P0` remains explicit-only.
 
+Project fields are not planning truth. Before dispatch, reconcile must make issue body markers,
+labels, and Project fields agree; Project-only rows or Project-only runtime markers are not safe queue
+items.
+
+After plan-to-issues sync or Project reconciliation, audit affected rows as hard failures for missing
+`Priority`, duplicate `SourceId`, ready/agent-ready state on issues larger than one point, Project-only
+rows, and `Size` mismatches against issue body `Points` or `points:*` labels.
+
 ## Secrets And Config
 
 Local `config.env` should contain only local runtime settings:
