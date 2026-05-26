@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import argparse
 import sys
 import tempfile
 import unittest
@@ -73,6 +74,42 @@ class IssueDecomposeTests(unittest.TestCase):
         self.assertEqual(record["action"], "decompose")
         self.assertEqual(record["reason"], "conflicting point metadata")
         self.assertEqual(record["point_values"], [1, 5])
+
+    def test_run_filters_label_scan_to_project_issues(self) -> None:
+        originals = {
+            "target_repos": self.decompose.target_repos,
+            "candidate_issues_for_labels": self.decompose.candidate_issues_for_labels,
+            "project_targets": self.decompose.project_targets,
+            "project_items": self.decompose.common.project_items,
+        }
+        self.decompose.target_repos = lambda _path: ["owner/repo"]
+        self.decompose.candidate_issues_for_labels = lambda _repo, _labels, _limit: [
+            issue(number=3, labels=["points:5"]),
+            issue(number=74, labels=["points:3"]),
+        ]
+        self.decompose.project_targets = lambda _path: [("owner", 1)]
+        self.decompose.common.project_items = lambda _owner, _number: [
+            {"content": {"repository": "owner/repo", "number": 74}}
+        ]
+        try:
+            result = self.decompose.run(
+                argparse.Namespace(
+                    repos_file=None,
+                    candidate_label=["status:ready"],
+                    issue=[],
+                    max=10,
+                    projects_file="projects.txt",
+                    apply=False,
+                )
+            )
+        finally:
+            for name, value in originals.items():
+                if name == "project_items":
+                    setattr(self.decompose.common, name, value)
+                else:
+                    setattr(self.decompose, name, value)
+
+        self.assertEqual([record["number"] for record in result["records"]], [74])
 
     def test_extract_json_object_handles_repeated_planner_json(self) -> None:
         raw = (

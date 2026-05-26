@@ -77,6 +77,20 @@ def pr_view(repo: str, number: int) -> dict[str, Any] | None:
     )
 
 
+def project_issue_keys(projects_file: str | None) -> set[tuple[str, int]] | None:
+    if not projects_file:
+        return None
+    keys: set[tuple[str, int]] = set()
+    for owner, project_number in common.project_targets(projects_file):
+        for item in common.project_items(owner, project_number):
+            content = item.get("content") or {}
+            repo = content.get("repository")
+            number = content.get("number")
+            if repo and number:
+                keys.add((str(repo), int(number)))
+    return keys
+
+
 def is_local_agent_pr(pr: dict[str, Any]) -> bool:
     head = str(pr.get("headRefName") or "")
     title = str(pr.get("title") or "")
@@ -460,6 +474,7 @@ def finalize_decision(
 
 def scan(args: argparse.Namespace) -> list[FinalizeDecision]:
     decisions: list[FinalizeDecision] = []
+    allowed_issue_keys = project_issue_keys(getattr(args, "projects_file", None))
     for repo in target_repos(args.repos_file):
         for summary in open_prs(repo, args.limit):
             if not is_local_agent_pr(summary):
@@ -467,7 +482,12 @@ def scan(args: argparse.Namespace) -> list[FinalizeDecision]:
             detail = pr_view(repo, int(summary["number"]))
             if not detail:
                 continue
-            if args.issue and linked_issue_number(detail) != args.issue:
+            issue_number = linked_issue_number(detail)
+            if args.issue and issue_number != args.issue:
+                continue
+            if allowed_issue_keys is not None and (
+                issue_number is None or (repo, issue_number) not in allowed_issue_keys
+            ):
                 continue
             decisions.append(
                 decide(
@@ -523,6 +543,7 @@ def main() -> None:
     parser.add_argument("--repos-file")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--issue", type=int, help="Only finalize PRs linked to this issue number.")
+    parser.add_argument("--projects-file", help="Only finalize PRs linked to issues in these GitHub Projects.")
     parser.add_argument("--allow-no-checks", action="store_true", help="Allow finalizing PRs with no reported checks.")
     parser.add_argument("--required-checks-file", help="JSON map of repo full name to required PR check names.")
     parser.add_argument(

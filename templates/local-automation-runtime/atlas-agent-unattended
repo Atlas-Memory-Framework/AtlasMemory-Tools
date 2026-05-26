@@ -390,6 +390,8 @@ def build_review_command(args: argparse.Namespace, chain_dir: Path, chain_id: st
         cmd.append("--apply")
     if args.allow_no_checks:
         cmd.append("--allow-no-checks")
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
     return CommandSpec(
         name=f"review-{pass_name}",
         args=cmd,
@@ -417,6 +419,8 @@ def build_finalize_command(args: argparse.Namespace, chain_dir: Path, chain_id: 
         cmd.append("--close-issues")
     if args.allow_no_checks:
         cmd.append("--allow-no-checks")
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
     if args.require_review_approval:
         cmd.extend(["--require-review-label", args.review_label])
     return CommandSpec(

@@ -81,6 +81,10 @@ Parallelism is stage-specific. `--dispatch-max-per-repo` replaces the older broa
 
 Dispatch workers use runtime-global write-scope locks by default. Issues with disjoint `## Write Scope` paths can run concurrently on the same repo/base branch; overlapping paths, schema/migration siblings, and unknown or repo-wide scopes wait for a later cycle. Use `--no-write-scope-locks` only for a manually supervised run.
 
+Automation-ready decomposition should make parallelism explicit instead of relying only on inferred locks. Leaf issues should carry dependency and scheduling metadata such as `Depends on`, `Blocks`, `Parallel group`, `Critical path rank`, `Merge group`, `Combine policy`, `Conflict class`, `Write Scope`, and `Validation tier`. Treat missing or unknown metadata as a reason to narrow dispatch, not a reason to widen it.
+
+Keep PRs separate by default. A one-point issue should normally produce one draft PR; use an explicit integration issue or `Merge group` when several green PRs need a planned rollup. Combining unrelated implementation PRs early makes repair routing and finalization less reliable.
+
 GitHub CLI calls are paced through a runtime-wide throttle file under `jobs/github-api-throttle/`. Keep `AGENT_GITHUB_THROTTLE=true` when running multiple lanes so Project v2 GraphQL scans, `--json` issue/PR reads, and label/comment mutations do not stampede one token. The default pacing is conservative, and `AGENT_GITHUB_RATE_LIMIT_BACKOFF_SECONDS` stops later stages from hammering GitHub after a rate-limit response. Use `./atlas-agent-throttle-status` to inspect cooldown and stale-lock state without calling GitHub.
 
 Workstream review runs before dependency promotion in the default unattended loop. It reads items labeled
@@ -88,7 +92,15 @@ Workstream review runs before dependency promotion in the default unattended loo
 `agent:workstream-review-passed`, `agent:workstream-review-failed`, `agent:workstream-needs-human`, or
 `agent:workstream-followup` according to the operator flags and review outcome.
 
+Workstream completion requires a review bundle, not just merged PRs. Before marking a workstream done, record
+semantic review status, garbage collection results, documentation changes or a docs-not-needed rationale,
+validation evidence, and downstream readiness. Garbage collection includes stale followups, obsolete config,
+generated junk, duplicate source-of-truth, and abandoned automation artifacts or branches when they are safe to
+remove. Documentation updates are mandatory unless the closure record explains why no docs are affected.
+
 PRs with no GitHub checks and no configured required checks are labeled `agent:local-validation-required`; `atlas-agent-local-validate --apply` runs the configured local commands and swaps that label to `agent:local-validation-passed` or `agent:local-validation-failed`. `local-validation.json` may use the legacy `repo -> [commands]` form or a structured object with `install_commands`/`setup_commands` followed by targeted `commands`. If a repository has required checks configured, local or deployed validation does not replace missing GitHub check reports.
+
+Worker publication also has a pre-PR evidence gate. The implementation agent must leave a `Tests` or `Verification` section with exact commands and results before the worker publishes a draft PR. If tests are intentionally not run, the issue must carry an explicit validation waiver reason or controlled waiver label. Configure `pre-commit run --all-files`, targeted test commands, and build commands in `local-validation.json`; repository hooks may be disabled in worker worktrees, so important checks must be commands, not only hooks.
 
 To reconcile more than one GitHub Project, put targets in `projects.txt` as `OWNER/NUMBER`, one per line, then run `atlas-agent-unattended --projects-file projects.txt --project-reconcile-every 3 ...` or run `atlas-agent-project-reconcile --projects-file projects.txt --apply` as a separate checkpoint. The Project board must use a `Status` field with `Todo`, `In Progress`, and `Done`. Project lifecycle scans read up to `AGENT_PROJECT_ITEM_LIMIT` cards, default `500`; raise that value if the reconcile log says the scanned item limit was reached or new cards are not moving.
 Runtime stages do not update Project fields by default. Set `AGENT_PROJECT_STATE_UPDATES=true` only for supervised direct Project writes, or set `AGENT_PROJECT_STATE_UPDATE_MODE=queue` to append desired field updates under `jobs/project-sync/*.jsonl`. Use `./atlas-agent-project-sync status` offline and `./atlas-agent-project-sync flush` when you want to apply queued Project updates. Priority is inherited from the plan/parent issue during decomposition and can be backfilled by reconcile tooling.

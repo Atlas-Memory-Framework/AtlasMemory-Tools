@@ -309,6 +309,19 @@ class UnattendedLoopTests(unittest.TestCase):
         repos_index = command.args.index("--repos-file") + 1
         self.assertEqual(command.args[repos_index], "repos.txt")
 
+    def test_review_and_finalize_receive_projects_file(self) -> None:
+        args = self.loop.build_parser().parse_args(
+            ["--dry-run", "--repos-file", "repos.txt", "--projects-file", "projects.txt"]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            review = self.loop.build_review_command(args, Path(tmp), "chain", 1, "pass")
+            finalize = self.loop.build_finalize_command(args, Path(tmp), "chain", 1)
+
+        self.assertIn("--projects-file", review.args)
+        self.assertIn("--projects-file", finalize.args)
+        self.assertEqual(review.args[review.args.index("--projects-file") + 1], "projects.txt")
+        self.assertEqual(finalize.args[finalize.args.index("--projects-file") + 1], "projects.txt")
+
     def test_decompose_command_creates_subissues_by_default_when_apply_is_used(self) -> None:
         args = self.loop.build_parser().parse_args(["--apply", "--repos-file", "repos.txt"])
         with tempfile.TemporaryDirectory() as tmp:

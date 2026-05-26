@@ -27,6 +27,26 @@ LABELS = {
     "status:blocked": "D4C5F9",
 }
 
+COMPLETION_CATEGORIES = {
+    "semantic_correctness": "Semantic correctness",
+    "garbage_collection": "Garbage collection",
+    "documentation_updates": "Documentation updates",
+}
+FOLLOWUP_COMPLETION_CATEGORIES = {
+    "semantic": "semantic",
+    "semantic-correctness": "semantic",
+    "semantic_correctness": "semantic",
+    "garbage-collection": "garbage-collection",
+    "garbage_collection": "garbage-collection",
+    "gc": "garbage-collection",
+    "documentation": "documentation",
+    "documentation-updates": "documentation",
+    "documentation_updates": "documentation",
+    "docs": "documentation",
+    "implementation": "implementation",
+    "other": "other",
+}
+
 
 def ensure_labels(repo: str) -> None:
     common.ensure_labels_cached(repo, LABELS)
@@ -154,6 +174,60 @@ def extract_json(raw: str) -> dict[str, Any]:
     if candidates:
         return candidates[-1]
     raise ValueError("no JSON object found in workstream review output")
+
+
+def normalize_check_status(value: Any) -> tuple[str, str]:
+    if isinstance(value, dict):
+        raw_status = value.get("status") or value.get("result") or value.get("state")
+        rationale = str(value.get("rationale") or value.get("notes") or value.get("summary") or "").strip()
+    elif isinstance(value, bool):
+        raw_status = "pass" if value else "fail"
+        rationale = ""
+    else:
+        raw_status = value
+        rationale = ""
+    status = str(raw_status or "").strip().lower().replace("_", "-")
+    if status in {"pass", "passed", "ok", "complete", "completed", "yes", "not-needed", "not needed", "n/a", "na"}:
+        return "pass", rationale
+    if status in {"fail", "failed", "blocked", "incomplete", "missing", "no", "unresolved"}:
+        return "fail", rationale
+    if status in {"needs-human", "needs human", "manual", "unknown", "unclear", "pending"}:
+        return "needs-human", rationale
+    return "missing", rationale
+
+
+def completion_review(review: dict[str, Any]) -> dict[str, dict[str, str]]:
+    raw = review.get("completion_review") or review.get("completion_checks") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    checks: dict[str, dict[str, str]] = {}
+    for key, label in COMPLETION_CATEGORIES.items():
+        status, rationale = normalize_check_status(raw.get(key))
+        if key == "documentation_updates" and status == "pass" and not rationale:
+            status = "missing"
+            rationale = "Documentation updates require a docs change summary or a docs-not-needed rationale."
+        checks[key] = {"label": label, "status": status, "rationale": rationale}
+    return checks
+
+
+def normalize_result(review: dict[str, Any]) -> str:
+    result = str(review.get("result") or "needs-human").strip().lower()
+    if result not in {"pass", "fail", "needs-human"}:
+        result = "needs-human"
+    checks = completion_review(review)
+    unresolved = [check for check in checks.values() if check["status"] != "pass"]
+    if unresolved and result == "pass":
+        result = "needs-human" if any(check["status"] in {"missing", "needs-human"} for check in unresolved) else "fail"
+        existing = [str(item) for item in review.get("blocking_findings") or []]
+        for check in unresolved:
+            if check["status"] == "missing":
+                existing.append(f"{check['label']} completion check was missing from the review output.")
+            else:
+                detail = f": {check['rationale']}" if check["rationale"] else ""
+                existing.append(f"{check['label']} completion check is unresolved ({check['status']}){detail}.")
+        review["blocking_findings"] = existing
+        review["summary"] = (str(review.get("summary") or "").strip() + "\n\nCompletion review is incomplete; downstream work remains blocked.").strip()
+    return result
 
 
 def codex_timeout_seconds() -> int:
@@ -287,12 +361,27 @@ Return ONLY JSON with this exact shape:
 {{
   "result": "pass|fail|needs-human",
   "summary": "...",
+  "completion_review": {{
+    "semantic_correctness": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Did the workstream do the right work and preserve the intended semantic meaning?"
+    }},
+    "garbage_collection": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Are stale artifacts, obsolete branches/files/config, generated junk, and duplicate authority cleaned up or intentionally retained?"
+    }},
+    "documentation_updates": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Were operator docs, runtime docs, README, issue body notes, or an explicit docs-not-needed rationale updated?"
+    }}
+  }},
   "blocking_findings": ["..."],
   "followups": [
     {{
       "title": "...",
       "body": "...",
       "write_scope": ["path"],
+      "completion_category": "semantic|garbage-collection|documentation|implementation|other",
       "ready": true,
       "manual_gates": "none"
     }}
@@ -303,7 +392,14 @@ Rules:
 - Use "pass" only if downstream work can safely depend on this workstream.
 - Use "fail" when code follow-up work is required before downstream work should proceed.
 - Use "needs-human" when product/back-end judgment is required before unblocking.
+- A pass requires explicit pass statuses for semantic_correctness, garbage_collection, and documentation_updates.
+- Mark semantic_correctness unresolved when the child work completed tasks mechanically but did not satisfy the parent intent, changed the wrong behavior, or left ambiguous product/back-end meaning.
+- Mark garbage_collection unresolved when stale artifacts, obsolete branches/files/config, generated junk, or duplicate authorities remain without an explicit retention rationale.
+- Mark documentation_updates unresolved when operator docs, runtime docs, README, issue body notes, or a clear docs-not-needed rationale are missing.
+- If any completion_review category is fail, result must be "fail" unless the fix requires human judgment.
+- If any completion_review category needs human judgment or is unclear, result must be "needs-human".
 - Each follow-up must be one PR, one point, and include explicit write_scope.
+- Set followup.completion_category to "semantic", "garbage-collection", or "documentation" when the follow-up resolves one of those completion review categories.
 - Prefer follow-up issues over vague findings when a concrete fix is possible.
 
 Repository: {repo}
@@ -326,12 +422,17 @@ Current base file evidence:
 def comment_body(parent: dict[str, Any], result: str, review: dict[str, Any], job_dir: Path, created: list[str]) -> str:
     findings = "\n".join(f"- {item}" for item in review.get("blocking_findings") or []) or "- none"
     followups = "\n".join(f"- {url}" for url in created) or "- none"
+    checks = "\n".join(
+        f"- {check['label']}: `{check['status']}`" + (f" - {check['rationale']}" if check["rationale"] else "")
+        for check in completion_review(review).values()
+    )
     return (
         f"{COMMENT_MARKER}\n"
         f"Workstream review for issue #{parent.get('number')}.\n\n"
         f"Result: {result}\n"
         f"Artifacts: `{job_dir}`\n\n"
         f"Summary:\n{review.get('summary') or ''}\n\n"
+        f"Completion checks:\n{checks}\n\n"
         f"Blocking findings:\n{findings}\n\n"
         f"Created follow-up issues:\n{followups}\n"
     )
@@ -360,11 +461,17 @@ def followup_base_branch(repo: str, parent: dict[str, Any]) -> str:
     return common.issue_body_base_branch(parent) or common.default_base_branch(repo)
 
 
+def followup_completion_category(followup: dict[str, Any]) -> str:
+    raw = str(followup.get("completion_category") or followup.get("category") or "implementation").strip().lower().replace("_", "-")
+    return FOLLOWUP_COMPLETION_CATEGORIES.get(raw, "other")
+
+
 def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any], projects_file: str | None) -> str:
     ready = bool(followup.get("ready"))
     scope = [str(item).strip().strip("`") for item in followup.get("write_scope") or [] if str(item).strip()]
     manual = str(followup.get("manual_gates") or "none").strip() or "none"
     base_branch = followup_base_branch(repo, parent)
+    completion_category = followup_completion_category(followup)
     body = "\n".join(
         [
             "## Automation Manifest Metadata",
@@ -377,10 +484,15 @@ def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any],
             f"- Execution repo: `{repo}`",
             f"- Base branch: `{base_branch}`",
             "- One PR contract: `yes`",
+            f"- Completion category: `{completion_category}`",
             "",
             "## Execution State",
             "- Open dependencies: `none`",
             f"- Manual gates remaining: `{manual}`",
+            "",
+            "## Completion Review Follow-up",
+            f"- Category: `{completion_category}`",
+            "- Resolve this category before downstream workstream dependencies are unblocked.",
             "",
             str(followup.get("body") or "").strip(),
             "",
@@ -438,9 +550,7 @@ def review_one(repo: str, number: int, args: argparse.Namespace) -> dict[str, An
     common.write_json(job_dir / "prs.json", prs)
     prompt = build_prompt(repo, parent, children, prs, evidence, feedback)
     review = run_codex(job_dir, prompt)
-    result = str(review.get("result") or "needs-human").strip().lower()
-    if result not in {"pass", "fail", "needs-human"}:
-        result = "needs-human"
+    result = normalize_result(review)
     created: list[str] = []
     if args.apply and result != "pass":
         for followup in review.get("followups") or []:

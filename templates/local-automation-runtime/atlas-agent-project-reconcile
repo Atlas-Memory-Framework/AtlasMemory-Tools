@@ -657,6 +657,40 @@ def issue_state(repo: str, number: int) -> str:
     return str(data.get("state") or "UNKNOWN").upper()
 
 
+def issue_states_for_items(items: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
+    by_repo: dict[str, set[int]] = {}
+    for item in items:
+        key = issue_key(item)
+        if key:
+            repo, number = key
+            by_repo.setdefault(repo, set()).add(number)
+    issue_states: dict[tuple[str, int], str] = {}
+    for repo, numbers in by_repo.items():
+        expected = set(numbers)
+        rows = common.gh_json_or_none(
+            [
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--limit",
+                str(max(1000, len(expected))),
+                "--json",
+                "number,state",
+            ],
+            retries=2,
+        ) or []
+        for row in rows:
+            number = int(row.get("number") or 0)
+            if number in expected:
+                issue_states[(repo, number)] = str(row.get("state") or "UNKNOWN").upper()
+        for missing in sorted(expected - {number for item_repo, number in issue_states if item_repo == repo}):
+            issue_states[(repo, missing)] = issue_state(repo, missing)
+    return issue_states
+
+
 def item_complete(item: dict[str, Any], issue_states: dict[tuple[str, int], str]) -> bool:
     key = issue_key(item)
     state = issue_states.get(key or ("", 0), "UNKNOWN")
@@ -679,11 +713,7 @@ def decide(
     *,
     hydrate_metadata: bool = True,
 ) -> list[ProjectDecision]:
-    issue_states: dict[tuple[str, int], str] = {}
-    for item in items:
-        key = issue_key(item)
-        if key:
-            issue_states[key] = issue_state(*key)
+    issue_states = issue_states_for_items(items)
 
     by_url = {issue_url(item): item for item in items if issue_url(item)}
     children_by_parent: dict[str, list[dict[str, Any]]] = {}

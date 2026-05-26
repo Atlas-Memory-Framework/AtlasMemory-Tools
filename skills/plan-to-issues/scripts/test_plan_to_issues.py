@@ -1891,6 +1891,85 @@ tracking:
     assert len(payload["children"]) == 2
 
 
+def test_manifest_leaf_scheduler_metadata_projects_to_body_and_project_fields(tmp_path: Path) -> None:
+    plan_path = tmp_path / "automation_manifest_scheduler.plan.md"
+    plan_path.write_text(
+        """---
+name: automation manifest scheduler lane
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Automation manifest scheduler lane
+
+## Implementation Plan
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-010: Scheduler-aware leaf
+  - Dispatch: agent-ready
+  - Points: 1
+  - Target repo: service
+  - Depends on: none
+  - Parallel group: docs-and-parser
+  - Blocks:
+    - LEAF-020
+    - OWNER/service#44
+  - Critical path rank: 3
+  - Merge group: manifest-projection
+  - Combine policy: combine-with-merge-group
+  - Conflict class: plan-to-issues-parser
+  - Validation tier: T2
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+  - Validation:
+    - `pytest skills/plan-to-issues/scripts/test_plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "OWNER/service",
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    child = payload["children"][0]
+    assert child["parallel_group"] == "docs-and-parser"
+    assert child["blocks"] == ["LEAF-020", "OWNER/service#44"]
+    assert child["critical_path_rank"] == 3
+    assert child["merge_group"] == "manifest-projection"
+    assert child["combine_policy"] == "combine-with-merge-group"
+    assert child["conflict_class"] == "plan-to-issues-parser"
+    assert child["validation_tier"] == "T2"
+    assert "- Parallel group: `docs-and-parser`" in child["body"]
+    assert "- Blocks: `LEAF-020; OWNER/service#44`" in child["body"]
+    assert "- Critical path rank: `3`" in child["body"]
+    assert "- Merge group: `manifest-projection`" in child["body"]
+    assert "- Combine policy: `combine-with-merge-group`" in child["body"]
+    assert "- Conflict class: `plan-to-issues-parser`" in child["body"]
+    assert "- Validation tier: `T2`" in child["body"]
+
+    mod = load_plan_to_issues_module()
+    values = mod.project_field_values(
+        mod.IssueDraft(**child),
+        issue_repo="OWNER/service",
+        plan_key="PLAN-1",
+    )
+
+    assert values["ParallelGroup"] == "docs-and-parser"
+    assert values["Blocks"] == "LEAF-020\nOWNER/service#44"
+    assert values["CriticalPathRank"] == 3
+    assert values["MergeGroup"] == "manifest-projection"
+    assert values["CombinePolicy"] == "combine-with-merge-group"
+    assert values["ConflictClass"] == "plan-to-issues-parser"
+    assert values["ValidationTier"] == "T2"
+
+
 def test_leaf_issues_strategy_blocks_missing_dependency_metadata(tmp_path: Path) -> None:
     plan_path = tmp_path / "automation_manifest_missing_dependencies.plan.md"
     plan_path.write_text(

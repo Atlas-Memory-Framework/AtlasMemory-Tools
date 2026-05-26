@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:b654ff3b1954d05ddf2410cf9388417caaaf9ddeba4e666535875e33b13c677a
+# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:b3146130252c9f7165be6cf5a3892df0ed4356a73488a9d2493ab45ea81ccfcb
 # atlas-tools-generated-end
 name: automation-decomposition
 description: Produce the Automation Issue Manifest for /plan when a plan must project into bounded issues or unattended issue-to-PR execution. Use after implementation planning and before planning reviews when AutomationTarget is not none.
@@ -37,6 +37,7 @@ Each leaf issue must include:
 - required gate ids that exist in the implementation plan and define where/entrypoint/green means
 - acceptance criteria that are executable by command or evidence artifact
 - one-PR contract and source plan sections
+- scheduler metadata for local automation: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, and validation tier; use `none` only when the field is not applicable
 
 Allowed dispatch modes:
 - `agent-ready`: eligible for issue-to-PR automation after dependencies close and human dispatch approval is present.
@@ -58,6 +59,7 @@ Return `Fail` unless:
 - no `G-*`, `MP*`, `DR-*`, `A*`, or `R*` token is used as a dependency unless wrapped as a structured blocker
 - every gate is defined and attached to at least one leaf issue
 - every `agent-ready` issue has bounded write scope, validation command/evidence, dispatch mode, and one-PR contract
+- every `agent-ready` issue has explicit scheduler metadata, with `Blocks: none` when it does not unblock another leaf or issue
 - no `agent-ready` issue exceeds a reasonable budget: more than one repo, broad cross-cutting file ownership, unclear risk, or no focused acceptance criteria
 
 ## Sub-agent output contract
@@ -112,6 +114,14 @@ Use this structure:
   - Dispatch: agent-ready | manual-review | blocked | tracking-only
   - Depends on:
     - <leaf issue id>
+  - Parallel group: <group id or none>
+  - Blocks:
+    - <leaf issue id, GitHub issue ref, or none>
+  - Critical path rank: <integer or none>
+  - Merge group: <group id or none>
+  - Combine policy: solo | combine-with-merge-group | never-combine | none
+  - Conflict class: <class id or none>
+  - Validation tier: T0 | T1 | T2 | T3 | T4 | T5 | T6 | none
   - External blockers:
     - <owner/status/blocker or none>
   - Manual blockers:

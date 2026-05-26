@@ -375,6 +375,7 @@ class IssueDraft:
     base_branch: str | None = None
     suggested_points: int | None = None
     dependencies: list[str] = field(default_factory=list)
+    blocks: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
     merge_points: list[str] = field(default_factory=list)
     gates: list[str] = field(default_factory=list)
@@ -391,6 +392,12 @@ class IssueDraft:
     write_scope: list[str] = field(default_factory=list)
     validation_commands: list[str] = field(default_factory=list)
     validation_scope: str = "local"
+    parallel_group: str | None = None
+    critical_path_rank: int | None = None
+    merge_group: str | None = None
+    combine_policy: str | None = None
+    conflict_class: str | None = None
+    validation_tier: str | None = None
     risk_tags: list[str] = field(default_factory=list)
     dependency_issue_refs: list[str] = field(default_factory=list)
     blocker_issue_refs: list[str] = field(default_factory=list)
@@ -1947,6 +1954,31 @@ def point_dispatch_guardrails(points: int | None) -> list[str]:
 def runtime_field_value(values: list[str]) -> str:
     cleaned = ordered_unique([value.replace("`", "").strip() for value in values if value.strip()])
     return "none" if not cleaned else "; ".join(cleaned)
+
+
+def clean_manifest_field_value(value: str) -> str:
+    return value.replace("`", "").strip()
+
+
+def clean_optional_manifest_scalar(values: list[str]) -> str | None:
+    cleaned = [
+        clean_manifest_field_value(value)
+        for value in values
+        if clean_manifest_field_value(value)
+    ]
+    if not cleaned:
+        return None
+    value = cleaned[-1]
+    return None if value.lower() in {"none", "n/a", "na"} else value
+
+
+def clean_manifest_list_values(values: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for value in split_csv_values(values):
+        item = clean_manifest_field_value(value)
+        if item and item.lower() not in {"none", "n/a", "na"}:
+            cleaned.append(item)
+    return ordered_unique(cleaned)
 
 
 def build_execution_state_lines(
@@ -3535,6 +3567,23 @@ def build_manifest_leaf_children(
                 )
             ]
         )
+        blocks = clean_manifest_list_values(collect_field_values(lines, "blocks"))
+        parallel_group = clean_optional_manifest_scalar(
+            collect_field_values(lines, "parallel group")
+        )
+        critical_path_rank = parse_int_value(
+            clean_optional_manifest_scalar(collect_field_values(lines, "critical path rank"))
+        )
+        merge_group = clean_optional_manifest_scalar(collect_field_values(lines, "merge group"))
+        combine_policy = clean_optional_manifest_scalar(
+            collect_field_values(lines, "combine policy")
+        )
+        conflict_class = clean_optional_manifest_scalar(
+            collect_field_values(lines, "conflict class")
+        )
+        validation_tier = clean_optional_manifest_scalar(
+            collect_field_values(lines, "validation tier")
+        )
         requested_dispatch_mode = normalize_dispatch_mode(
             collect_field_values(lines, "dispatch mode", "dispatch")
         )
@@ -3638,6 +3687,20 @@ def build_manifest_leaf_children(
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
         ]
+        if parallel_group:
+            body_lines.append(f"- Parallel group: `{parallel_group}`")
+        if blocks:
+            body_lines.append(f"- Blocks: `{'; '.join(blocks)}`")
+        if critical_path_rank is not None:
+            body_lines.append(f"- Critical path rank: `{critical_path_rank}`")
+        if merge_group:
+            body_lines.append(f"- Merge group: `{merge_group}`")
+        if combine_policy:
+            body_lines.append(f"- Combine policy: `{combine_policy}`")
+        if conflict_class:
+            body_lines.append(f"- Conflict class: `{conflict_class}`")
+        if validation_tier:
+            body_lines.append(f"- Validation tier: `{validation_tier}`")
         if risk_tags:
             body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
         if repo_targets:
@@ -3717,6 +3780,7 @@ def build_manifest_leaf_children(
                 base_branch=base_branch,
                 suggested_points=points,
                 dependencies=dependencies,
+                blocks=blocks,
                 blockers=blockers,
                 gates=gates,
                 highest_tier=highest_tier,
@@ -3730,6 +3794,12 @@ def build_manifest_leaf_children(
                 write_scope=write_scope,
                 validation_commands=validation_commands,
                 validation_scope=validation_scope,
+                parallel_group=parallel_group,
+                critical_path_rank=critical_path_rank,
+                merge_group=merge_group,
+                combine_policy=combine_policy,
+                conflict_class=conflict_class,
+                validation_tier=validation_tier,
                 risk_tags=risk_tags,
                 dependency_issue_refs=dependency_analysis.issue_refs,
                 blocker_issue_refs=blocker_analysis.issue_refs,
@@ -3779,6 +3849,12 @@ FIELD_DATA_TYPES = {
     "ParentEpic": "TEXT",
     "DependsOn": "TEXT",
     "Blocks": "TEXT",
+    "ParallelGroup": "TEXT",
+    "CriticalPathRank": "NUMBER",
+    "MergeGroup": "TEXT",
+    "CombinePolicy": "TEXT",
+    "ConflictClass": "TEXT",
+    "ValidationTier": "TEXT",
     "AutomationBlockers": "TEXT",
     "ReviewGates": "TEXT",
     "GateTier": "SINGLE_SELECT",
@@ -3805,6 +3881,7 @@ FIELD_DATA_TYPES = {
     "ActivePR": "TEXT",
     "Validation": "TEXT",
 }
+PROJECT_FIELD_TYPES = FIELD_DATA_TYPES
 PROJECT_CONFIG_CACHE: dict[tuple[str, int], dict[str, object]] = {}
 
 
@@ -4007,7 +4084,13 @@ def project_field_values(
         "SourceId": draft.source_id,
         "ParentEpic": parent_epic_url,
         "DependsOn": "\n".join(draft.dependencies),
-        "Blocks": "\n".join(draft.blockers),
+        "Blocks": "\n".join(draft.blocks or draft.blockers),
+        "ParallelGroup": draft.parallel_group,
+        "CriticalPathRank": draft.critical_path_rank,
+        "MergeGroup": draft.merge_group,
+        "CombinePolicy": draft.combine_policy,
+        "ConflictClass": draft.conflict_class,
+        "ValidationTier": draft.validation_tier,
         "AutomationBlockers": "\n".join(draft.automation_blockers),
         "ReviewGates": "\n".join(draft.gates),
         "GateTier": draft.highest_tier,

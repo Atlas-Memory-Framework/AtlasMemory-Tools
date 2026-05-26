@@ -72,6 +72,34 @@ def candidate_issues_for_labels(repo: str, labels: list[str], limit: int) -> lis
     return issues
 
 
+def project_issue_keys(projects_file: str | None) -> set[tuple[str, int]] | None:
+    if not projects_file:
+        return None
+    keys: set[tuple[str, int]] = set()
+    for owner, project_number in project_targets(projects_file):
+        for item in common.project_items(owner, project_number):
+            content = item.get("content") or {}
+            repo = content.get("repository")
+            number = content.get("number")
+            if repo and number:
+                keys.add((str(repo), int(number)))
+    return keys
+
+
+def filter_project_issues(
+    repo: str,
+    issues: list[dict[str, Any]],
+    allowed_issue_keys: set[tuple[str, int]] | None,
+) -> list[dict[str, Any]]:
+    if allowed_issue_keys is None:
+        return issues
+    return [
+        issue
+        for issue in issues
+        if (repo, int(issue.get("number") or 0)) in allowed_issue_keys
+    ]
+
+
 def issue_ref_parts(raw: str, default_repo: str | None) -> tuple[str, int]:
     text = str(raw).strip()
     url_match = re.match(r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/issues/(?P<number>\d+)(?:\b|$)", text)
@@ -773,6 +801,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     candidate_labels = args.candidate_label or ["status:ready"]
     repos = target_repos(args.repos_file)
     explicit_refs = list(getattr(args, "issue", None) or [])
+    allowed_issue_keys = None if explicit_refs else project_issue_keys(args.projects_file)
     explicit_repos: list[str] = []
     if explicit_refs:
         default_repo = repos[0] if len(repos) == 1 else None
@@ -786,7 +815,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if explicit_refs:
             issues = candidate_issues_for_explicit_refs(repo, explicit_refs, remaining, default_repo)
         else:
-            issues = candidate_issues_for_labels(repo, candidate_labels, remaining)
+            scan_limit = remaining
+            if allowed_issue_keys is not None:
+                project_repo_count = sum(1 for key_repo, _number in allowed_issue_keys if key_repo == repo)
+                scan_limit = max(remaining, project_repo_count, 100)
+            issues = filter_project_issues(
+                repo,
+                candidate_issues_for_labels(repo, candidate_labels, scan_limit),
+                allowed_issue_keys,
+            )[:remaining]
         for issue in issues:
             record = classify_issue(repo, issue)
             if args.apply:

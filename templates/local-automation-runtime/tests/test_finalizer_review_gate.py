@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import argparse
 import sys
 import unittest
 from pathlib import Path
@@ -80,6 +81,51 @@ class FinalizerReviewGateTests(unittest.TestCase):
     def test_pr_view_fields_include_labels(self) -> None:
         self.assertIn("labels", self.finalize.PR_VIEW_FIELDS.split(","))
         self.assertIn("files", self.finalize.PR_VIEW_FIELDS.split(","))
+
+    def test_scan_can_filter_to_project_issues(self) -> None:
+        originals = {
+            "target_repos": self.finalize.target_repos,
+            "open_prs": self.finalize.open_prs,
+            "pr_view": self.finalize.pr_view,
+            "project_targets": self.finalize.common.project_targets,
+            "project_items": self.finalize.common.project_items,
+        }
+        self.finalize.target_repos = lambda _path: ["owner/repo"]
+        self.finalize.open_prs = lambda _repo, _limit: [
+            {"number": 7, "title": "agent: address issue #12", "headRefName": "agent/issue-12/work"},
+            {"number": 8, "title": "agent: address issue #13", "headRefName": "agent/issue-13/work"},
+        ]
+        self.finalize.pr_view = lambda _repo, number: green_pr(
+            number=number,
+            body=f"Closes #{number + 5}",
+            headRefName=f"agent/issue-{number + 5}/work",
+        )
+        self.finalize.common.project_targets = lambda _path: [("owner", 1)]
+        self.finalize.common.project_items = lambda _owner, _number: [
+            {"content": {"repository": "owner/repo", "number": 12}}
+        ]
+        try:
+            decisions = self.finalize.scan(
+                argparse.Namespace(
+                    repos_file=None,
+                    limit=50,
+                    issue=None,
+                    projects_file="projects.txt",
+                    allow_no_checks=False,
+                    merge=False,
+                    required_checks_file=None,
+                    check_dependencies=False,
+                    require_review_label=None,
+                )
+            )
+        finally:
+            for name, value in originals.items():
+                if name in {"project_targets", "project_items"}:
+                    setattr(self.finalize.common, name, value)
+                else:
+                    setattr(self.finalize, name, value)
+
+        self.assertEqual([decision.number for decision in decisions], [7])
 
     def test_local_validation_passed_no_check_draft_is_readied_not_merged(self) -> None:
         decision = self.finalize.decide(

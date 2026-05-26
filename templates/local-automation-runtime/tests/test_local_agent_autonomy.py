@@ -168,6 +168,91 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             ],
         )
 
+    def test_worker_disables_repo_hooks_by_default_with_env_override(self) -> None:
+        original_env = os.environ.copy()
+        try:
+            os.environ.pop("AGENT_DISABLE_REPO_HOOKS", None)
+            self.assertTrue(self.worker.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "0"
+            self.assertFalse(self.worker.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "false"
+            self.assertFalse(self.worker.disable_repo_hooks())
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+    def test_worker_container_volumes_mount_git_cache_and_tools_readonly(self) -> None:
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = root / "AtlasMemory-Tools"
+            tools.mkdir()
+            os.environ["AGENT_TOOLS_MOUNT_PATHS"] = str(tools)
+            try:
+                volumes = self.worker.worker_container_volumes(
+                    root / "job" / "codex-home",
+                    root / "jobs" / "checkouts" / "owner__repo" / "issue-7",
+                    root / "job",
+                    root / "repos" / "owner__repo",
+                )
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertIn(f"-v {root / 'job' / 'codex-home'}:/home/agent/.codex:Z", volumes)
+        self.assertIn(f"-v {root / 'jobs' / 'checkouts' / 'owner__repo' / 'issue-7'}:/work:Z", volumes)
+        self.assertIn(f"-v {root / 'job'}:/job:Z", volumes)
+        self.assertIn(
+            f"-v {root / 'repos' / 'owner__repo'}:{root / 'repos' / 'owner__repo'}:Z",
+            volumes,
+        )
+        self.assertIn(f"-v {tools}:{tools}:ro,Z", volumes)
+
+    def test_pr_repair_disables_repo_hooks_by_default_with_env_override(self) -> None:
+        original_env = os.environ.copy()
+        try:
+            os.environ.pop("AGENT_DISABLE_REPO_HOOKS", None)
+            self.assertTrue(self.pr_repair.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "0"
+            self.assertFalse(self.pr_repair.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "no"
+            self.assertFalse(self.pr_repair.disable_repo_hooks())
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+    def test_pr_repair_container_volumes_mount_git_cache_and_tools_readonly(self) -> None:
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = root / "AtlasMemory-Tools"
+            tools.mkdir()
+            os.environ["AGENT_TOOLS_MOUNT_PATHS"] = str(tools)
+            try:
+                volumes = self.pr_repair.repair_container_volumes(
+                    root / "job" / "codex-home",
+                    root / "jobs" / "checkouts" / "owner__repo" / "pr-7-repair",
+                    root / "job",
+                    root / "repos" / "owner__repo",
+                )
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertIn("-v", volumes)
+        self.assertIn(f"{root / 'job' / 'codex-home'}:/home/agent/.codex:Z", volumes)
+        self.assertIn(f"{root / 'jobs' / 'checkouts' / 'owner__repo' / 'pr-7-repair'}:/work:Z", volumes)
+        self.assertIn(f"{root / 'job'}:/job:Z", volumes)
+        self.assertIn(
+            f"{root / 'repos' / 'owner__repo'}:{root / 'repos' / 'owner__repo'}:Z",
+            volumes,
+        )
+        self.assertIn(f"{tools}:{tools}:ro,Z", volumes)
+
     def test_common_classifies_github_commands_for_throttling(self) -> None:
         common = self.orchestrator.common
 
@@ -698,6 +783,93 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         )
 
         self.assertIn("No explicit test command/result section was found", body)
+
+    def test_worker_validation_gate_fails_missing_section_without_waiver(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Implemented the change.\n\nSummary:\n- Updated the route.",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+        self.assertIn("No explicit Tests or Verification section", gate["reason"])
+
+    def test_worker_validation_gate_fails_empty_section(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated the route.\n\nTests:\n\nNext Steps:\n- Review.",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+        self.assertIn("No explicit Tests or Verification section", gate["reason"])
+
+    def test_worker_validation_gate_fails_unreasoned_skip(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated docs.\n\nTests:\n- Not run.",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+        self.assertIn("without a reason", gate["reason"])
+
+    def test_worker_validation_gate_fails_skip_with_none_reason(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Verification: Not run: none",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+
+    def test_worker_validation_gate_allows_skip_with_reason(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated docs.\n\nVerification: Not run - documentation only change.",
+        )
+
+        self.assertEqual(gate["status"], "passed")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("Not run - documentation only change.", gate["validation"])
+
+    def test_worker_validation_gate_allows_body_waiver_for_missing_evidence(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7, body="Validation waiver: tracked in external QA run 123"),
+            "Implemented the change without a validation section.",
+        )
+
+        self.assertEqual(gate["status"], "waived")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("external QA", gate["waiver"])
+
+    def test_worker_validation_gate_allows_label_waiver_for_unreasoned_skip(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7, labels=["agent:validation-waived"]),
+            "Verification:\n- Tests skipped.",
+        )
+
+        self.assertEqual(gate["status"], "waived")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("agent:validation-waived", gate["waiver"])
+
+    def test_worker_validation_waiver_rejects_none_values(self) -> None:
+        self.assertEqual(self.worker.validation_waiver(issue(body="ValidationWaiver: none")), "")
+        self.assertEqual(self.worker.validation_waiver(issue(body="Validation waiver: `n/a`")), "")
+
+    def test_worker_pr_body_includes_validation_waiver(self) -> None:
+        body = self.worker.build_pr_body(
+            issue(number=7, title="[WS] Add workflow route", body="Validation waiver: manual run approved by QA"),
+            job_id="20260507T000000Z",
+            base_sha="abc123",
+            base_branch="main",
+            branch="agent/issue-7/20260507T000000Z",
+            status="M src/workflows.py\n",
+            diff_stat=" src/workflows.py | 10 +++++\n",
+            codex_log="Implemented change without a validation section.",
+        )
+
+        self.assertIn("Validation waiver: manual run approved by QA", body)
 
     def test_semantic_review_parses_result_values(self) -> None:
         self.assertEqual(self.semantic_review.parse_result("Result: pass\n"), "passed")

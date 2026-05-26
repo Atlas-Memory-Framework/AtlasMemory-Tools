@@ -136,11 +136,14 @@ Current runtime behavior includes:
 
 - per-stage concurrency controls such as `--dispatch-max-per-repo`, `--semantic-review-concurrency`, `--local-validate-concurrency`, `--repair-concurrency`, and `--deployed-validate-concurrency`
 - repo/base/write-scope locks so disjoint one-point issues can run in parallel while overlapping scopes wait
+- pre-PR validation evidence gating so worker-published PRs include exact test/verification commands or an explicit validation waiver
+- scheduler-facing decomposition metadata for dependencies, parallel groups, conflict classes, merge groups, combine policy, validation tier, and critical path ordering
 - shared GitHub CLI throttling under `jobs/github-api-throttle/` to avoid GraphQL and secondary rate limits
 - local-first unattended defaults, with GitHub Project sync moved to explicit `project-reconcile` stages or `--project-reconcile-every N` checkpoints
 - Project item scans controlled by `AGENT_PROJECT_ITEM_LIMIT`, default `500`
 - direct Project `AutomationState` updates for `Queued`, `Running`, `PR Open`, `Failed`, and `Done`
 - decomposition metadata inheritance so child issues retain plan key, parent epic, gates, risk, validation scope, and priority context
+- mandatory workstream completion bundles covering semantic review, garbage collection, docs updates or docs-not-needed rationale, validation evidence, and downstream readiness
 
 See `templates/local-automation-runtime/README.md` and `templates/local-automation-runtime/SETUP.md`.
 

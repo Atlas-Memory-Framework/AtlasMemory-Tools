@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import re
 from dataclasses import dataclass
@@ -133,6 +134,38 @@ def issue_view(repo: str, number: int) -> dict[str, Any] | None:
         ],
         retries=2,
     )
+
+
+def no_checks_expected_for_paths(repo: str, labels: set[str], files: list[str], config_path: str | None) -> tuple[bool, str]:
+    policy = common.no_checks_policy_for_repo(repo, Path(config_path) if config_path else None)
+    if not policy:
+        return False, "no no-checks policy configured"
+    required_label = str(policy.get("require_label") or "").strip()
+    if required_label and required_label not in labels:
+        return False, f"no-checks policy label missing: {required_label}"
+    allowed = [str(pattern).strip() for pattern in policy.get("allow_if_paths") or [] if str(pattern).strip()]
+    if not allowed:
+        return False, "no-checks policy has no allowed paths"
+    if not files:
+        return False, "no changed files reported for no-checks policy"
+    unmatched = [path for path in files if not any(fnmatch.fnmatch(path, pattern) for pattern in allowed)]
+    if unmatched:
+        return False, f"changed files outside no-checks policy: {', '.join(unmatched[:5])}"
+    return True, "no checks expected by path policy"
+
+
+def project_issue_keys(projects_file: str | None) -> set[tuple[str, int]] | None:
+    if not projects_file:
+        return None
+    keys: set[tuple[str, int]] = set()
+    for owner, project_number in common.project_targets(projects_file):
+        for item in common.project_items(owner, project_number):
+            content = item.get("content") or {}
+            repo = content.get("repository")
+            number = content.get("number")
+            if repo and number:
+                keys.add((str(repo), int(number)))
+    return keys
 
 
 def is_local_agent_pr(pr: dict[str, Any]) -> bool:
@@ -828,6 +861,7 @@ def classify(
     duplicate_issue: bool = False,
     overlap_numbers: list[int] | None = None,
     required_checks: list[str] | None = None,
+    required_checks_file: str | None = None,
     check_dependencies: bool = True,
     allow_no_checks: bool = False,
     require_semantic_review: bool = False,
@@ -865,6 +899,8 @@ def classify(
             else:
                 label = MANUAL_LABEL
                 reasons.append("manual or deployed validation required")
+        elif no_checks_expected_for_paths(repo, labels, files, required_checks_file)[0]:
+            reasons.append("no checks expected by path policy")
         elif required_checks:
             label = LOCAL_VALIDATION_REQUIRED_LABEL
             reasons.append("no GitHub checks reported; required checks missing")
@@ -1049,6 +1085,7 @@ def apply_decision(decision: ReviewDecision, *, comment: bool) -> None:
 
 def scan(args: argparse.Namespace) -> list[ReviewDecision]:
     decisions: list[ReviewDecision] = []
+    allowed_issue_keys = project_issue_keys(getattr(args, "projects_file", None))
     for repo in target_repos(args.repos_file):
         repo_decisions: list[ReviewDecision] = []
         summaries = [pr for pr in open_prs(repo, args.limit) if is_local_agent_pr(pr)]
@@ -1056,6 +1093,11 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
         for summary in summaries:
             detail = pr_view(repo, int(summary["number"]))
             if not detail:
+                continue
+            issue_number = linked_issue_number(detail)
+            if allowed_issue_keys is not None and (
+                issue_number is None or (repo, issue_number) not in allowed_issue_keys
+            ):
                 continue
             files = pr_files(repo, int(summary["number"])) if args.detect_overlap else []
             details.append((detail, files))
@@ -1082,6 +1124,7 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
                     files=files,
                     duplicate_issue=bool(issue_number is not None and issue_counts.get(issue_number, 0) > 1),
                     required_checks=common.required_checks_for_repo(repo, Path(args.required_checks_file) if args.required_checks_file else None),
+                    required_checks_file=args.required_checks_file,
                     check_dependencies=args.check_dependencies,
                     allow_no_checks=args.allow_no_checks,
                     require_semantic_review=args.require_semantic_review,
@@ -1139,6 +1182,7 @@ def main() -> None:
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--comment", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--projects-file", help="Only review PRs linked to issues in these GitHub Projects.")
     parser.add_argument("--summary", help="Write structured review decisions to this JSON path.")
     args = parser.parse_args()
 

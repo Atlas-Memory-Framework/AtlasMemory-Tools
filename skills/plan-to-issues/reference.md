@@ -97,6 +97,7 @@ Manifest leaf issue body should include:
 
 - source `## Automation Issue Manifest` / `### Leaf issues` leaf id
 - dispatch mode and dispatch recommendation
+- scheduler metadata when present: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, validation tier
 - execution repo and base branch
 - write scope
 - validation commands
@@ -137,6 +138,13 @@ Canonical section:
   - Dispatch: agent-ready
   - Points: 1
   - Target repo: service
+  - Parallel group: parser-docs
+  - Blocks: LEAF-002
+  - Critical path rank: 1
+  - Merge group: manifest-projection
+  - Combine policy: combine-with-merge-group
+  - Conflict class: plan-to-issues-parser
+  - Validation tier: T2
   - Files in scope:
     - `skills/plan-to-issues/scripts/plan_to_issues.py`
     - `skills/plan-to-issues/scripts/test_plan_to_issues.py`
@@ -151,3 +159,4 @@ Dependency rules:
 - GitHub issue refs and sibling manifest leaf ids are projectable.
 - Merge points, gates, decisions, assumptions, risks, and opaque prose dependencies are guardrails.
 - Guardrailed leaves remain `tracking-only` until dependencies are converted to explicit issue refs or runnable manifest leaf ids.
+- `Blocks` is scheduler metadata for downstream ordering; it is projected to issue bodies and the `Blocks` Project field when present. It does not replace `Depends on`.

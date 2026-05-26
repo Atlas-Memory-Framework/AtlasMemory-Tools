@@ -102,6 +102,30 @@ Use explicit per-stage limits:
 
 Dispatch uses repo/base/write-scope locks by default. Disjoint `## Write Scope` paths can run concurrently; overlapping paths, schema/migration siblings, unknown scope, and repo-wide scope wait for another cycle. Use `--no-write-scope-locks` only for manually supervised runs.
 
+The scheduler contract is metadata-first. Decomposition should emit explicit leaf metadata for dependency graph and batching decisions: `Depends on`, `Blocks`, `Parallel group`, `Critical path rank`, `Merge group`, `Combine policy`, `Conflict class`, `Write Scope`, and `Validation tier`. The runtime may still infer conservative locks from issue bodies, but missing metadata should reduce parallelism instead of widening it.
+
+Recommended dispatch policy:
+
+- Start with `parallel-bounded`, not unbounded fanout.
+- Dispatch independent leaves in the same `Parallel group` only when dependencies are closed and write scopes are disjoint.
+- Treat `Conflict class: schema`, `migration`, `repo-wide`, or unknown scope as exclusive for the repo/base branch.
+- Use `Critical path rank` to run long dependency chains first.
+- Keep implementation PRs separate by default; use an explicit integration leaf or `Merge group` for rollup work.
+- Set `Combine policy: never` for most one-point implementation leaves, `rollup-after-green` for generated/docs/test-only batches, and `integration-pr` only when a final combining PR is intentionally planned.
+
+## Pre-PR Validation Evidence
+
+Workers must produce validation evidence before publishing a draft PR. The worker prompt asks for a `Tests` or `Verification` section with exact commands and results, but prompt compliance is not enough; publication should fail closed when that section is missing or only says tests were skipped.
+
+Expected policy:
+
+- Code changes require an explicit `Tests` or `Verification` section.
+- Existing targeted tests should run whenever the repo exposes a relevant command.
+- New tests are expected for changed behavior, shared runtime logic, dependency resolution, review/finalize gates, and repair routing.
+- Docs/config/generated-only changes may use an explicit validation waiver when the issue body contains `Validation waiver:` / `ValidationWaiver:` with a non-empty reason, or the issue has a controlled waiver label.
+- A waiver is evidence, not approval. Review and finalization still require current-head checks, local validation, deployed/manual validation, or semantic review when those gates apply.
+- `pre-commit` should be configured as a local validation command when a target repo depends on it; do not rely on repository hooks firing inside worker worktrees.
+
 ## GitHub API Throttle
 
 All runtime processes coordinate GitHub CLI pacing through `jobs/github-api-throttle/state.json`.
@@ -166,6 +190,18 @@ Finalization requires:
 - human approval for high-risk workflow, infra, auth/secrets, migration, large diff, or ambiguous product changes
 
 Repair loops are bounded with `--repair-max` and `--repair-cooldown-hours`. Escalate to human action for secrets/config failures, non-reproducible environment failures, missing permissions, unsafe scope expansion, or repeated repair failure.
+
+## Workstream Completion Bundle
+
+A workstream is not complete when its last implementation PR merges. Completion requires an operator review bundle:
+
+- semantic review outcome for the workstream, including any remaining product, data, runtime, or docs risk
+- garbage collection pass for stale followups, obsolete config, generated junk, duplicate source-of-truth, and abandoned automation artifacts or branches when they are safe to remove
+- documentation update, or an explicit `docs-not-needed` rationale in the closure record
+- validation evidence with current-head commands, checks, artifacts, or manual/deployed evidence
+- downstream readiness statement covering dependent issues, Projects, runtime lanes, release/deploy expectations, and followup ownership
+
+Documentation updates are not optional. Every workstream either changes the relevant docs as part of the bundle or records why no doc surface is affected.
 
 ## Operational Runbook
 

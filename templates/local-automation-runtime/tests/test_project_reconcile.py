@@ -123,6 +123,28 @@ class ProjectReconcileTests(unittest.TestCase):
         self.assertIn("src/types/blindConfigTree.types.ts", metadata["WriteScope"])
         self.assertIn("npm run build", metadata["Validation"])
 
+    def test_issue_states_for_items_batches_by_repo(self) -> None:
+        calls = []
+        original_gh_json_or_none = self.reconcile.common.gh_json_or_none
+        original_issue_state = self.reconcile.issue_state
+
+        def fake_gh_json_or_none(args, retries=1):
+            calls.append(args)
+            self.assertEqual(args[:4], ["issue", "list", "--repo", "owner/repo"])
+            return [{"number": 28, "state": "OPEN"}, {"number": 29, "state": "CLOSED"}]
+
+        self.reconcile.common.gh_json_or_none = fake_gh_json_or_none
+        self.reconcile.issue_state = lambda _repo, _number: "UNKNOWN"
+        try:
+            states = self.reconcile.issue_states_for_items([item(28), item(29)])
+        finally:
+            self.reconcile.common.gh_json_or_none = original_gh_json_or_none
+            self.reconcile.issue_state = original_issue_state
+
+        self.assertEqual(states[("owner/repo", 28)], "OPEN")
+        self.assertEqual(states[("owner/repo", 29)], "CLOSED")
+        self.assertEqual(len(calls), 1)
+
     def test_metadata_decision_only_backfills_missing_static_fields(self) -> None:
         original_latest_pr = self.reconcile.latest_pr_for_issue
         self.reconcile.latest_pr_for_issue = lambda _repo, _number: None
