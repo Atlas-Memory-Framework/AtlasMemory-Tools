@@ -101,6 +101,9 @@ REPO_SLUG_ALIASES = {
 DEFAULT_BRANCH_HINTS: dict[str, str] = {}
 ALLOWED_POINT_VALUES = {1, 2, 3, 5, 8, 13}
 GITHUB_LABEL_NAME_MAX_LENGTH = 50
+LABEL_DIGEST_LENGTH = 8
+GITHUB_ISSUE_LIST_LIMIT = 1000
+GITHUB_PROJECT_ITEM_LIST_LIMIT = 1000
 
 # Frozen join-metadata transport (DR-017 / WS2). Escaped-byte budgets apply to full
 # `<!-- ... -->` segments after JSON serialization of the inner envelope object.
@@ -1560,10 +1563,11 @@ def resolve_issue_execution_context(
     *,
     issue_repo: str | None,
     repo_targets: list[str],
+    explicit_execution_repo: str | None = None,
     explicit_base_branch: str | None = None,
     default_base_branch: str | None = None,
 ) -> tuple[str | None, str | None]:
-    execution_repo = infer_issue_execution_repo(issue_repo, repo_targets)
+    execution_repo = normalize_repo_slug(explicit_execution_repo) or infer_issue_execution_repo(issue_repo, repo_targets)
     base_branch = explicit_base_branch or default_base_branch
     if not base_branch:
         base_branch = lookup_repo_default_branch(execution_repo)
@@ -1653,7 +1657,7 @@ def _parse_scalar_frontmatter_block(block: str) -> dict[str, object]:
 
 def _flatten_frontmatter(data: Mapping[str, object]) -> dict[str, str]:
     frontmatter: dict[str, str] = {}
-    for key in ("name", "overview", "summary"):
+    for key in ("name", "overview", "summary", "ProjectionWorkstreamLabel", "projectionWorkstreamLabel"):
         value = data.get(key)
         scalar = _clean_frontmatter_scalar(value)
         if scalar:
@@ -1855,6 +1859,44 @@ def ordered_unique(items: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(item for item in items if item))
 
 
+def shorten_label_name(label: str, *, max_length: int = GITHUB_LABEL_NAME_MAX_LENGTH) -> str:
+    """Return a deterministic GitHub label name within GitHub's 50-character limit."""
+    if len(label) <= max_length:
+        return label
+    digest = hashlib.sha1(label.encode("utf-8")).hexdigest()[:LABEL_DIGEST_LENGTH]
+    suffix = f"-{digest}"
+    prefix = ""
+    token = label
+    if ":" in label:
+        prefix, token = label.split(":", 1)
+        prefix = f"{prefix}:"
+    token_budget = max_length - len(prefix) - len(suffix)
+    if token_budget <= 0:
+        return f"{label[: max_length - len(suffix)]}{suffix}"
+    shortened_token = token[:token_budget].rstrip("-_:.")
+    if not shortened_token:
+        shortened_token = token[:token_budget]
+    return f"{prefix}{shortened_token}{suffix}"
+
+
+def normalize_label_names(labels: Iterable[str]) -> list[str]:
+    return sorted(set(shorten_label_name(label) for label in labels if label))
+
+
+def projection_workstream_label_scope(frontmatter: Mapping[str, str], fallback: str) -> str:
+    for key in (
+        "ProjectionWorkstreamLabel",
+        "projectionWorkstreamLabel",
+        "tracking.ProjectionWorkstreamLabel",
+        "tracking.projectionWorkstreamLabel",
+        "tracking.workstreamLabel",
+    ):
+        value = frontmatter.get(key)
+        if value and value.strip():
+            return value.strip()
+    return fallback
+
+
 def split_csv_values(values: list[str]) -> list[str]:
     items: list[str] = []
     for value in values:
@@ -1973,6 +2015,17 @@ def requires_decomposition(points: int | None, automation_blockers: Iterable[str
     return bool(points is not None and points > 1) or any(
         blocker.startswith("Decompose `points:") for blocker in automation_blockers
     )
+
+
+def effective_issue_ready(
+    issue_ready: bool,
+    points: int | None,
+    automation_blockers: Iterable[str] = (),
+) -> bool:
+    """Return the machine-readable readiness after dispatch guardrails apply."""
+    if requires_decomposition(points, automation_blockers):
+        return False
+    return issue_ready
 
 
 def non_decomposition_automation_blockers(
@@ -2812,13 +2865,7 @@ def infer_owner_labels(owner_names: list[str]) -> list[str]:
     labels: list[str] = []
     for owner_name in owner_names:
         token = owner_name.lower().replace("/", "-").replace(" ", "-")
-        label = f"owner:{token}"
-        if len(label) > 50:
-            digest = hashlib.sha1(label.encode("utf-8")).hexdigest()[:8]
-            token_budget = 50 - len("owner:") - len(digest) - 1
-            token = token[:token_budget].rstrip("-")
-            label = f"owner:{token}-{digest}"
-        labels.append(label)
+        labels.append(shorten_label_name(f"owner:{token}"))
     return labels
 
 
@@ -3215,7 +3262,7 @@ def infer_labels(
         labels.extend(["agent:decomposed", "decomposition:required"])
     if priority:
         labels.append(f"priority:{priority.lower()}")
-    return sorted(set(labels))
+    return normalize_label_names(labels)
 
 
 def workstream_label_value(workstream_token: str) -> str:
@@ -3271,6 +3318,7 @@ def build_epic(
         summary or epic_title,
         "epic",
         plan_key,
+        workstream_label_scope=projection_workstream_label_scope(frontmatter, plan_key),
         repo_targets=repo_targets,
         highest_tier=epic_highest_tier,
     )
@@ -3457,6 +3505,9 @@ def build_children(
         execution_repo, base_branch = resolve_issue_execution_context(
             issue_repo=issue_repo,
             repo_targets=repo_targets,
+            explicit_execution_repo=normalize_branch_field(
+                collect_field_values(lines, "execution repo", "execution repository")
+            ),
             explicit_base_branch=normalize_branch_field(
                 collect_field_values(lines, "base branch", "target base branch")
             ),
@@ -3759,6 +3810,9 @@ def build_manifest_leaf_children(
         execution_repo, base_branch = resolve_issue_execution_context(
             issue_repo=issue_repo,
             repo_targets=repo_targets,
+            explicit_execution_repo=normalize_branch_field(
+                collect_field_values(lines, "execution repo", "execution repository")
+            ),
             explicit_base_branch=normalize_branch_field(
                 collect_field_values(lines, "base branch", "target base branch")
             ),
@@ -3962,7 +4016,7 @@ def build_manifest_leaf_children(
                 repo_targets=repo_targets,
                 repo_note=repo_note,
                 validation_requirements=validation_requirements,
-                issue_ready=issue_ready,
+                issue_ready=effective_issue_ready(issue_ready, points, automation_blockers),
                 status_label=status_label,
                 dispatch_recommendation=dispatch_recommendation,
                 dispatch_mode=runtime_dispatch_mode,
@@ -4059,9 +4113,94 @@ FIELD_DATA_TYPES = {
 }
 PROJECT_FIELD_TYPES = FIELD_DATA_TYPES
 PROJECT_CONFIG_CACHE: dict[tuple[str, int], dict[str, object]] = {}
+PROJECT_ITEM_URL_CACHE: dict[tuple[str, int], dict[str, str]] = {}
+PROJECT_ITEM_RECORD_CACHE: dict[tuple[str, int], dict[str, dict[str, object]]] = {}
+PROJECT_ITEM_ID_RECORD_CACHE: dict[tuple[str, int], dict[str, dict[str, object]]] = {}
+
+
+def parse_project_items(payload: object) -> list[object]:
+    if isinstance(payload, dict):
+        candidate_items = payload.get("items")
+        return candidate_items if isinstance(candidate_items, list) else [payload]
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def gh_project_item_url_map(
+    project_owner: str,
+    project_number: int,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, str]:
+    cache_key = (project_owner, project_number)
+    if not force_refresh and cache_key in PROJECT_ITEM_URL_CACHE:
+        return PROJECT_ITEM_URL_CACHE[cache_key]
+
+    list_cmd = [
+        "gh",
+        "project",
+        "item-list",
+        str(project_number),
+        "--owner",
+        project_owner,
+        "--limit",
+        str(GITHUB_PROJECT_ITEM_LIST_LIMIT),
+        "--format",
+        "json",
+    ]
+    listed = subprocess.run(
+        list_cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    try:
+        payload = json.loads(listed.stdout or "[]")
+    except json.JSONDecodeError:
+        payload = []
+
+    item_by_url: dict[str, str] = {}
+    item_by_url_record: dict[str, dict[str, object]] = {}
+    item_by_id_record: dict[str, dict[str, object]] = {}
+    for current in parse_project_items(payload):
+        if not isinstance(current, dict):
+            continue
+        content = current.get("content")
+        item_id = current.get("id")
+        if isinstance(content, dict) and isinstance(item_id, str):
+            url = content.get("url")
+            if isinstance(url, str) and url:
+                item_by_url[url] = item_id
+                item_by_url_record[url] = current
+                item_by_id_record[item_id] = current
+    PROJECT_ITEM_URL_CACHE[cache_key] = item_by_url
+    PROJECT_ITEM_RECORD_CACHE[cache_key] = item_by_url_record
+    PROJECT_ITEM_ID_RECORD_CACHE[cache_key] = item_by_id_record
+    return item_by_url
+
+
+def gh_project_item_id_record_map(
+    project_owner: str,
+    project_number: int,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, dict[str, object]]:
+    cache_key = (project_owner, project_number)
+    if not force_refresh and cache_key in PROJECT_ITEM_ID_RECORD_CACHE:
+        return PROJECT_ITEM_ID_RECORD_CACHE[cache_key]
+    gh_project_item_url_map(project_owner, project_number, force_refresh=force_refresh)
+    return PROJECT_ITEM_ID_RECORD_CACHE.get(cache_key, {})
 
 
 def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> str | None:
+    existing_items = gh_project_item_url_map(project_owner, project_number)
+    existing_item_id = existing_items.get(issue_url)
+    if existing_item_id:
+        return existing_item_id
+
     cmd = [
         "gh",
         "project",
@@ -4080,49 +4219,25 @@ def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> s
         )
         payload = json.loads(result.stdout or "{}")
         item_id = payload.get("id")
-        return str(item_id) if item_id else None
+        if item_id:
+            item_id = str(item_id)
+            existing_items[issue_url] = item_id
+            PROJECT_ITEM_RECORD_CACHE.setdefault((project_owner, project_number), {})[issue_url] = payload
+            PROJECT_ITEM_ID_RECORD_CACHE.setdefault((project_owner, project_number), {})[item_id] = payload
+            return item_id
+        return None
     except subprocess.CalledProcessError as exc:
-        list_cmd = [
-            "gh",
-            "project",
-            "item-list",
-            str(project_number),
-            "--owner",
-            project_owner,
-            "--limit",
-            "200",
-            "--format",
-            "json",
-        ]
         try:
-            listed = subprocess.run(
-                list_cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=True,
+            refreshed_items = gh_project_item_url_map(
+                project_owner,
+                project_number,
+                force_refresh=True,
             )
-            payload = json.loads(listed.stdout or "[]")
-        except (subprocess.CalledProcessError, json.JSONDecodeError):
-            payload = []
-
-        items: list[object]
-        if isinstance(payload, dict):
-            candidate_items = payload.get("items")
-            items = candidate_items if isinstance(candidate_items, list) else [payload]
-        elif isinstance(payload, list):
-            items = payload
-        else:
-            items = []
-
-        for current in items:
-            if not isinstance(current, dict):
-                continue
-            content = current.get("content")
-            if isinstance(content, dict) and str(content.get("url") or "") == issue_url:
-                item_id = current.get("id")
-                return str(item_id) if item_id else None
+        except subprocess.CalledProcessError:
+            refreshed_items = {}
+        refreshed_item_id = refreshed_items.get(issue_url)
+        if refreshed_item_id:
+            return refreshed_item_id
 
         stderr = (exc.stderr or exc.stdout or "").strip()
         raise RuntimeError(
@@ -4338,6 +4453,32 @@ def gh_project_item_edit_value(
     subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
 
+def project_field_payload_key(field_name: str) -> str:
+    return field_name[:1].lower() + field_name[1:] if field_name else ""
+
+
+def project_field_value_matches(
+    *,
+    field: dict[str, object],
+    desired_value: object,
+    current_item: dict[str, object] | None,
+) -> bool:
+    if not current_item:
+        return False
+    field_name = str(field.get("name") or "")
+    payload_key = project_field_payload_key(field_name)
+    if not payload_key or payload_key not in current_item:
+        return False
+    current_value = current_item.get(payload_key)
+    data_type = FIELD_DATA_TYPES.get(field_name)
+    if data_type == "NUMBER":
+        try:
+            return float(current_value) == float(desired_value)
+        except (TypeError, ValueError):
+            return False
+    return str(current_value) == str(desired_value)
+
+
 def gh_project_sync_issue_fields(
     project_owner: str,
     project_number: int,
@@ -4355,6 +4496,7 @@ def gh_project_sync_issue_fields(
     fields = config["fields"]
     if not isinstance(fields, dict):
         return
+    current_item = gh_project_item_id_record_map(project_owner, project_number).get(item_id)
     for name, value in project_field_values(
         draft,
         issue_repo=issue_repo,
@@ -4363,7 +4505,13 @@ def gh_project_sync_issue_fields(
     ).items():
         field = fields.get(name)
         if isinstance(field, dict):
+            if project_field_value_matches(field=field, desired_value=value, current_item=current_item):
+                continue
             gh_project_item_edit_value(project_id=project_id, item_id=item_id, field=field, value=value)
+            if current_item is not None:
+                current_item[project_field_payload_key(name)] = (
+                    float(value) if FIELD_DATA_TYPES.get(name) == "NUMBER" else str(value)
+                )
 
 
 def label_metadata(name: str) -> tuple[str, str]:
@@ -4486,9 +4634,9 @@ def load_existing_issues(repo: str, existing_issues_file: str | None = None) -> 
         "--state",
         "all",
         "--limit",
-        "200",
+        str(GITHUB_ISSUE_LIST_LIMIT),
         "--json",
-        "number,title,body,labels,url",
+        "number,title,body,labels,url,state",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
     return json.loads(result.stdout)
@@ -4596,6 +4744,43 @@ def plan_path_matches(issue_plan_path: str | None, relative_plan_path: str) -> b
     if issue_plan_path and issue_plan_path == Path(relative_plan_path).name:
         return True
     return False
+
+
+def issue_state(issue: dict[str, object]) -> str:
+    return str(issue.get("state") or "").upper()
+
+
+def unique_issue_matches(matches: list[dict[str, object]]) -> list[dict[str, object]]:
+    seen: set[tuple[object, object]] = set()
+    unique: list[dict[str, object]] = []
+    for match in matches:
+        key = (match.get("number"), match.get("url"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(match)
+    return unique
+
+
+def choose_issue_match(
+    matches: list[dict[str, object]],
+    *,
+    source_id: str,
+    match_kind: str,
+) -> dict[str, object] | None:
+    unique = unique_issue_matches(matches)
+    if not unique:
+        return None
+    if len(unique) == 1:
+        return unique[0]
+
+    open_matches = [match for match in unique if issue_state(match) == "OPEN"]
+    if len(open_matches) == 1:
+        return open_matches[0]
+
+    raise SystemExit(
+        f"{match_kind} match for {source_id!r} is ambiguous; projection remains fail-closed"
+    )
 
 
 def managed_label(name: str) -> bool:
@@ -4734,7 +4919,6 @@ def find_matching_issue(
         title = str(issue.get("title") or "")
         if title == draft.title:
             exact_title_matches.append(issue)
-            continue
         issue_plan_key = extract_issue_body_value(ISSUE_PLAN_KEY_RE, body)
         issue_source_section = extract_issue_body_value(ISSUE_SOURCE_SECTION_RE, body)
         if draft.kind == "epic" and issue_plan_key == desired_plan_key:
@@ -4742,25 +4926,71 @@ def find_matching_issue(
         elif draft.kind != "epic" and desired_source_section and issue_source_section == desired_source_section:
             metadata_matches.append(issue)
 
-    if len(legacy_number_matches) == 1:
-        return legacy_number_matches[0]
-    if len(legacy_number_matches) > 1:
-        raise SystemExit(
-            f"legacy registry match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+    return (
+        choose_issue_match(
+            legacy_number_matches,
+            source_id=draft.source_id,
+            match_kind="legacy registry",
         )
-    if len(exact_title_matches) > 1:
-        raise SystemExit(
-            f"title match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+        or choose_issue_match(
+            metadata_matches,
+            source_id=draft.source_id,
+            match_kind="SourceId/source metadata",
         )
-    if exact_title_matches:
-        return exact_title_matches[0]
-    if len(metadata_matches) > 1:
-        raise SystemExit(
-            f"SourceId/source metadata match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+        or choose_issue_match(
+            exact_title_matches,
+            source_id=draft.source_id,
+            match_kind="title",
         )
-    if metadata_matches:
-        return metadata_matches[0]
-    return None
+    )
+
+
+def find_matching_issue_in_repos(
+    draft: IssueDraft,
+    *,
+    preferred_repo: str,
+    issues_by_repo: dict[str, list[dict[str, object]]],
+    relative_plan_path: str,
+    registry_root_relative: str | None = None,
+) -> tuple[str, dict[str, object] | None]:
+    match = find_matching_issue(
+        draft,
+        existing_issues=issues_by_repo.get(preferred_repo, []),
+        relative_plan_path=relative_plan_path,
+        registry_root_relative=registry_root_relative,
+    )
+    if match is not None:
+        return preferred_repo, match
+
+    fallback_matches: list[tuple[str, dict[str, object]]] = []
+    for repo_key, issues in issues_by_repo.items():
+        if repo_key == preferred_repo:
+            continue
+        repo_match = find_matching_issue(
+            draft,
+            existing_issues=issues,
+            relative_plan_path=relative_plan_path,
+            registry_root_relative=registry_root_relative,
+        )
+        if repo_match is not None:
+            fallback_matches.append((repo_key, repo_match))
+
+    if not fallback_matches:
+        return preferred_repo, None
+    if len(fallback_matches) == 1:
+        return fallback_matches[0]
+
+    open_fallbacks = [
+        (repo_key, match)
+        for repo_key, match in fallback_matches
+        if issue_state(match) == "OPEN"
+    ]
+    if len(open_fallbacks) == 1:
+        return open_fallbacks[0]
+
+    raise SystemExit(
+        f"cross-repo match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+    )
 
 
 def find_matching_epic_tracker_issue(
@@ -4831,7 +5061,6 @@ def build_sync_preview(
 
     for draft in [epic, *children]:
         landing = issue_landing_repo(epic_repo, draft)
-        existing_for_draft = issues_by_repo.get(landing, [])
         if draft.kind == "epic" and not epic_match and tracker_adoption_match:
             existing_labels = issue_label_names(tracker_adoption_match)
             operations.append(
@@ -4863,14 +5092,15 @@ def build_sync_preview(
             if isinstance(tracker_adoption_match.get("number"), int):
                 matched_numbers_by_repo[landing].add(int(tracker_adoption_match["number"]))
             continue
-        match = find_matching_issue(
+        issue_repo, match = find_matching_issue_in_repos(
             draft,
-            existing_issues=existing_for_draft,
+            preferred_repo=landing,
+            issues_by_repo=issues_by_repo,
             relative_plan_path=relative_plan_path,
             registry_root_relative=registry_root_relative,
         )
         if match and isinstance(match.get("number"), int):
-            matched_numbers_by_repo[landing].add(int(match["number"]))
+            matched_numbers_by_repo.setdefault(issue_repo, set()).add(int(match["number"]))
         existing_labels = issue_label_names(match or {})
         desired_labels = merged_labels_for_sync(existing_labels, draft.labels)
         parent_epic_url = (
@@ -4882,7 +5112,7 @@ def build_sync_preview(
         if match and draft.kind == "story" and isinstance(match.get("number"), int):
             desired_body = rebind_body_execution_issue_key(
                 desired_body,
-                issue_repo=landing,
+                issue_repo=issue_repo,
                 issue_number=int(match["number"]),
             )
         changed_fields: list[str] = []
@@ -4904,7 +5134,9 @@ def build_sync_preview(
                 "source_id": draft.source_id,
                 "kind": draft.kind,
                 "title": draft.title,
-                "issue_repo": landing,
+                "issue_repo": issue_repo,
+                "desired_issue_repo": landing,
+                "matched_outside_landing_repo": bool(match and issue_repo != landing),
                 "action": action,
                 "changed_fields": changed_fields,
                 "match": None
@@ -5080,10 +5312,10 @@ def apply_sync_operations(
 
     for child in children:
         landing = issue_landing_repo(epic_repo, child)
-        existing_for_child = issues_by_repo.get(landing, [])
-        match = find_matching_issue(
+        issue_repo, match = find_matching_issue_in_repos(
             child,
-            existing_issues=existing_for_child,
+            preferred_repo=landing,
+            issues_by_repo=issues_by_repo,
             relative_plan_path=relative_plan_path,
             registry_root_relative=registry_root_relative,
         )
@@ -5098,7 +5330,7 @@ def apply_sync_operations(
             issue_url = str(match["url"])
             body = rebind_body_execution_issue_key(
                 body,
-                issue_repo=landing,
+                issue_repo=issue_repo,
                 issue_number=int(match["number"]),
             )
             changed_fields: list[str] = []
@@ -5110,7 +5342,7 @@ def apply_sync_operations(
                 changed_fields.append("labels")
             if changed_fields:
                 gh_issue_edit(
-                    landing,
+                    issue_repo,
                     int(match["number"]),
                     title=child.title,
                     body=body,
@@ -5121,7 +5353,8 @@ def apply_sync_operations(
                     {
                         "source_id": child.source_id,
                         "kind": child.kind,
-                        "issue_repo": landing,
+                        "issue_repo": issue_repo,
+                        "desired_issue_repo": landing,
                         "number": match["number"],
                         "url": issue_url,
                         "changed_fields": changed_fields,
@@ -5132,7 +5365,8 @@ def apply_sync_operations(
                     {
                         "source_id": child.source_id,
                         "kind": child.kind,
-                        "issue_repo": landing,
+                        "issue_repo": issue_repo,
+                        "desired_issue_repo": landing,
                         "number": match["number"],
                         "url": issue_url,
                     }
@@ -5144,7 +5378,7 @@ def apply_sync_operations(
                     project_number,
                     item_id,
                     child,
-                    issue_repo=landing,
+                    issue_repo=issue_repo,
                     plan_key=epic.source_id,
                     parent_epic_url=child_parent_epic_url,
                 )

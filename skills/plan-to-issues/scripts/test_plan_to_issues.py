@@ -266,6 +266,7 @@ def test_project_field_sync_uses_project_item_edit_for_supported_fields() -> Non
 
     with (
         patch.object(mod, "gh_project_config", return_value={"project_id": "project-id", "fields": fields}),
+        patch.object(mod, "gh_project_item_id_record_map", return_value={}),
         patch.object(mod.subprocess, "run", side_effect=fake_run),
     ):
         mod.gh_project_sync_issue_fields(
@@ -281,6 +282,62 @@ def test_project_field_sync_uses_project_item_edit_for_supported_fields() -> Non
     assert any("--single-select-option-id" in call and "story-option" in call for call in calls)
     assert any("--number" in call and "1.0" in call for call in calls)
     assert any("--text" in call and "WS1" in call for call in calls)
+
+
+def test_project_field_sync_skips_matching_project_item_values() -> None:
+    mod = load_plan_to_issues_module()
+    draft = mod.IssueDraft(
+        title="[WS1] Story",
+        body="body",
+        labels=["type:story", "status:ready"],
+        kind="story",
+        source_id="WS1",
+        status_label="status:ready",
+        dispatch_recommendation="auto-dispatch",
+        dispatch_mode="agent-ready",
+        suggested_points=1,
+    )
+    fields = {
+        "Status": {
+            "id": "status-field",
+            "name": "Status",
+            "options": [{"name": "Todo", "id": "todo-option"}],
+        },
+        "ItemType": {
+            "id": "item-type-field",
+            "name": "ItemType",
+            "options": [{"name": "Story", "id": "story-option"}],
+        },
+        "Size": {"id": "size-field", "name": "Size"},
+        "SourceId": {"id": "source-field", "name": "SourceId"},
+    }
+    current_item = {
+        "status": "Todo",
+        "itemType": "Story",
+        "size": 1,
+        "sourceId": "WS1",
+    }
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_: object) -> object:
+        calls.append(cmd)
+        return object()
+
+    with (
+        patch.object(mod, "gh_project_config", return_value={"project_id": "project-id", "fields": fields}),
+        patch.object(mod, "gh_project_item_id_record_map", return_value={"item-id": current_item}),
+        patch.object(mod.subprocess, "run", side_effect=fake_run),
+    ):
+        mod.gh_project_sync_issue_fields(
+            "OWNER",
+            2,
+            "item-id",
+            draft,
+            issue_repo="OWNER/service",
+            plan_key="PLAN-1",
+        )
+
+    assert calls == []
 
 
 def test_frontmatter_supports_multiline_overview_summary_alias_and_nested_tracking(tmp_path: Path) -> None:
@@ -336,6 +393,66 @@ summary: 'Use summary when overview is absent.'
 
     assert "Use summary when overview is absent." in payload["epic"]["body"]
     assert "No overview found in frontmatter." not in payload["epic"]["body"]
+
+
+def test_long_plan_key_generates_github_safe_epic_workstream_label(tmp_path: Path) -> None:
+    plan_path = tmp_path / "atlas_memory_core_operations_mvp_launch_readiness_and_runtime_control.plan.md"
+    plan_path.write_text(
+        """---
+name: atlas memory core operations mvp launch readiness and runtime control
+overview: "Long plan names should not break label preflight."
+---
+
+# Atlas Memory Core Operations MVP Launch Readiness And Runtime Control
+
+## Implementation Plan
+
+### Workstreams + merge points
+- WS1A: One point
+  - Points: 1
+  - Issue ready: true
+  - Target repo: owner/repo
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "owner/repo",
+        "--strategy",
+        "workstreams",
+        "--dry-run",
+    )
+
+    workstream_labels = [
+        label for label in payload["epic"]["labels"] if label.startswith("workstream:")
+    ]
+    assert len(workstream_labels) == 1
+    assert len(workstream_labels[0]) <= 50
+    assert payload["preflight"]["invalid_labels"] == []
+    assert payload["preflight"]["ok"] is True
+
+
+def test_projection_workstream_label_alias_overrides_epic_label_scope(tmp_path: Path) -> None:
+    plan_path = tmp_path / "long_name.plan.md"
+    plan_path.write_text(
+        """---
+name: atlas memory core operations mvp launch readiness and runtime control
+ProjectionWorkstreamLabel: atlas-core-ops-mvp
+overview: "Plans may choose a stable short projection label."
+---
+
+# Atlas Memory Core Operations MVP Launch Readiness And Runtime Control
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli("--plan", str(plan_path), "--repo", "owner/repo", "--dry-run")
+
+    assert "workstream:atlas-core-ops-mvp" in payload["epic"]["labels"]
+    assert payload["preflight"]["invalid_labels"] == []
 
 
 def test_canonical_plan_url_uses_current_source_branch(tmp_path: Path) -> None:
@@ -1637,6 +1754,174 @@ tracking:
     )
 
 
+def test_sync_preview_prefers_open_duplicate_title_match(tmp_path: Path) -> None:
+    mod = load_plan_to_issues_module()
+    plan_path = tmp_path / "duplicate_title.plan.md"
+    plan_path.write_text("# Duplicate title plan\n", encoding="utf-8")
+    rel = mod.plan_reference_context(plan_path)[1]
+    draft = mod.IssueDraft(
+        title="[FUTURE-MAP-001] Publish future project map",
+        body=(
+            f"## Source Plan\n- Plan path: `{rel}`\n"
+            "- Source section: `FUTURE-MAP-001 Publish future project map`\n"
+        ),
+        labels=["type:story"],
+        kind="story",
+        source_id="FUTURE-MAP-001",
+    )
+
+    match = mod.find_matching_issue(
+        draft,
+        existing_issues=[
+            {
+                "number": 160,
+                "title": draft.title,
+                "body": draft.body,
+                "labels": ["type:story"],
+                "url": "https://example.test/issues/160",
+                "state": "CLOSED",
+            },
+            {
+                "number": 96,
+                "title": draft.title,
+                "body": draft.body,
+                "labels": ["type:story"],
+                "url": "https://example.test/issues/96",
+                "state": "OPEN",
+            },
+        ],
+        relative_plan_path=rel,
+    )
+
+    assert match is not None
+    assert match["number"] == 96
+
+
+def test_sync_preview_adopts_existing_issue_from_non_landing_repo(tmp_path: Path) -> None:
+    mod = load_plan_to_issues_module()
+    plan_path = tmp_path / "cross_repo_adopt.plan.md"
+    plan_path.write_text("# Cross repo adopt\n", encoding="utf-8")
+    rel = mod.plan_reference_context(plan_path)[1]
+    root = "OWNER/service"
+    ui = "OWNER/ui"
+    epic = mod.IssueDraft(
+        title="[Epic][HAND] Cross repo adopt",
+        body=f"## Source Plan\n- Plan path: `{rel}`\n- Plan key: `HAND`\n",
+        labels=["type:epic", "status:draft"],
+        kind="epic",
+        source_id="HAND",
+    )
+    child = mod.IssueDraft(
+        title="[UI-CONTRACT-001] Add UI contract",
+        body=(
+            f"## Source Plan\n- Plan path: `{rel}`\n"
+            "- Source section: `UI-CONTRACT-001 Add UI contract`\n"
+        ),
+        labels=["type:story", "status:draft"],
+        kind="story",
+        source_id="UI-CONTRACT-001",
+        execution_repo=ui,
+        dispatch_recommendation="tracking-only",
+        validation_scope="local",
+    )
+    epic_url = "https://example.test/root/72"
+    issues_by_repo = {
+        root: [
+            {
+                "number": 72,
+                "title": epic.title,
+                "body": epic.body,
+                "labels": epic.labels,
+                "url": epic_url,
+                "state": "OPEN",
+            },
+            {
+                "number": 90,
+                "title": child.title,
+                "body": mod.desired_body_for_sync(child, parent_epic_url=epic_url),
+                "labels": mod.merged_labels_for_sync([], child.labels),
+                "url": "https://example.test/root/90",
+                "state": "OPEN",
+            },
+        ],
+        ui: [],
+    }
+
+    preview = mod.build_sync_preview(
+        epic_repo=root,
+        plan_path=plan_path,
+        epic=epic,
+        children=[child],
+        issues_by_repo=issues_by_repo,
+    )
+
+    op = {item["source_id"]: item for item in preview["operations"]}["UI-CONTRACT-001"]
+    assert op["action"] != "create-missing"
+    assert op["issue_repo"] == root
+    assert op["desired_issue_repo"] == ui
+    assert op["matched_outside_landing_repo"] is True
+    assert op["match"]["number"] == 90
+
+
+def test_load_existing_issues_fetches_large_state_snapshot() -> None:
+    mod = load_plan_to_issues_module()
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class Result:
+            stdout = "[]"
+
+        return Result()
+
+    with patch.object(mod.subprocess, "run", fake_run):
+        assert mod.load_existing_issues("OWNER/repo") == []
+
+    cmd = calls[0]
+    assert cmd[cmd.index("--limit") + 1] == "1000"
+    assert cmd[cmd.index("--json") + 1] == "number,title,body,labels,url,state"
+
+
+def test_gh_project_add_reuses_existing_project_item_cache() -> None:
+    mod = load_plan_to_issues_module()
+    mod.PROJECT_ITEM_URL_CACHE.clear()
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        assert "item-add" not in cmd
+
+        class Result:
+            stdout = json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "PVTI_existing",
+                            "content": {
+                                "url": "https://github.com/OWNER/repo/issues/145",
+                            },
+                        }
+                    ]
+                }
+            )
+
+        return Result()
+
+    with patch.object(mod.subprocess, "run", fake_run):
+        assert (
+            mod.gh_project_add(
+                "OWNER",
+                5,
+                "https://github.com/OWNER/repo/issues/145",
+            )
+            == "PVTI_existing"
+        )
+
+    assert calls[0][:3] == ["gh", "project", "item-list"]
+    assert calls[0][calls[0].index("--limit") + 1] == "1000"
+
+
 def test_multi_repo_sync_preview_uses_per_repo_issue_inventories(tmp_path: Path) -> None:
     mod = load_plan_to_issues_module()
     plan_path = tmp_path / "hand_multi_sync.plan.md"
@@ -2048,6 +2333,52 @@ tracking:
     assert len(payload["children"]) == 2
 
 
+def test_manifest_leaf_explicit_execution_repo_overrides_custom_source_repo(tmp_path: Path) -> None:
+    plan_path = tmp_path / "custom_execution_repo.plan.md"
+    plan_path.write_text(
+        """---
+name: custom execution repo
+tracking:
+  epicRepo: OWNER/service
+  baseBranch: fix/base
+---
+
+# Feature: Custom execution repo
+
+## Automation Issue Manifest
+### Leaf issues
+- UI-LEAF-001: Build UI fixture
+  - Dispatch: manual-review
+  - Points: 3
+  - Target repo: OWNER/ui
+  - Execution repo: OWNER/ui
+  - Base branch: main
+  - Depends on: none
+  - Files in scope:
+    - Atlas-Memory-UI/src/api/workflows.ts
+  - Validation:
+    - cd "Atlas-Memory-UI" && npm run test -- workflow-intake-contract.test.ts
+  - Required gates: `G-UI-IntakeContract`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "OWNER/service",
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    child = payload["children"][0]
+    assert child["repo_targets"] == ["OWNER/ui"]
+    assert child["execution_repo"] == "OWNER/ui"
+    assert child["base_branch"] == "main"
+
+
 def test_manifest_leaf_scheduler_metadata_projects_to_body_and_project_fields(tmp_path: Path) -> None:
     plan_path = tmp_path / "automation_manifest_scheduler.plan.md"
     plan_path.write_text(
@@ -2173,6 +2504,65 @@ tracking:
     assert child["automation_blockers"] == [
         "Add explicit manifest dependency metadata (`Depends on: none` or concrete leaf ids/issue refs) before auto-dispatch."
     ]
+
+
+def test_leaf_issues_strategy_marks_oversized_parents_not_issue_ready(tmp_path: Path) -> None:
+    plan_path = tmp_path / "automation_manifest_oversized_parent.plan.md"
+    plan_path.write_text(
+        """---
+name: automation manifest oversized parent
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Automation manifest oversized parent
+
+## Implementation Plan
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: Oversized parent
+  - Dispatch: manual-review
+  - Points: 3
+  - Target repo: service
+  - Depends on:
+    - none
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+  - Validation:
+    - `pytest skills/plan-to-issues/scripts/test_plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--repo",
+        "OWNER/service",
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    child = payload["children"][0]
+    assert child["issue_ready"] is False
+    assert child["status_label"] == "status:draft"
+    assert child["dispatch_recommendation"] == "tracking-only"
+    assert "- Issue ready: `false`" in child["body"]
+    assert child["automation_blockers"] == [
+        "Decompose `points:3` issue into one-point child issues before local automation dispatch."
+    ]
+
+    mod = load_plan_to_issues_module()
+    values = mod.project_field_values(
+        mod.IssueDraft(**child),
+        issue_repo="OWNER/service",
+        plan_key="PLAN-1",
+    )
+
+    assert values["IssueReady"] == "Draft"
+    assert values["AutomationState"] == "Manual"
 
 
 def test_leaf_issues_strategy_blocks_opaque_and_unsupported_dependencies(tmp_path: Path) -> None:
