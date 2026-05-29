@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -19,6 +20,7 @@ from typing import Any
 RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
 CONFIG_PATH = RUNTIME_DIR / "config.env"
 NONE_FIELD_VALUES = {"", "none", "n/a", "na", "-"}
+CODEX_AUTH_INDICATOR_NAMES = ("auth.json", "credentials.json", "session.json")
 POINT_FIELD_RE = re.compile(
     r"(?im)^\s*(?:-\s*)?(?:suggested\s+points|story\s+points|points):\s*`?(\d+)`?\s*$"
 )
@@ -42,6 +44,15 @@ def config_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return str(raw).strip().strip('"').strip("'").lower() not in {"0", "false", "no", "off"}
+
+
+def config_value(name: str, default: str = "") -> str:
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = read_config().get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().strip('"').strip("'")
 
 
 def config_float(name: str, default: float) -> float:
@@ -1094,6 +1105,48 @@ def issue_body_base_branch(issue: dict[str, Any]) -> str | None:
     return None
 
 
+def _first_nonempty_field_value(body: str, *fields: str) -> str | None:
+    for field in fields:
+        for value in body_field_values(body, field):
+            cleaned = str(value).strip().strip("`").strip()
+            if cleaned and cleaned.lower() not in NONE_FIELD_VALUES:
+                return cleaned
+    return None
+
+
+def issue_body_execution_repo(issue: dict[str, Any]) -> str | None:
+    body = str(issue.get("body") or "")
+    value = _first_nonempty_field_value(body, "Execution repo", "ExecutionRepo")
+    if not value:
+        return None
+    return value.split(",", 1)[0].strip()
+
+
+def linked_issue_ref(pr: dict[str, Any], default_repo: str) -> tuple[str, int] | None:
+    body = str(pr.get("body") or "")
+    combined = body + "\n" + str(pr.get("headRefName") or "")
+    patterns = (
+        r"(?im)^\s*Closes\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\s*$",
+        r"(?im)^\s*Closes\s+#(\d+)\s*$",
+        r"(?im)^\s*-\s*Issue:\s+https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)\s*$",
+        r"(?im)^\s*Automated local Codex agent run for #(\d+)\.",
+        r"agent/issue-(\d+)/",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, combined)
+        if not match:
+            continue
+        if len(match.groups()) == 2:
+            return match.group(1), int(match.group(2))
+        return default_repo, int(match.group(1))
+    return None
+
+
+def linked_issue_number(pr: dict[str, Any], default_repo: str) -> int | None:
+    ref = linked_issue_ref(pr, default_repo)
+    return ref[1] if ref else None
+
+
 def replace_issue_body_base(body: str, new_base: str) -> str:
     replacement = f"- Base branch: `{new_base}`"
     pattern = r"(?im)^\s*-\s*Base branch:\s*`[^`]+`\s*$"
@@ -1163,12 +1216,278 @@ def codex_profile_shell_args(kind: str) -> str:
     return " ".join(shlex.quote(arg) for arg in codex_profile_args(kind))
 
 
-def codex_home_copy(job_dir: pathlib.Path) -> pathlib.Path:
-    cfg = read_config()
-    raw_source = os.environ.get("AGENT_CODEX_HOME") or cfg.get("AGENT_CODEX_HOME")
+def _path_is_relative_to(path: pathlib.Path, parent: pathlib.Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_path(path: pathlib.Path) -> pathlib.Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def configured_codex_home_path() -> pathlib.Path | None:
+    raw_source = config_value("AGENT_CODEX_HOME")
     if not raw_source:
+        return None
+    return pathlib.Path(os.path.expandvars(raw_source)).expanduser()
+
+
+def _path_fingerprint(path: pathlib.Path) -> str:
+    return hashlib.sha256(str(_resolve_path(path)).encode("utf-8")).hexdigest()[:16]
+
+
+def _redact_path(path: pathlib.Path) -> str:
+    resolved = _resolve_path(path)
+    runtime_dir = _resolve_path(RUNTIME_DIR)
+    if resolved == runtime_dir or _path_is_relative_to(resolved, runtime_dir):
+        return "$RUNTIME_DIR/" + str(resolved.relative_to(runtime_dir))
+
+    homes: list[pathlib.Path] = []
+    for raw_home in (os.environ.get("HOME"), str(pathlib.Path.home())):
+        if raw_home:
+            homes.append(_resolve_path(pathlib.Path(raw_home)))
+    for home in homes:
+        if resolved == home:
+            return "$HOME"
+        if _path_is_relative_to(resolved, home):
+            return "$HOME/" + str(resolved.relative_to(home))
+
+    return f"<external-codex-home:{_path_fingerprint(resolved)}>"
+
+
+def _shared_codex_home_candidates() -> set[pathlib.Path]:
+    candidates: set[pathlib.Path] = set()
+    for raw_home in (os.environ.get("HOME"), str(pathlib.Path.home())):
+        if raw_home:
+            candidates.add(_resolve_path(pathlib.Path(raw_home) / ".codex"))
+    # Some hosts expose the same home through /home and /var/home. Keep this
+    # explicit because these runtime templates are commonly operated on that host.
+    candidates.add(_resolve_path(pathlib.Path("/home/mat/.codex")))
+    candidates.add(_resolve_path(pathlib.Path("/var/home/mat/.codex")))
+    return candidates
+
+
+def _is_shared_codex_home(path: pathlib.Path) -> bool:
+    resolved = _resolve_path(path)
+    for candidate in _shared_codex_home_candidates():
+        if resolved == candidate or _path_is_relative_to(resolved, candidate):
+            return True
+    return False
+
+
+def _owner_only(path: pathlib.Path) -> bool:
+    try:
+        return (path.stat().st_mode & 0o077) == 0
+    except OSError:
+        return False
+
+
+def _codex_auth_indicator(source: pathlib.Path) -> pathlib.Path | None:
+    for name in CODEX_AUTH_INDICATOR_NAMES:
+        candidate = source / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _iter_config_values(data: Any, key: str) -> list[str]:
+    values: list[str] = []
+    if isinstance(data, dict):
+        for item_key, item_value in data.items():
+            if item_key == key and item_value is not None:
+                values.append(str(item_value).strip())
+            values.extend(_iter_config_values(item_value, key))
+    elif isinstance(data, list):
+        for item in data:
+            values.extend(_iter_config_values(item, key))
+    return [value for value in values if value]
+
+
+def _codex_config_workspace_ids(config_path: pathlib.Path) -> list[str]:
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    values: list[str] = []
+    try:
+        import tomllib
+
+        values = _iter_config_values(tomllib.loads(text), "forced_chatgpt_workspace_id")
+    except Exception:
+        values = []
+
+    if values:
+        return values
+
+    pattern = re.compile(
+        r"(?m)^\s*forced_chatgpt_workspace_id\s*=\s*['\"]?([^'\"\s#]+)['\"]?\s*(?:#.*)?$"
+    )
+    return [match.group(1).strip() for match in pattern.finditer(text) if match.group(1).strip()]
+
+
+def validate_codex_home() -> dict[str, Any]:
+    isolation_required = config_bool("AGENT_CODEX_ISOLATION_REQUIRED", True)
+    allow_shared_home = config_bool("AGENT_ALLOW_SHARED_CODEX_HOME", False)
+    workspace_id = config_value("AGENT_CODEX_WORKSPACE_ID")
+    source = configured_codex_home_path()
+    errors: list[str] = []
+    warnings: list[str] = []
+    codex_home: dict[str, Any] = {
+        "configured": source is not None,
+        "exists": False,
+        "redacted_path": None,
+        "path_sha256": None,
+        "shared_global_home": False,
+    }
+    workspace: dict[str, Any] = {
+        "expected": workspace_id or None,
+        "configured": [],
+        "matched": None if not workspace_id else False,
+    }
+
+    if source is None:
+        errors.append("AGENT_CODEX_HOME is not configured")
+        return {
+            "ok": False,
+            "isolation_required": isolation_required,
+            "shared_home_allowed": allow_shared_home,
+            "codex_home": codex_home,
+            "auth_indicator": None,
+            "workspace": workspace,
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    codex_home.update(
+        {
+            "exists": source.exists(),
+            "redacted_path": _redact_path(source),
+            "path_sha256": _path_fingerprint(source),
+            "shared_global_home": _is_shared_codex_home(source),
+        }
+    )
+
+    if codex_home["shared_global_home"]:
+        if isolation_required and not allow_shared_home:
+            errors.append(
+                "AGENT_CODEX_HOME resolves to a shared/global Codex home; configure a runtime-local "
+                "codex-home or set AGENT_ALLOW_SHARED_CODEX_HOME=true for an emergency override"
+            )
+        elif allow_shared_home:
+            warnings.append("AGENT_ALLOW_SHARED_CODEX_HOME=true allows a shared/global Codex home")
+
+    if not source.exists():
+        errors.append("AGENT_CODEX_HOME does not exist")
+    elif not source.is_dir():
+        errors.append("AGENT_CODEX_HOME is not a directory")
+
+    config_path = source / "config.toml"
+    auth_indicator = _codex_auth_indicator(source) if source.exists() and source.is_dir() else None
+    auth_name = auth_indicator.name if auth_indicator else None
+
+    if source.exists() and source.is_dir() and isolation_required and not _owner_only(source):
+        errors.append("AGENT_CODEX_HOME directory permissions allow group/other access")
+
+    if config_path.exists():
+        if isolation_required and not _owner_only(config_path):
+            errors.append("config.toml permissions allow group/other access")
+    elif isolation_required:
+        errors.append("AGENT_CODEX_HOME is missing config.toml")
+
+    if auth_indicator:
+        if isolation_required and not _owner_only(auth_indicator):
+            errors.append(f"{auth_indicator.name} permissions allow group/other access")
+    elif isolation_required:
+        errors.append(
+            "AGENT_CODEX_HOME is missing a Codex auth indicator such as auth.json, credentials.json, or session.json"
+        )
+
+    if workspace_id:
+        if config_path.exists():
+            configured_workspace_ids = _codex_config_workspace_ids(config_path)
+            workspace["configured"] = configured_workspace_ids
+            workspace["matched"] = workspace_id in configured_workspace_ids
+            if workspace_id not in configured_workspace_ids:
+                errors.append("config.toml forced_chatgpt_workspace_id does not match AGENT_CODEX_WORKSPACE_ID")
+        else:
+            errors.append("AGENT_CODEX_WORKSPACE_ID is set but config.toml is unavailable")
+
+    return {
+        "ok": not errors,
+        "isolation_required": isolation_required,
+        "shared_home_allowed": allow_shared_home,
+        "codex_home": codex_home,
+        "auth_indicator": auth_name,
+        "workspace": workspace,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def codex_provider_metadata(validation: dict[str, Any] | None = None) -> dict[str, Any]:
+    if validation is None:
+        validation = validate_codex_home()
+    return {
+        "schema": "atlas-agent-provider-account.v1",
+        "created_at": now_rfc3339(),
+        "runtime": {
+            "repo": config_value("AGENT_REPO") or None,
+            "base_branch": config_value("AGENT_BASE_BRANCH") or None,
+            "runtime_dir": "$RUNTIME_DIR",
+        },
+        "provider": {
+            "kind": "openai-codex",
+            "account_id": config_value("AGENT_PROVIDER_ACCOUNT_ID") or None,
+            "account_label": config_value("AGENT_PROVIDER_ACCOUNT_LABEL") or None,
+            "subscription_label": config_value("AGENT_PROVIDER_SUBSCRIPTION_LABEL") or None,
+        },
+        "codex": {
+            "workspace_id": config_value("AGENT_CODEX_WORKSPACE_ID") or None,
+            "home": validation.get("codex_home", {}),
+            "auth_indicator": validation.get("auth_indicator"),
+            "isolation_required": validation.get("isolation_required"),
+            "shared_home_allowed": validation.get("shared_home_allowed"),
+            "validation": {
+                "ok": validation.get("ok"),
+                "errors": validation.get("errors", []),
+                "warnings": validation.get("warnings", []),
+                "workspace": validation.get("workspace", {}),
+            },
+        },
+    }
+
+
+def write_codex_provider_metadata(
+    job_dir: pathlib.Path,
+    validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = codex_provider_metadata(validation)
+    write_json(job_dir / "provider-account.json", metadata)
+    return metadata
+
+
+def _codex_validation_error_message(validation: dict[str, Any]) -> str:
+    prefix = (
+        "Codex home isolation validation failed"
+        if validation.get("isolation_required")
+        else "Codex home validation failed"
+    )
+    details = "; ".join(validation.get("errors") or ["unknown error"])
+    return f"{prefix}: {details}"
+
+
+def codex_home_copy(job_dir: pathlib.Path) -> pathlib.Path:
+    validation = validate_codex_home()
+    write_codex_provider_metadata(job_dir, validation)
+    if not validation["ok"]:
+        raise RuntimeError(_codex_validation_error_message(validation))
+    source = configured_codex_home_path()
+    if source is None:
         raise RuntimeError("AGENT_CODEX_HOME is not configured.")
-    source = pathlib.Path(os.path.expandvars(raw_source)).expanduser()
     target = pathlib.Path(tempfile.mkdtemp(prefix="codex-home-", dir=job_dir))
     shutil.copytree(source, target, dirs_exist_ok=True)
     for path in [target, *target.rglob("*")]:

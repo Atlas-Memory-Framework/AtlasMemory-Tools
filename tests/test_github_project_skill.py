@@ -40,6 +40,12 @@ class GithubProjectSkillTests(unittest.TestCase):
         self.assertEqual(fields["ItemType"], ["Epic", "Story", "Spike", "Tracker"])
         self.assertIn("DependsOn", fields)
         self.assertIn("Blocks", fields)
+        self.assertEqual(fields["ParallelGroup"], "TEXT")
+        self.assertEqual(fields["CriticalPathRank"], "NUMBER")
+        self.assertEqual(fields["MergeGroup"], "TEXT")
+        self.assertEqual(fields["CombinePolicy"], "TEXT")
+        self.assertEqual(fields["ConflictClass"], "TEXT")
+        self.assertEqual(fields["ValidationTier"], "TEXT")
         self.assertIn("AutomationState", fields)
         self.assertIn("DispatchMode", fields)
         self.assertIn("DispatchRecommendation", fields)
@@ -65,6 +71,30 @@ class GithubProjectSkillTests(unittest.TestCase):
                 "Done Audit",
             ],
         )
+
+    def test_scheduler_metadata_fields_are_visible_in_operator_views(self) -> None:
+        module = load_create_project_module()
+        args = argparse.Namespace(owner="OWNER", title="Execution", visibility="PRIVATE", no_reuse=False)
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            module.print_dry_run(args)
+
+        payload = json.loads(output.getvalue())
+        views = {view["name"]: view for view in payload["recommended_views"]}
+        scheduler_fields = {
+            "Blocks",
+            "ParallelGroup",
+            "CriticalPathRank",
+            "MergeGroup",
+            "CombinePolicy",
+            "ConflictClass",
+            "ValidationTier",
+        }
+        self.assertTrue(scheduler_fields.issubset(set(views["Dispatch"]["fields"])))
+        self.assertTrue(scheduler_fields.issubset(set(views["Dependencies"]["fields"])))
+        self.assertIn("ValidationTier", views["Gate Audit"]["fields"])
+        self.assertIn("CombinePolicy", views["Decomposition"]["fields"])
 
     def test_dry_run_documents_saved_views_need_template_setup(self) -> None:
         module = load_create_project_module()
@@ -144,6 +174,12 @@ class GithubProjectSkillTests(unittest.TestCase):
         self.assertTrue(any("ItemType field is missing option(s): Spike, Tracker" in warning for warning in warnings))
         created_names = [call.args[2] for call in create_field.call_args_list]
         self.assertIn("DependsOn", created_names)
+        self.assertIn("ParallelGroup", created_names)
+        self.assertIn("CriticalPathRank", created_names)
+        self.assertIn("MergeGroup", created_names)
+        self.assertIn("CombinePolicy", created_names)
+        self.assertIn("ConflictClass", created_names)
+        self.assertIn("ValidationTier", created_names)
         self.assertIn("AutomationState", created_names)
         self.assertIn("DispatchMode", created_names)
         self.assertIn("ValidationScope", created_names)
@@ -159,6 +195,8 @@ class GithubProjectSkillTests(unittest.TestCase):
             self.assertIn(f". {name}", setup)
         self.assertIn("--check-views", setup)
         self.assertIn("gh project copy 4", setup)
+        self.assertIn("`ParallelGroup`", setup)
+        self.assertIn("`ValidationTier`", setup)
 
     def test_ensure_standard_views_fails_missing_with_template_guidance(self) -> None:
         module = load_create_project_module()

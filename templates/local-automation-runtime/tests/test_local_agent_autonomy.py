@@ -56,6 +56,8 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         cls.project_reconcile = load_script("atlas_agent_project_reconcile_test", "atlas-agent-project-reconcile")
         cls.semantic_review = load_script("atlas_agent_semantic_review_test", "atlas-agent-semantic-review")
         cls.pr_repair = load_script("atlas_agent_pr_repair_test", "atlas-agent-pr-repair")
+        cls.issue_decompose = load_script("atlas_agent_issue_decompose_test", "atlas-agent-issue-decompose")
+        cls.workstream_review = load_script("atlas_agent_workstream_review_test", "atlas-agent-workstream-review")
         for module in (cls.triage, cls.orchestrator, cls.reconcile):
             module.common.trusted_authors = lambda: {"trusted-user"}
 
@@ -189,6 +191,97 @@ class LocalAgentAutonomyTests(unittest.TestCase):
                 "model_reasoning_effort=low",
             ],
         )
+
+    def test_common_rejects_shared_codex_home_by_default(self) -> None:
+        common = self.worker.common
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True, mode=0o700)
+            config_path = codex_home / "config.toml"
+            auth_path = codex_home / "auth.json"
+            config_path.write_text('model = "gpt-5"\n', encoding="utf-8")
+            auth_path.write_text("{}\n", encoding="utf-8")
+            os.chmod(config_path, 0o600)
+            os.chmod(auth_path, 0o600)
+            try:
+                os.environ["HOME"] = str(home)
+                os.environ["AGENT_CODEX_HOME"] = str(codex_home)
+                os.environ["AGENT_CODEX_ISOLATION_REQUIRED"] = "true"
+                os.environ["AGENT_ALLOW_SHARED_CODEX_HOME"] = "false"
+
+                validation = common.validate_codex_home()
+
+                os.environ["AGENT_ALLOW_SHARED_CODEX_HOME"] = "true"
+                override_validation = common.validate_codex_home()
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertFalse(validation["ok"])
+        self.assertTrue(validation["codex_home"]["shared_global_home"])
+        self.assertIn("shared/global Codex home", " ".join(validation["errors"]))
+        self.assertTrue(override_validation["ok"])
+        self.assertIn("shared/global Codex home", " ".join(override_validation["warnings"]))
+
+    def test_common_writes_non_secret_provider_metadata_for_codex_copy(self) -> None:
+        common = self.worker.common
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            source = root / "runtime" / "codex-home"
+            job_dir = root / "job"
+            source.mkdir(parents=True, mode=0o700)
+            job_dir.mkdir()
+            home.mkdir()
+            config_path = source / "config.toml"
+            auth_path = source / "auth.json"
+            config_path.write_text('forced_chatgpt_workspace_id = "ws-atlas"\n', encoding="utf-8")
+            auth_path.write_text("{}\n", encoding="utf-8")
+            os.chmod(config_path, 0o600)
+            os.chmod(auth_path, 0o600)
+            try:
+                os.environ["HOME"] = str(home)
+                os.environ["AGENT_REPO"] = "owner/repo"
+                os.environ["AGENT_BASE_BRANCH"] = "main"
+                os.environ["AGENT_CODEX_HOME"] = str(source)
+                os.environ["AGENT_CODEX_ISOLATION_REQUIRED"] = "true"
+                os.environ["AGENT_ALLOW_SHARED_CODEX_HOME"] = "false"
+                os.environ["AGENT_PROVIDER_ACCOUNT_ID"] = "acct-atlas"
+                os.environ["AGENT_PROVIDER_ACCOUNT_LABEL"] = "Atlas"
+                os.environ["AGENT_PROVIDER_SUBSCRIPTION_LABEL"] = "GPT Pro Atlas"
+                os.environ["AGENT_CODEX_WORKSPACE_ID"] = "ws-atlas"
+
+                run_home = common.codex_home_copy(job_dir)
+                run_home_config_exists = (run_home / "config.toml").exists()
+                metadata = json.loads((job_dir / "provider-account.json").read_text(encoding="utf-8"))
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertTrue(run_home_config_exists)
+        self.assertEqual(metadata["runtime"]["repo"], "owner/repo")
+        self.assertEqual(metadata["provider"]["account_id"], "acct-atlas")
+        self.assertEqual(metadata["provider"]["subscription_label"], "GPT Pro Atlas")
+        self.assertEqual(metadata["codex"]["workspace_id"], "ws-atlas")
+        self.assertEqual(metadata["codex"]["auth_indicator"], "auth.json")
+        self.assertTrue(metadata["codex"]["validation"]["ok"])
+        self.assertNotIn(str(source), json.dumps(metadata))
+
+    def test_codex_stages_share_common_home_copy_validation(self) -> None:
+        stages = [
+            self.worker,
+            self.issue_decompose,
+            self.workstream_review,
+            self.semantic_review,
+            self.pr_repair,
+        ]
+
+        for stage in stages:
+            self.assertIs(stage.common, self.worker.common)
+            self.assertIs(stage.common.codex_home_copy, self.worker.common.codex_home_copy)
 
     def test_worker_disables_repo_hooks_by_default_with_env_override(self) -> None:
         original_env = os.environ.copy()
@@ -570,6 +663,36 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         )
 
         self.assertEqual(scopes, ["src/routes/workflow.ts", "tests/workflow.test.ts", "docs/runtime.md"])
+
+    def test_orchestrator_routes_cross_repo_issue_to_execution_repo(self) -> None:
+        item = issue(
+            body="- Execution repo: `owner/ui`\n- Base branch: `main`\n",
+            number=328,
+        )
+
+        self.assertEqual(self.orchestrator.execution_repo_for_issue("owner/planning", item), "owner/ui")
+
+    def test_worker_pr_body_closes_source_issue_for_cross_repo_dispatch(self) -> None:
+        body = self.worker.build_pr_body(
+            issue(number=328, title="Add visualizer"),
+            "job-1",
+            "abc123",
+            "main",
+            "agent/issue-328/job-1",
+            "M src/app.ts\n",
+            "1 file changed\n",
+            "Summary\nTests: passed\n",
+            "owner/planning",
+        )
+
+        self.assertIn("- Issue repo: `owner/planning`", body)
+        self.assertIn("Closes owner/planning#328", body)
+
+    def test_review_and_finalize_parse_cross_repo_linked_issue_ref(self) -> None:
+        pr = {"body": "Closes owner/planning#328\n", "headRefName": "agent/issue-328/job-1"}
+
+        self.assertEqual(self.review.linked_issue_ref("owner/ui", pr), ("owner/planning", 328))
+        self.assertEqual(self.finalize.linked_issue_ref("owner/ui", pr), ("owner/planning", 328))
 
     def test_orchestrator_write_scope_overlap_is_conservative(self) -> None:
         self.assertTrue(self.orchestrator.scopes_overlap("src/routes", "src/routes/workflow.ts"))

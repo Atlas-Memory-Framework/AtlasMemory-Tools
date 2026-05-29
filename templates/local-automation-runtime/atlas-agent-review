@@ -78,6 +78,7 @@ class ReviewDecision:
     files: list[str]
     ci_review: dict[str, Any] | None = None
     current_labels: set[str] | None = None
+    issue_repo: str | None = None
 
 
 def target_repos(path: str | None) -> list[str]:
@@ -184,16 +185,11 @@ def is_local_agent_pr(pr: dict[str, Any]) -> bool:
 
 
 def linked_issue_number(pr: dict[str, Any]) -> int | None:
-    body = str(pr.get("body") or "")
-    for pattern in (
-        r"(?im)^\s*Closes\s+#(\d+)\s*$",
-        r"(?im)^\s*Automated local Codex agent run for #(\d+)\.",
-        r"agent/issue-(\d+)/",
-    ):
-        match = re.search(pattern, body + "\n" + str(pr.get("headRefName") or ""))
-        if match:
-            return int(match.group(1))
-    return None
+    return common.linked_issue_number(pr, "")
+
+
+def linked_issue_ref(repo: str, pr: dict[str, Any]) -> tuple[str, int] | None:
+    return common.linked_issue_ref(pr, repo)
 
 
 def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = None) -> tuple[str, list[str]]:
@@ -889,7 +885,9 @@ def classify(
     ci_review: dict[str, Any] | None = None,
 ) -> ReviewDecision:
     reasons: list[str] = []
-    issue_number = linked_issue_number(pr)
+    issue_ref = linked_issue_ref(repo, pr)
+    issue_repo = issue_ref[0] if issue_ref else None
+    issue_number = issue_ref[1] if issue_ref else None
     label = APPROVED_LABEL
     labels = common.label_names(pr)
     manual_validation = issue_has_manual_validation(issue)
@@ -951,7 +949,7 @@ def classify(
         label = CHECKS_PENDING_LABEL
         reasons.append(f"checks {check_state}: {', '.join(check_details[:5])}")
     if issue and check_dependencies:
-        blockers = common.issue_dependency_blockers(repo, issue)
+        blockers = common.issue_dependency_blockers(issue_repo or repo, issue)
         if blockers:
             label = NEEDS_REPAIR_LABEL
             reasons.extend(f"dependency blocked: {blocker}" for blocker in blockers)
@@ -1001,6 +999,7 @@ def classify(
         number=int(pr["number"]),
         title=str(pr.get("title") or ""),
         url=str(pr.get("url") or ""),
+        issue_repo=issue_repo,
         issue_number=issue_number,
         label=label,
         reasons=reasons,
@@ -1115,21 +1114,23 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
             detail = pr_view(repo, int(summary["number"]))
             if not detail:
                 continue
-            issue_number = linked_issue_number(detail)
+            issue_ref = linked_issue_ref(repo, detail)
             if allowed_issue_keys is not None and (
-                issue_number is None or (repo, issue_number) not in allowed_issue_keys
+                issue_ref is None or issue_ref not in allowed_issue_keys
             ):
                 continue
             files = pr_files(repo, int(summary["number"])) if args.detect_overlap else []
             details.append((detail, files))
-        issue_counts: dict[int, int] = {}
+        issue_counts: dict[tuple[str, int], int] = {}
         for detail, _files in details:
-            issue_number = linked_issue_number(detail)
-            if issue_number is not None:
-                issue_counts[issue_number] = issue_counts.get(issue_number, 0) + 1
+            issue_ref = linked_issue_ref(repo, detail)
+            if issue_ref is not None:
+                issue_counts[issue_ref] = issue_counts.get(issue_ref, 0) + 1
         for detail, files in details:
-            issue_number = linked_issue_number(detail)
-            issue = issue_view(repo, issue_number) if issue_number is not None else None
+            issue_ref = linked_issue_ref(repo, detail)
+            issue_repo = issue_ref[0] if issue_ref else repo
+            issue_number = issue_ref[1] if issue_ref else None
+            issue = issue_view(issue_repo, issue_number) if issue_number is not None else None
             ci_review = None
             if args.review_failed_workflows and failed_check_summaries(detail):
                 job_dir = common.jobs_dir() / f"pr-{int(detail['number'])}-failed-workflow-review-{common.now_id()}"
@@ -1143,7 +1144,7 @@ def scan(args: argparse.Namespace) -> list[ReviewDecision]:
                     detail,
                     issue=issue,
                     files=files,
-                    duplicate_issue=bool(issue_number is not None and issue_counts.get(issue_number, 0) > 1),
+                    duplicate_issue=bool(issue_ref is not None and issue_counts.get(issue_ref, 0) > 1),
                     required_checks=common.required_checks_for_repo(repo, Path(args.required_checks_file) if args.required_checks_file else None),
                     required_checks_file=args.required_checks_file,
                     check_dependencies=args.check_dependencies,
@@ -1169,6 +1170,7 @@ def write_summary(path: str, decisions: list[ReviewDecision]) -> None:
                     "number": decision.number,
                     "title": decision.title,
                     "url": decision.url,
+                    "issue_repo": decision.issue_repo,
                     "issue_number": decision.issue_number,
                     "label": decision.label,
                     "route": route_for_decision(decision),

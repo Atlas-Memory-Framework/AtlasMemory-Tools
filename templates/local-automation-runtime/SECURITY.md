@@ -2,6 +2,12 @@
 
 - Never commit `config.env`; it may contain webhook URLs and account policy.
 - Never commit `codex-home/`; it contains local Codex authentication.
+- Use one runtime-local `codex-home/` per project/provider subscription. A shared user home such as
+  `/home/mat/.codex` couples billing, usage quotas, workspace identity, and local Codex auth across
+  projects; isolated automation rejects it unless `AGENT_ALLOW_SHARED_CODEX_HOME=true` is set for an
+  explicit supervised exception.
+- Do not copy `auth.json` or other Codex auth files between runtime homes. Log in separately inside
+  each runtime-local Codex home.
 - Never commit `repo-env/`; it contains local repo-specific environment overlays.
 - Never commit generated `jobs/`, `logs/`, `repos/`, or `state/`.
 - Keep `AGENT_TRUSTED_AUTHORS` narrow.

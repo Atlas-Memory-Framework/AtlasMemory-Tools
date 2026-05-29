@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# atlas-tools-generated: source=skills/github-project/scripts/create_project.py manifest=atlas-tools.v1 checksum=sha256:f58ea2fe6b0a37e26ec0f7655fd8fbbe09ef096dd9775bc53332520b4a5e5337
+# atlas-tools-generated: source=skills/github-project/scripts/create_project.py manifest=atlas-tools.v1 checksum=sha256:67b5ca005f3b1164ce900336d57409e47fea55aa232c3468a63b85f9ce5877c2
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -41,6 +41,12 @@ FIELD_SPECS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("ParentEpic", "TEXT", ()),
     ("DependsOn", "TEXT", ()),
     ("Blocks", "TEXT", ()),
+    ("ParallelGroup", "TEXT", ()),
+    ("CriticalPathRank", "NUMBER", ()),
+    ("MergeGroup", "TEXT", ()),
+    ("CombinePolicy", "TEXT", ()),
+    ("ConflictClass", "TEXT", ()),
+    ("ValidationTier", "TEXT", ()),
     ("AutomationBlockers", "TEXT", ()),
     ("ReviewGates", "TEXT", ()),
     ("GateTier", "SINGLE_SELECT", ("T0", "T1", "T2", "T3", "T4", "T5", "T6")),
@@ -122,6 +128,13 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "DispatchMode",
             "DispatchRecommendation",
             "DependsOn",
+            "Blocks",
+            "ParallelGroup",
+            "CriticalPathRank",
+            "MergeGroup",
+            "CombinePolicy",
+            "ConflictClass",
+            "ValidationTier",
             "AutomationBlockers",
             "AutomationState",
             "BlockerType",
@@ -148,11 +161,14 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "ExecutionRepo",
             "IssueReady",
             "DispatchRecommendation",
+            "ParallelGroup",
+            "MergeGroup",
             "AutomationState",
             "Status",
             "Linked pull requests",
             "ActivePR",
             "HeadSha",
+            "ValidationTier",
             "Validation",
         ],
     },
@@ -202,6 +218,12 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "Priority",
             "DependsOn",
             "Blocks",
+            "ParallelGroup",
+            "CriticalPathRank",
+            "MergeGroup",
+            "CombinePolicy",
+            "ConflictClass",
+            "ValidationTier",
             "AutomationBlockers",
             "ParentEpic",
             "DispatchRecommendation",
@@ -256,6 +278,7 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "BaseBranch",
             "DispatchRecommendation",
             "RiskTags",
+            "ConflictClass",
             "DependsOn",
             "ReviewGates",
         ],
@@ -276,11 +299,13 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "TargetRepo",
             "ReviewGates",
             "GateTier",
+            "ValidationTier",
             "ValidationScope",
             "Validation",
             "Checks",
             "OnePRContract",
             "WriteScope",
+            "ConflictClass",
             "RiskTags",
         ],
     },
@@ -302,6 +327,9 @@ VIEW_SPECS: tuple[dict[str, Any], ...] = (
             "OnePRContract",
             "DispatchMode",
             "DispatchRecommendation",
+            "MergeGroup",
+            "CombinePolicy",
+            "ConflictClass",
             "WriteScope",
             "AutomationBlockers",
         ],
@@ -377,6 +405,13 @@ TEMPLATE_MAP: dict[str, Any] = {
         "ReviewGates": "Required gates and named review gates.",
         "GateTier": "Highest tier / tier:* labels.",
         "DependsOn": "Leaf ids or explicit GitHub issue refs only.",
+        "Blocks": "Scheduler metadata for downstream ordering; leaf ids or explicit GitHub issue refs.",
+        "ParallelGroup": "Manifest parallel group for bounded fanout scheduling.",
+        "CriticalPathRank": "Manifest critical-path rank used to order dependency-sensitive work.",
+        "MergeGroup": "Manifest merge group for PR batching decisions.",
+        "CombinePolicy": "Manifest combine policy for whether leaves can share a PR.",
+        "ConflictClass": "Manifest conflict class for write-scope collision review.",
+        "ValidationTier": "Manifest validation tier for scheduler and operator triage.",
         "AutomationBlockers": "Opaque dependencies, manual blockers, and dispatch guardrails.",
         "DispatchMode": "Automation Issue Manifest Dispatch value.",
         "DispatchRecommendation": "Projection/runtime dispatch recommendation.",
@@ -444,6 +479,8 @@ Recommended flow:
 - ItemType identifies item shape: Epic, Story, Spike, Tracker.
 - AutomationState identifies human-readable runtime state: Manual, Draft, Planned, Ready, Queued, Running, PR Open, Review, Local Validation, Deployed Validation, Semantic Review, Repair, Waiting, Blocked, Human Action, Failed, Done, Superseded.
 - DispatchMode and DispatchRecommendation explain whether a story can run, needs explicit approval, or is tracking-only.
+- ParallelGroup, CriticalPathRank, MergeGroup, CombinePolicy, ConflictClass, and ValidationTier
+  expose scheduler metadata from the Automation Issue Manifest.
 - ExecutionRepo and BaseBranch prevent cross-repo/base-branch ambiguity during PR creation.
 - WriteScope, OnePRContract, ValidationScope, and ReviewGates make one-PR safety and finalization gates visible without opening the issue body.
 

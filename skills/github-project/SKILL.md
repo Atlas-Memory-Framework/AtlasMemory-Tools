@@ -43,6 +43,12 @@ Required for readable execution planning:
 - `ParentEpic` text
 - `DependsOn` text
 - `Blocks` text
+- `ParallelGroup` text
+- `CriticalPathRank` number
+- `MergeGroup` text
+- `CombinePolicy` text
+- `ConflictClass` text
+- `ValidationTier` text
 - `AutomationBlockers` text
 - `ReviewGates` text
 - `GateTier` single select: `T0`, `T1`, `T2`, `T3`, `T4`, `T5`, `T6`
@@ -96,6 +102,8 @@ Field source map:
 - `ReviewGates` maps from manifest `Required gates` and workstream review gates.
 - `GateTier` maps from `Highest tier` / `tier:*` labels.
 - `DependsOn` should contain leaf ids or explicit GitHub issue refs.
+- `Blocks`, `ParallelGroup`, `CriticalPathRank`, `MergeGroup`, `CombinePolicy`,
+  `ConflictClass`, and `ValidationTier` map from manifest scheduler metadata.
 - `AutomationBlockers`, `BlockerType`, and `BlockerReason` capture opaque dependencies, manual
   blockers, review routes, and dispatch guardrails.
 - `DispatchMode` maps from the manifest `Dispatch` value.
@@ -193,8 +201,9 @@ Purpose: decide what should run next.
   grouping.
 - Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`,
   `Priority`, `Risk`, `RiskTags`, `Size`, `IssueReady`, `DispatchMode`,
-  `DispatchRecommendation`, `DependsOn`, `AutomationBlockers`, `AutomationState`, `BlockerType`,
-  `BlockerReason`, `ValidationScope`, `TargetDate`
+  `DispatchRecommendation`, `DependsOn`, `Blocks`, `ParallelGroup`, `CriticalPathRank`,
+  `MergeGroup`, `CombinePolicy`, `ConflictClass`, `ValidationTier`, `AutomationBlockers`,
+  `AutomationState`, `BlockerType`, `BlockerReason`, `ValidationScope`, `TargetDate`
 
 This is the operator's main queue. If it does not show dependency and risk context, people will pick
 the wrong next issue.
@@ -207,8 +216,8 @@ Purpose: see what the runtime thinks is active.
 - Group by: `AutomationState`
 - Filter: all open non-epic items
 - Fields: title, assignees, labels, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`,
-  `IssueReady`, `DispatchRecommendation`, `AutomationState`, `Status`, linked pull requests,
-  `ActivePR`, `HeadSha`, `Validation`
+  `IssueReady`, `DispatchRecommendation`, `ParallelGroup`, `MergeGroup`, `AutomationState`,
+  `Status`, linked pull requests, `ActivePR`, `HeadSha`, `ValidationTier`, `Validation`
 
 Keep `Status` intentionally simple because automation reconciles it. Group by `AutomationState` for
 finer human detail like `Queued`, `Running`, `PR Open`, validation, review, repair, blocked, and
@@ -238,7 +247,9 @@ Purpose: expose blockers before they become stale board state.
 - Group by: `TargetRepo`
 - Sort: `Priority` ascending, `Risk` descending
 - Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`, `Priority`, `DependsOn`,
-  `Blocks`, `AutomationBlockers`, `ParentEpic`, `DispatchRecommendation`, `AutomationState`
+  `Blocks`, `ParallelGroup`, `CriticalPathRank`, `MergeGroup`, `CombinePolicy`, `ConflictClass`,
+  `ValidationTier`, `AutomationBlockers`, `ParentEpic`, `DispatchRecommendation`,
+  `AutomationState`
 
 This view is required for multi-repo or staged work. A board without dependencies will make blocked
 items look idle or forgotten.
@@ -268,7 +279,7 @@ Purpose: keep repo-boundary and explicit-base-branch work visible.
 - Group by: `ExecutionRepo`
 - Sort: `Priority` ascending, `Risk` descending
 - Fields: title, labels, `ItemType`, `Workstream`, `TargetRepo`, `ExecutionRepo`, `BaseBranch`,
-  `DispatchRecommendation`, `RiskTags`, `DependsOn`, `ReviewGates`
+  `DispatchRecommendation`, `RiskTags`, `ConflictClass`, `DependsOn`, `ReviewGates`
 
 GitHub saved filters cannot compare two Project fields, so template copies should keep this broad
 and operators can narrow by `RiskTags`.
@@ -283,7 +294,8 @@ Purpose: audit gate coverage, validation scope, and one-PR dispatch safety.
 - Sort: `GateTier` descending, `Priority` ascending
 - Sort note: GitHub saved views currently expose at most two sort fields.
 - Fields: title, `ItemType`, `Workstream`, `TargetRepo`, `ReviewGates`, `GateTier`,
-  `ValidationScope`, `Validation`, `Checks`, `OnePRContract`, `WriteScope`, `RiskTags`
+  `ValidationTier`, `ValidationScope`, `Validation`, `Checks`, `OnePRContract`, `WriteScope`,
+  `ConflictClass`, `RiskTags`
 
 Use this before approving dispatch or finalization for risky work.
 
@@ -297,7 +309,8 @@ Purpose: find issues that are too broad for unattended issue-to-PR automation.
 - Group by: `DispatchRecommendation`
 - Sort: `Size` descending, `Priority` ascending
 - Fields: title, labels, `ItemType`, `Workstream`, `TargetRepo`, `Size`, `OnePRContract`,
-  `DispatchMode`, `DispatchRecommendation`, `WriteScope`, `AutomationBlockers`
+  `DispatchMode`, `DispatchRecommendation`, `MergeGroup`, `CombinePolicy`, `ConflictClass`,
+  `WriteScope`, `AutomationBlockers`
 
 For unattended local automation, one-point leaves are the intended executable unit. Larger issues
 should be split or explicitly kept manual/tracking-only.

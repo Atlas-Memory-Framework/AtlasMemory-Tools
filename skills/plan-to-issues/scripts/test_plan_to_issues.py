@@ -183,6 +183,7 @@ def test_project_field_values_populate_execution_board_metadata() -> None:
         status_label="status:ready",
         dispatch_recommendation="auto-dispatch",
         dispatch_mode="agent-ready",
+        agent_type="generalPurpose",
         write_scope=["skills/plan-to-issues/scripts/plan_to_issues.py"],
         validation_commands=["python3 -m pytest"],
         validation_scope="local",
@@ -202,6 +203,7 @@ def test_project_field_values_populate_execution_board_metadata() -> None:
     assert values["ParentEpic"] == "https://github.com/OWNER/service/issues/1"
     assert values["DispatchMode"] == "agent-ready"
     assert values["DispatchRecommendation"] == "auto-dispatch"
+    assert values["AgentType"] == "generalPurpose"
     assert values["IssueReady"] == "Ready"
     assert values["AutomationState"] == "Ready"
     assert values["Size"] == 1
@@ -229,6 +231,26 @@ def test_project_field_values_do_not_mark_oversized_auto_dispatch_ready() -> Non
 
     assert values["AutomationState"] == "Manual"
     assert values["OnePRContract"] == "No"
+
+
+def test_project_field_values_omit_unknown_agent_type() -> None:
+    mod = load_plan_to_issues_module()
+    draft = mod.IssueDraft(
+        title="[LEAF-003] Unknown agent",
+        body="body",
+        labels=["type:story", "status:ready"],
+        kind="story",
+        source_id="LEAF-003",
+        status_label="status:ready",
+        dispatch_recommendation="auto-dispatch",
+        dispatch_mode="agent-ready",
+        agent_type="backend-engineer",
+        suggested_points=1,
+    )
+
+    values = mod.project_field_values(draft, issue_repo="OWNER/service", plan_key="PLAN-1")
+
+    assert "AgentType" not in values
 
 
 def test_project_field_sync_uses_project_item_edit_for_supported_fields() -> None:
@@ -2396,6 +2418,7 @@ tracking:
 ### Leaf issues
 - LEAF-010: Scheduler-aware leaf
   - Dispatch: agent-ready
+  - Agent type: generalPurpose
   - Points: 1
   - Target repo: service
   - Depends on: none
@@ -2427,6 +2450,7 @@ tracking:
     )
 
     child = payload["children"][0]
+    assert child["agent_type"] == "generalPurpose"
     assert child["parallel_group"] == "docs-and-parser"
     assert child["blocks"] == ["LEAF-020", "OWNER/service#44"]
     assert child["critical_path_rank"] == 3
@@ -2441,6 +2465,7 @@ tracking:
     assert "- Combine policy: `combine-with-merge-group`" in child["body"]
     assert "- Conflict class: `plan-to-issues-parser`" in child["body"]
     assert "- Validation tier: `T2`" in child["body"]
+    assert "- Agent type: `generalPurpose`" in child["body"]
 
     mod = load_plan_to_issues_module()
     values = mod.project_field_values(
@@ -2456,6 +2481,7 @@ tracking:
     assert values["CombinePolicy"] == "combine-with-merge-group"
     assert values["ConflictClass"] == "plan-to-issues-parser"
     assert values["ValidationTier"] == "T2"
+    assert values["AgentType"] == "generalPurpose"
 
 
 def test_leaf_issues_strategy_blocks_missing_dependency_metadata(tmp_path: Path) -> None:

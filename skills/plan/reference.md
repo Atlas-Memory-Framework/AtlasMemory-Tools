@@ -307,6 +307,14 @@ Applies when `AutomationTarget` is not `none`.
   - Dispatch: agent-ready | manual-review | blocked | tracking-only
   - Depends on:
     - WS1-OTHER-LEAF
+  - Parallel group: <group id or none>
+  - Blocks:
+    - <leaf issue id, GitHub issue ref, or none>
+  - Critical path rank: <integer or none>
+  - Merge group: <group id or none>
+  - Combine policy: solo | combine-with-merge-group | never-combine | none
+  - Conflict class: <class id or none>
+  - Validation tier: T0 | T1 | T2 | T3 | T4 | T5 | T6 | none
   - External blockers:
     - <owner/status/blocker or none>
   - Manual blockers:
@@ -341,6 +349,8 @@ Applies when `AutomationTarget` is not `none`.
 ### Zero-Context Review (required)
 - Reviewer: doc-reviewer-zero-context
 - Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
 - Re-entry audit answers (required when updating a plan at CurrentStage: Reviews or approved/complete status):
   - What is being built:
   - Why now:
@@ -364,6 +374,8 @@ Applies when `AutomationTarget` is not `none`.
 - Trigger:
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
 - Findings (schema):
   - Technical risks and integration gaps:
   - Missing validations or operational steps:
@@ -377,6 +389,8 @@ Applies when `AutomationTarget` is not `none`.
 ### Security/Privacy Review (required)
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
 - Findings (schema):
   - Security/privacy risks:
   - Missing validations or mitigations:
@@ -389,6 +403,8 @@ Applies when `AutomationTarget` is not `none`.
 ### Human Readability Review (required)
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
 - Findings:
   - Product/system clarity:
   - Technical narrative clarity:
@@ -403,6 +419,8 @@ Applies when `AutomationTarget` is not `none`.
 ### Implementer Readiness Review (required)
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
 - Findings:
   - Top 5 gotchas:
   - Evidence needed to prevent each gotcha:
@@ -415,6 +433,8 @@ Applies when `AutomationTarget` is not `none`.
 ### Automation Readiness Review (required when AutomationTarget != none)
 - Reviewer: automation-readiness
 - Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
 - Findings:
   - Manifest gaps:
   - Dependency/gate/file-scope risks:

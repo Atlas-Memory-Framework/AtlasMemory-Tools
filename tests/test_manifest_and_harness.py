@@ -16,6 +16,7 @@ import harnesslib  # noqa: E402
 import enforce_local_ssot  # noqa: E402
 import verify_repo  # noqa: E402
 import sync_runtime_template  # noqa: E402
+import runtime_control  # noqa: E402
 
 
 class ManifestAndHarnessTests(unittest.TestCase):
@@ -206,6 +207,19 @@ class LocalSsotEnforcementTests(unittest.TestCase):
 
 
 class RuntimeTemplateSyncTests(unittest.TestCase):
+    def test_runtime_control_accepts_leaf_issue_strategy(self) -> None:
+        parser = runtime_control.build_parser()
+
+        preview = parser.parse_args(
+            ["plan-preview", "--plan", "plan.md", "--repo", "OWNER/REPO", "--strategy", "leaf-issues"]
+        )
+        queue = parser.parse_args(
+            ["queue", "--plan", "plan.md", "--repo", "OWNER/REPO", "--strategy", "leaf-issues", "--yes"]
+        )
+
+        self.assertEqual(preview.strategy, "leaf-issues")
+        self.assertEqual(queue.strategy, "leaf-issues")
+
     def test_runtime_sync_preserves_local_config_and_adds_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp) / "runtime"

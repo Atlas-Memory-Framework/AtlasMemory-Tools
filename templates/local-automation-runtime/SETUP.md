@@ -24,6 +24,25 @@
 
 3. Prepare Codex auth under `codex-home/` for the worker container.
 
+   Treat `AGENT_CODEX_HOME` as the Codex/GPT subscription boundary. Each runtime that must use a
+   separate project, provider account, or subscription should keep its own runtime-local `codex-home/`
+   and should be logged in separately by the operator. Do not point isolated automation at a shared
+   user home such as `/home/mat/.codex`; `AGENT_CODEX_ISOLATION_REQUIRED=true` rejects that by default.
+
+   Optional provider metadata fields in `config.env` are written to each job's non-secret
+   `provider-account.json` artifact:
+
+   ```bash
+   AGENT_PROVIDER_ACCOUNT_ID=""
+   AGENT_PROVIDER_ACCOUNT_LABEL="Atlas"
+   AGENT_PROVIDER_SUBSCRIPTION_LABEL="GPT Pro Atlas"
+   AGENT_CODEX_WORKSPACE_ID=""
+   ```
+
+   If `AGENT_CODEX_WORKSPACE_ID` is set, add the matching `forced_chatgpt_workspace_id` to
+   `codex-home/config.toml`. Keep `AGENT_ALLOW_SHARED_CODEX_HOME=false` except for supervised
+   emergency runs where shared billing/data coupling is intentional.
+
 4. Build the local Codex image:
 
    ```bash

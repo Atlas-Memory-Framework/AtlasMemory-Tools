@@ -305,8 +305,9 @@ Next action: add the required approval label(s), then requeue the issue. The wor
 """
 
 
-def build_prompt(issue, repo):
-    return f"""You are working on GitHub issue #{issue["number"]} in repo {repo}.
+def build_prompt(issue, repo, issue_repo=None):
+    issue_context = f"{issue_repo}#{issue['number']}" if issue_repo and issue_repo != repo else f"#{issue['number']}"
+    return f"""You are working on GitHub issue {issue_context} and implementing changes in repo {repo}.
 
 Title:
 {issue.get("title", "")}
@@ -509,7 +510,7 @@ def pr_title(issue):
     return compact_lines(title.replace("\n", " "), 120)
 
 
-def build_pr_body(issue, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log):
+def build_pr_body(issue, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log, issue_repo=None):
     final_response = extract_codex_final_response(codex_log)
     validation_gate = classify_validation_gate(issue, final_response)
     validation = validation_gate["validation"]
@@ -527,11 +528,14 @@ def build_pr_body(issue, job_id, base_sha, base_branch, branch, status, diff_sta
         )
     if validation_gate.get("waiver"):
         validation_text = f"{validation_text}\n\nValidation waiver: {validation_gate['waiver']}"
+    issue_repo = issue_repo or os.environ.get("AGENT_ISSUE_REPO") or os.environ.get("AGENT_REPO", "")
+    close_ref = f"{issue_repo}#{issue['number']}" if issue_repo else f"#{issue['number']}"
     return f"""## Summary
 
-Automated local Codex implementation for issue #{issue["number"]}: **{issue.get("title", "")}**.
+Automated local Codex implementation for issue {close_ref}: **{issue.get("title", "")}**.
 
 - Issue: {issue.get("url", "not recorded")}
+- Issue repo: `{issue_repo}`
 - Job: `{job_id}`
 - Base branch: `{base_branch}`
 - Base SHA: `{base_sha}`
@@ -571,7 +575,7 @@ Diff stat:
 - If GitHub checks are absent, require `agent:local-validation-passed` evidence for this exact head before approval.
 - Keep this PR draft until review and validation gates are satisfied.
 
-Closes #{issue["number"]}
+Closes {close_ref}
 """
 
 
@@ -639,6 +643,7 @@ def configure_worktree_identity(worktree_dir):
 
 def process_issue(issue, publish):
     repo = require_env("AGENT_REPO")
+    issue_repo = os.environ.get("AGENT_ISSUE_REPO") or repo
     base_branch = os.environ.get("AGENT_BASE_BRANCH", "main")
     repos_dir = pathlib.Path(require_env("AGENT_REPOS")).expanduser()
     jobs_dir = pathlib.Path(require_env("AGENT_JOBS")).expanduser()
@@ -653,18 +658,22 @@ def process_issue(issue, publish):
 
     try:
         run(
-            f'gh issue edit {number} --repo {shlex.quote(repo)} '
+            f'gh issue edit {number} --repo {shlex.quote(issue_repo)} '
             f'--add-label "{os.environ["AGENT_RUNNING_LABEL"]}"'
         )
-        common.update_issue_automation_state(repo, int(number), "Running", status="In Progress")
+        common.update_issue_automation_state(issue_repo, int(number), "Running", status="In Progress")
 
         issue_full = gh_json(
-            f"gh issue view {number} --repo {shlex.quote(repo)} "
+            f"gh issue view {number} --repo {shlex.quote(issue_repo)} "
             "--json number,title,body,comments,labels,author,url"
         )
         labels = label_names(issue_full)
         (job_dir / "issue.json").write_text(json.dumps(issue_full, indent=2), encoding="utf-8")
-        (job_dir / "prompt.md").write_text(build_prompt(issue_full, repo), encoding="utf-8")
+        (job_dir / "routing.json").write_text(
+            json.dumps({"issue_repo": issue_repo, "execution_repo": repo, "issue_number": number}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (job_dir / "prompt.md").write_text(build_prompt(issue_full, repo, issue_repo), encoding="utf-8")
 
         safe_repo = repo.replace("/", "__")
         repo_dir = repos_dir / safe_repo
@@ -752,7 +761,7 @@ def process_issue(issue, publish):
         if not paths:
             validation_gate = classify_validation_gate(issue_full, extract_codex_final_response(codex_log))
             comment_issue(
-                repo,
+                issue_repo,
                 number,
                 job_dir,
                 f"""Agent dry-run completed for issue #{number}, but no file changes were produced.
@@ -769,7 +778,7 @@ Codex log:
 `{job_dir}/codex.log`
 """,
             )
-            clear_running_labels(repo, number, failed=True)
+            clear_running_labels(issue_repo, number, failed=True)
             return
 
         if policy_errors:
@@ -790,7 +799,7 @@ Codex log:
                     policy_errors,
                 )
                 comment_issue(
-                    repo,
+                    issue_repo,
                     number,
                     job_dir,
                     build_policy_gate_comment(
@@ -803,11 +812,11 @@ Codex log:
                         job_dir,
                     ),
                 )
-                clear_running_labels(repo, number, failed=True)
+                clear_running_labels(issue_repo, number, failed=True)
                 return
 
             comment_issue(
-                repo,
+                issue_repo,
                 number,
                 job_dir,
                 f"""Agent stopped for issue #{number}: policy gate failed.
@@ -829,7 +838,7 @@ Local artifacts:
 `{job_dir}`
 """,
             )
-            clear_running_labels(repo, number, failed=True)
+            clear_running_labels(issue_repo, number, failed=True)
             return
 
         final_response = extract_codex_final_response(codex_log)
@@ -839,7 +848,7 @@ Local artifacts:
         if publish:
             if not validation_gate["publish_allowed"]:
                 comment_issue(
-                    repo,
+                    issue_repo,
                     number,
                     job_dir,
                     f"""Agent stopped for issue #{number}: validation evidence gate failed.
@@ -861,14 +870,14 @@ Local artifacts:
 `{job_dir}`
 """,
                 )
-                clear_running_labels(repo, number, failed=True)
+                clear_running_labels(issue_repo, number, failed=True)
                 return
 
             run("git add -A", cwd=worktree_dir)
             run(f'git commit -m "agent: address issue #{number}"', cwd=worktree_dir)
             run(f"git push -u origin {shlex.quote(branch)}", cwd=worktree_dir)
 
-            pr_body = build_pr_body(issue_full, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log)
+            pr_body = build_pr_body(issue_full, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log, issue_repo)
             (job_dir / "pr-body.md").write_text(pr_body, encoding="utf-8")
             pr_url = run(
                 f"gh pr create --repo {shlex.quote(repo)} "
@@ -923,14 +932,14 @@ Local artifacts:
 Run the worker with `--publish` after reviewing the dry-run behavior.
 """
 
-        comment_issue(repo, number, job_dir, comment)
-        clear_running_labels(repo, number, pr_open=publish, failed=not publish)
+        comment_issue(issue_repo, number, job_dir, comment)
+        clear_running_labels(issue_repo, number, pr_open=publish, failed=not publish)
 
     except Exception as exc:
         err = str(exc)
         (job_dir / "error.txt").write_text(err, encoding="utf-8")
         comment_issue(
-            repo,
+            issue_repo,
             number,
             job_dir,
             f"""Local Codex agent failed on issue #{number}.
@@ -946,7 +955,7 @@ Local artifacts:
 `{job_dir}`
 """,
         )
-        clear_running_labels(repo, number, failed=True)
+        clear_running_labels(issue_repo, number, failed=True)
 
 
 def requested_issue_number(argv):
@@ -965,6 +974,7 @@ def main():
     only_issue = requested_issue_number(sys.argv)
 
     repo = require_env("AGENT_REPO")
+    issue_repo = os.environ.get("AGENT_ISSUE_REPO") or repo
     pathlib.Path(require_env("AGENT_REPOS")).expanduser().mkdir(parents=True, exist_ok=True)
     pathlib.Path(require_env("AGENT_JOBS")).expanduser().mkdir(parents=True, exist_ok=True)
     pathlib.Path(require_env("AGENT_LOGS")).expanduser().mkdir(parents=True, exist_ok=True)
@@ -972,10 +982,10 @@ def main():
     run("gh auth status", capture=True)
 
     while True:
-        query = f'repo:{repo} is:issue is:open label:"{os.environ["AGENT_READY_LABEL"]}"'
+        query = f'repo:{issue_repo} is:issue is:open label:"{os.environ["AGENT_READY_LABEL"]}"'
         issues = gh_json(
             "gh issue list "
-            f"--repo {shlex.quote(repo)} "
+            f"--repo {shlex.quote(issue_repo)} "
             f"--search {shlex.quote(query)} "
             "--json number,title,body,author,labels,url"
         )

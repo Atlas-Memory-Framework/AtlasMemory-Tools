@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan/README.md manifest=atlas-tools.v1 checksum=sha256:ba77db8b9e93ab29e1cbdf7d8a5ba140b1884df10f07b1b1915abf9202fc9ee4 -->
+<!-- atlas-tools-generated: source=skills/plan/README.md manifest=atlas-tools.v1 checksum=sha256:e07f6fa1aa1ecb883399609a3e38b8c47b1a641dbe6e5c16241ff20b8f539517 -->
 <!-- atlas-tools-generated-end -->
 # /plan skill — how we use it
 
@@ -15,6 +15,8 @@ This README explains the *human workflow* for using `/plan` day-to-day.
 It uses deterministic “gate” checks to decide what to do next, and it logs decisions in the plan’s **Decision Log**.
 Human Readability is enforced as a gate between Technical and Implementation, even though the persisted
 `CurrentStage` remains one of the plan state stages.
+When available, `skills/plan/scripts/validate_plan.py` provides the mechanical gate check for plan
+structure, automation manifest readiness, false approval states, and stale planning reviews.
 
 Authority model:
 
@@ -116,6 +118,8 @@ Expectation when using `/plan`:
 
 - after material edits, **re-run** the required reviews (zero-context, implementer readiness, security/privacy; expert-tech when required)
 - do not leave `PlanningReviewsComplete: Pass` based on stale review text
+- new review blocks should record `ReviewedPlanHash: sha256:<hash>` or timestamp-level `RefreshedAt`
+  so same-day material edits cannot look fresh
 
 ## What you should provide to get the best results
 

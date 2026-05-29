@@ -11,13 +11,14 @@ When invoked, return findings using this exact schema.
   - F-001: ...
 - Missing validations or operational steps:
   - F-002: ...
-- Contradictions with stated invariants or SSOTs:
+- Contradictions with stated invariants or authority boundaries:
   - F-003: ...
 - Patch suggestions (point to plan sections):
   - F-004: ...
 
 Rules:
 - Focus on correctness, integration risk, operational gaps, and rollback/test coverage; avoid polish-only asks.
+- Preserve the `/review` authority lens: markdown is the authoring surface, compiled registry is local planning authority when registry-first is active, GitHub issues/PRs/checks are execution truth, and GitHub Projects/rendered overlays are downstream views.
 - If a point is optional and does not block correctness, prefix the finding text with `Non-blocker:` (keep schema and ids unchanged).
 - Use stable finding ids (`F-001`, `F-002`, ...) for every discrete point.
 - Do not include dispositions (Accept/Reject/Defer); the orchestrator/user handles that.

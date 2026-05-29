@@ -125,6 +125,35 @@ class ProjectReconcileTests(unittest.TestCase):
         self.assertIn("src/types/blindConfigTree.types.ts", metadata["WriteScope"])
         self.assertIn("npm run build", metadata["Validation"])
 
+    def test_desired_metadata_derives_unique_manifest_leaf_source_id(self) -> None:
+        row = item(
+            217,
+            content={
+                **item(217)["content"],
+                "title": "[PROVIDER-BOUNDARY-001] Record provider-chain policy and worktree boundary decisions",
+                "body": """## Source Plan
+- Source section: `Automation Issue Manifest` / `PROVIDER-BOUNDARY-001`
+
+## Automation Manifest Metadata
+- Suggested points: `1`
+
+## Execution State
+- Open dependencies: `PG-LEDGER-001`
+- Manual gates remaining: `provider/tool redaction review required`
+
+## Parent Issue
+Parent issue: #82
+https://github.com/owner/repo/issues/82
+""",
+            },
+            labels=["points:1", "agent:one-point", "type:story", "workstream:provider-boundary-001"],
+        )
+
+        metadata = self.reconcile.desired_metadata(row, "OPEN", None)
+
+        self.assertEqual(metadata["SourceId"], "PROVIDER-BOUNDARY-001#217")
+        self.assertEqual(metadata["ParentEpic"], "https://github.com/owner/repo/issues/82")
+
     def test_desired_metadata_uses_explicit_completion_evidence(self) -> None:
         row = item(
             28,
@@ -383,7 +412,7 @@ https://github.com/owner/repo/issues/5
 
             child_decision = next(decision for decision in decisions if decision.number == 49)
             self.assertEqual(child_decision.field_updates["PlanKey"], "PLAN-1")
-            self.assertEqual(child_decision.field_updates["ParentEpic"], "https://github.com/owner/repo/issues/1")
+            self.assertEqual(child_decision.field_updates["ParentEpic"], "https://github.com/owner/repo/issues/5")
             self.assertEqual(child_decision.field_updates["ReviewGates"], "G-BACKEND-BUILD")
             self.assertEqual(child_decision.field_updates["Risk"], "High")
             self.assertEqual(child_decision.field_updates["RiskTags"], "needs-ci-validation, migration")
@@ -491,7 +520,7 @@ https://github.com/owner/repo/issues/5
             self.assertEqual(child_decision.field_updates["ExecutionRepo"], "owner/repo")
             self.assertEqual(child_decision.field_updates["BaseBranch"], "main")
             self.assertEqual(child_decision.field_updates["PlanKey"], "PLAN-1")
-            self.assertEqual(child_decision.field_updates["ParentEpic"], "https://github.com/owner/repo/issues/1")
+            self.assertEqual(child_decision.field_updates["ParentEpic"], "https://github.com/owner/repo/issues/5")
             self.assertEqual(child_decision.field_updates["ReviewGates"], "G-BACKEND-BUILD")
             self.assertEqual(child_decision.field_updates["GateTier"], "T0")
             self.assertEqual(child_decision.field_updates["Risk"], "High")
@@ -586,6 +615,37 @@ https://github.com/owner/repo/issues/5
         self.assertTrue(all(decision.field_updates["AutomationState"] == "Blocked" for decision in duplicate_decisions))
         self.assertTrue(all(decision.field_updates["IssueReady"] == "Blocked" for decision in duplicate_decisions))
         self.assertTrue(all(decision.field_updates["Size"] == "" for decision in duplicate_decisions))
+
+    def test_decide_can_skip_audit_decisions_for_metadata_only_sync(self) -> None:
+        config = self.reconcile.ProjectConfig(
+            project_id="PROJECT",
+            status_field_id="Status",
+            status_options={},
+            execution_state_field_id=None,
+            execution_state_options={},
+            fields={
+                "SourceId": {"id": "SourceId", "options": []},
+                "AutomationState": {"id": "AutomationState", "options": [{"name": "Ready", "id": "ready"}]},
+            },
+        )
+
+        with mock.patch.object(
+            self.reconcile,
+            "issue_states_for_items",
+            return_value={("owner/repo", 28): "OPEN", ("owner/repo", 29): "OPEN"},
+        ):
+            decisions = self.reconcile.decide(
+                "owner",
+                1,
+                config,
+                [item(28, sourceId="STALE"), item(29, sourceId="STALE")],
+                hydrate_metadata=True,
+                pr_lookup=False,
+                audit=False,
+            )
+
+        self.assertTrue(decisions)
+        self.assertFalse(any(decision.action.startswith("audit-") for decision in decisions))
 
     def test_audit_flags_project_only_rows_and_clears_size(self) -> None:
         config = self.reconcile.ProjectConfig(

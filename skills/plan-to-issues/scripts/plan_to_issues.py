@@ -104,6 +104,7 @@ GITHUB_LABEL_NAME_MAX_LENGTH = 50
 LABEL_DIGEST_LENGTH = 8
 GITHUB_ISSUE_LIST_LIMIT = 1000
 GITHUB_PROJECT_ITEM_LIST_LIMIT = 1000
+ALLOWED_AGENT_TYPES = {"generalPurpose", "test-engineer", "code-reviewer", "explore"}
 
 # Frozen join-metadata transport (DR-017 / WS2). Escaped-byte budgets apply to full
 # `<!-- ... -->` segments after JSON serialization of the inner envelope object.
@@ -393,6 +394,7 @@ class IssueDraft:
     status_label: str = "status:draft"
     dispatch_recommendation: str = "tracking-only"
     dispatch_mode: str | None = None
+    agent_type: str | None = None
     write_scope: list[str] = field(default_factory=list)
     validation_commands: list[str] = field(default_factory=list)
     validation_scope: str = "local"
@@ -2090,6 +2092,13 @@ def clean_optional_manifest_scalar(values: list[str]) -> str | None:
         return None
     value = cleaned[-1]
     return None if value.lower() in {"none", "n/a", "na"} else value
+
+
+def normalize_agent_type(values: list[str]) -> str | None:
+    value = clean_optional_manifest_scalar(values)
+    if value in ALLOWED_AGENT_TYPES:
+        return value
+    return None
 
 
 def clean_manifest_list_values(values: list[str]) -> list[str]:
@@ -3794,6 +3803,7 @@ def build_manifest_leaf_children(
         requested_dispatch_mode = normalize_dispatch_mode(
             collect_field_values(lines, "dispatch mode", "dispatch")
         )
+        agent_type = normalize_agent_type(collect_field_values(lines, "agent type"))
         issue_ready = parse_bool_field(
             collect_field_values(lines, "issue ready"),
             default=requested_dispatch_mode in {"agent-ready", "manual-review"},
@@ -3916,6 +3926,8 @@ def build_manifest_leaf_children(
             f"- Validation scope: `{validation_scope}`",
             f"- Priority: `{priority}`",
         ]
+        if agent_type:
+            body_lines.append(f"- Agent type: `{agent_type}`")
         if parallel_group:
             body_lines.append(f"- Parallel group: `{parallel_group}`")
         if blocks:
@@ -4020,6 +4032,7 @@ def build_manifest_leaf_children(
                 status_label=status_label,
                 dispatch_recommendation=dispatch_recommendation,
                 dispatch_mode=runtime_dispatch_mode,
+                agent_type=agent_type,
                 write_scope=write_scope,
                 validation_commands=validation_commands,
                 validation_scope=validation_scope,
@@ -4358,6 +4371,12 @@ def blocker_type_project_value(draft: IssueDraft) -> str | None:
     return None
 
 
+def agent_type_project_value(draft: IssueDraft) -> str | None:
+    if draft.agent_type in ALLOWED_AGENT_TYPES:
+        return draft.agent_type
+    return None
+
+
 def project_field_values(
     draft: IssueDraft,
     *,
@@ -4392,6 +4411,7 @@ def project_field_values(
         "MergePoint": "\n".join(draft.merge_points),
         "DispatchMode": draft.dispatch_mode,
         "DispatchRecommendation": draft.dispatch_recommendation,
+        "AgentType": agent_type_project_value(draft),
         "IssueReady": issue_ready_project_value(draft),
         "AutomationState": automation_state_project_value(draft),
         "Priority": draft.priority or (first_label_value(labels, "priority:") or "").upper() or None,

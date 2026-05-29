@@ -128,6 +128,10 @@ def has_open_pr_for_issue(repo: str, number: int) -> bool:
     return bool(prs)
 
 
+def execution_repo_for_issue(source_repo: str, issue: dict) -> str:
+    return common.issue_body_execution_repo(issue) or source_repo
+
+
 def issue_points(issue: dict) -> int | None:
     return common.issue_points(issue)
 
@@ -200,7 +204,8 @@ def dispatch_blockers(repo: str, issue: dict, args: argparse.Namespace, *, check
     missing_allow = sorted(recommended_policy_allow_labels(issue) - labels)
     if missing_allow:
         reasons.append("missing policy allow label(s): " + ", ".join(missing_allow))
-    if check_open_pr and has_open_pr_for_issue(repo, issue["number"]):
+    execution_repo = execution_repo_for_issue(repo, issue)
+    if check_open_pr and has_open_pr_for_issue(execution_repo, issue["number"]):
         reasons.append("open PR appears linked")
     if "agent:running" in labels:
         reasons.append("agent:running label")
@@ -270,7 +275,7 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
     if author not in common.trusted_authors():
         print(f"Not queueing {repo}#{issue['number']}: untrusted author {author}.", flush=True)
         return False
-    if args.auto_queue_skip_open_pr and has_open_pr_for_issue(repo, issue["number"]):
+    if args.auto_queue_skip_open_pr and has_open_pr_for_issue(execution_repo_for_issue(repo, issue), issue["number"]):
         print(f"Not queueing {repo}#{issue['number']}: open PR appears linked.", flush=True)
         return False
     if getattr(args, "dry_run", False):
@@ -282,9 +287,16 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
     return True
 
 
-def run_worker(repo: str, number: int, publish: bool, base_branch: str | None = None) -> int:
-    env = common.env_for_repo(repo, base_branch=base_branch)
-    common.ensure_git_identity(common.ensure_repo(repo))
+def run_worker(
+    issue_repo: str,
+    execution_repo: str,
+    number: int,
+    publish: bool,
+    base_branch: str | None = None,
+) -> int:
+    env = common.env_for_repo(execution_repo, base_branch=base_branch)
+    env["AGENT_ISSUE_REPO"] = issue_repo
+    common.ensure_git_identity(common.ensure_repo(execution_repo))
     cmd = [str(common.local_worker()), "--once", "--issue", str(number)]
     if publish:
         cmd.append("--publish")
@@ -790,6 +802,7 @@ def process_once(args: argparse.Namespace) -> int:
         blockers_by_number: dict[int, list[str]] = {}
         repo_runnable = 0
         for issue in repo_ready:
+            execution_repo = execution_repo_for_issue(repo, issue)
             reasons = dispatch_blockers(
                 repo,
                 issue,
@@ -800,7 +813,9 @@ def process_once(args: argparse.Namespace) -> int:
             if reasons:
                 dispatch_preview["blocked"].append(dispatch_preview_record(repo, issue, reasons))
             elif repo_runnable < max_per_repo and len(dispatch_preview["next_runnable"]) < args.max_items:
-                dispatch_preview["next_runnable"].append(dispatch_preview_record(repo, issue, []))
+                record = dispatch_preview_record(repo, issue, [])
+                record["execution_repo"] = execution_repo
+                dispatch_preview["next_runnable"].append(record)
                 repo_runnable += 1
         dispatch_preview["counts"] = {
             "runnable": len(dispatch_preview["next_runnable"]),
@@ -844,13 +859,18 @@ def process_once(args: argparse.Namespace) -> int:
                         )
                 continue
             if getattr(args, "dry_run", False):
-                print(f"DRY-RUN process {repo}#{issue['number']}: {issue['title']}", flush=True)
+                execution_repo = execution_repo_for_issue(repo, issue)
+                print(
+                    f"DRY-RUN process {repo}#{issue['number']} in {execution_repo}: {issue['title']}",
+                    flush=True,
+                )
                 processed += 1
                 repo_processed += 1
                 if processed >= args.max_items:
                     return processed
                 continue
-            print(f"Processing {repo}#{issue['number']}: {issue['title']}")
+            execution_repo = execution_repo_for_issue(repo, issue)
+            print(f"Processing {repo}#{issue['number']} in {execution_repo}: {issue['title']}")
             lease = acquire_issue_lease(repo, issue, lease_stale_seconds)
             if not lease:
                 continue
@@ -862,11 +882,11 @@ def process_once(args: argparse.Namespace) -> int:
                     check=False,
                 )
                 continue
-            base_branch = dispatch_base_branch(repo, issue)
+            base_branch = dispatch_base_branch(execution_repo, issue)
             scope_lease: list[Path] = []
             if getattr(args, "write_scope_locks", True):
                 scope_lease, scope_blocker = acquire_write_scope_lease(
-                    repo,
+                    execution_repo,
                     issue,
                     base_branch,
                     lease_stale_seconds,
@@ -880,6 +900,7 @@ def process_once(args: argparse.Namespace) -> int:
             try:
                 rc = run_worker(
                     repo,
+                    execution_repo,
                     issue["number"],
                     publish=args.publish,
                     base_branch=common.issue_body_base_branch(issue),
