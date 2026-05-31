@@ -329,6 +329,14 @@ def parent_field_or(parent: dict[str, Any], field: str, fallback: str) -> str:
     return fallback if value == "none" else value
 
 
+def parent_scalar_field_or(parent: dict[str, Any], field: str, fallback: str) -> str:
+    for value in common.body_field_values(str(parent.get("body") or ""), field):
+        cleaned = value.strip().strip("`").strip()
+        if cleaned and cleaned.lower() not in common.NONE_FIELD_VALUES:
+            return cleaned
+    return fallback
+
+
 def parent_scheduler_field(parent: dict[str, Any], field: str, fallback: str = "") -> str:
     value = parent_field_text(parent, field)
     return fallback if value == "none" else value
@@ -422,9 +430,9 @@ def child_body(parent: dict[str, Any], repo: str, child: dict[str, Any]) -> str:
     elif manual_gates != "none":
         dispatch_recommendation = "review-before-dispatch"
     base_branch = parent_base_branch(parent)
-    target_repo = parent_field_or(parent, "Target repo(s)", repo)
-    execution_repo = parent_field_or(parent, "Execution repo", target_repo)
-    validation_scope = parent_field_or(parent, "Validation scope", "ci")
+    target_repo = parent_scalar_field_or(parent, "Target repo(s)", repo)
+    execution_repo = parent_scalar_field_or(parent, "Execution repo", target_repo)
+    validation_scope = parent_scalar_field_or(parent, "Validation scope", "ci")
     risk_tags = parent_field_text(parent, "Risk tags")
     highest_tier = parent_field_text(parent, "Highest tier")
     priority = parent_field_text(parent, "Priority")

@@ -311,6 +311,30 @@ https://github.com/owner/repo/issues/1
         self.assertIn("## Parent Epic\nhttps://github.com/owner/repo/issues/1", body)
         self.assertIn("Parent issue: #5", body)
 
+    def test_child_body_uses_first_scalar_routing_metadata(self) -> None:
+        parent = issue(
+            number=5,
+            body="""## Source Plan
+- Execution repo: `owner/repo`
+
+## Automation Manifest Metadata
+- Target repo(s): `owner/repo`
+- Execution repo: `owner/repo`
+- Validation scope: `ci`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            labels=["points:5"],
+        )
+        child = {"body": "Scope: server/src/app.py", "labels": ["points:1"]}
+
+        body = self.decompose.child_body(parent, "owner/repo", child)
+
+        self.assertIn("- Execution repo: `owner/repo`", body)
+        self.assertNotIn("- Execution repo: `owner/repo; owner/repo`", body)
+
     def test_child_body_includes_scheduler_metadata(self) -> None:
         parent = issue(
             body="""## Automation Manifest Metadata
