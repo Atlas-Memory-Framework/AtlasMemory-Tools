@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:b574731240c31c61643b5cc55b4733f04abeea6ea30190dae659b17bf9a8192b
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:0790029324dc0a6bf1ac4d4d63d7cde354d10d05608ed69f20b858ec59fae196
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -2640,6 +2640,25 @@ def extract_issue_refs(value: str, *, default_repo: str | None = None) -> list[s
     return ordered_unique(refs)
 
 
+def legacy_issue_ref_from_values(
+    values: list[str],
+    *,
+    default_repo: str | None = None,
+) -> tuple[str | None, int | None]:
+    for value in values:
+        refs = extract_issue_refs(value, default_repo=default_repo)
+        if not refs:
+            continue
+        ref = refs[0]
+        if ref.startswith("#"):
+            if default_repo is None:
+                return None, int(ref[1:])
+            return default_repo, int(ref[1:])
+        repo, number = ref.rsplit("#", 1)
+        return repo, int(number)
+    return None, None
+
+
 def extract_non_issue_dependency_tokens(value: str) -> list[str]:
     return ordered_unique(
         [
@@ -3830,6 +3849,10 @@ def build_manifest_leaf_children(
             ),
             default_base_branch=plan_base_branch or frontmatter.get("tracking.baseBranch"),
         )
+        legacy_issue_repo, legacy_issue_number = legacy_issue_ref_from_values(
+            collect_field_values(lines, "issue ref", "existing issue", "github issue"),
+            default_repo=execution_repo or issue_repo,
+        )
         blockers = explicit_blockers
         points = points_for_issue(title, repo_targets, gates, lines)
         automation_blockers = ordered_unique(
@@ -4020,6 +4043,8 @@ def build_manifest_leaf_children(
                 kind="story",
                 source_id=source_id,
                 execution_repo=execution_repo,
+                legacy_issue_repo=legacy_issue_repo,
+                legacy_issue_number=legacy_issue_number,
                 base_branch=base_branch,
                 suggested_points=points,
                 dependencies=dependencies,
@@ -4772,6 +4797,10 @@ def issue_state(issue: dict[str, object]) -> str:
     return str(issue.get("state") or "").upper()
 
 
+def issue_is_closed(issue: dict[str, object] | None) -> bool:
+    return bool(issue) and issue_state(issue) == "CLOSED"
+
+
 def unique_issue_matches(matches: list[dict[str, object]]) -> list[dict[str, object]]:
     seen: set[tuple[object, object]] = set()
     unique: list[dict[str, object]] = []
@@ -5081,6 +5110,14 @@ def build_sync_preview(
         key: set() for key in issues_by_repo
     }
 
+    def match_summary(match: dict[str, object]) -> dict[str, object]:
+        return {
+            "number": match.get("number"),
+            "title": match.get("title"),
+            "url": match.get("url"),
+            "state": match.get("state"),
+        }
+
     for draft in [epic, *children]:
         landing = issue_landing_repo(epic_repo, draft)
         if draft.kind == "epic" and not epic_match and tracker_adoption_match:
@@ -5093,11 +5130,7 @@ def build_sync_preview(
                     "issue_repo": landing,
                     "action": "use-existing-epic-tracker",
                     "changed_fields": [],
-                    "match": {
-                        "number": tracker_adoption_match.get("number"),
-                        "title": tracker_adoption_match.get("title"),
-                        "url": tracker_adoption_match.get("url"),
-                    },
+                    "match": match_summary(tracker_adoption_match),
                     "labels": {
                         "existing": existing_labels,
                         "desired": existing_labels,
@@ -5140,7 +5173,14 @@ def build_sync_preview(
         changed_fields: list[str] = []
         label_additions = [label for label in desired_labels if label not in existing_labels]
         label_removals = [label for label in existing_labels if label not in desired_labels]
-        if not match:
+        note = None
+        if issue_is_closed(match):
+            changed_fields = []
+            label_additions = []
+            label_removals = []
+            action = "skip-closed"
+            note = "Closed/completed issues are historical records and are never updated by sync-preview/sync-apply."
+        elif not match:
             changed_fields = ["title", "body", "labels"]
             action = "create-missing"
         else:
@@ -5163,11 +5203,7 @@ def build_sync_preview(
                 "changed_fields": changed_fields,
                 "match": None
                 if not match
-                else {
-                    "number": match.get("number"),
-                    "title": match.get("title"),
-                    "url": match.get("url"),
-                },
+                else match_summary(match),
                 "labels": {
                     "existing": existing_labels,
                     "desired": desired_labels,
@@ -5178,6 +5214,7 @@ def build_sync_preview(
                 "validation_scope": draft.validation_scope,
                 "risk_tags": draft.risk_tags,
                 "body_changed": "body" in changed_fields,
+                "note": note,
             }
         )
 
@@ -5233,6 +5270,7 @@ def apply_sync_operations(
     created: list[dict[str, object]] = []
     updated: list[dict[str, object]] = []
     unchanged: list[dict[str, object]] = []
+    skipped_closed: list[dict[str, object]] = []
 
     epic_match = find_matching_issue(
         epic,
@@ -5258,7 +5296,19 @@ def apply_sync_operations(
     epic_remove = [label for label in epic_existing_labels if label not in epic_desired_labels]
     epic_add = [label for label in epic_desired_labels if label not in epic_existing_labels]
 
-    if epic_match:
+    if issue_is_closed(epic_match):
+        epic_url = str(epic_match["url"])
+        skipped_closed.append(
+            {
+                "source_id": epic.source_id,
+                "kind": epic.kind,
+                "issue_repo": epic_key,
+                "number": epic_match["number"],
+                "url": epic_url,
+                "reason": "closed/completed issue must not be edited",
+            }
+        )
+    elif epic_match:
         epic_body = desired_body_for_sync(epic)
         epic_changed_fields: list[str] = []
         if str(epic_match.get("title") or "") != epic.title:
@@ -5321,7 +5371,7 @@ def apply_sync_operations(
                     "url": epic_url,
                 }
             )
-    if project_owner and project_number:
+    if project_owner and project_number and not issue_is_closed(epic_match):
         item_id = gh_project_add(project_owner, project_number, epic_url)
         gh_project_sync_issue_fields(
             project_owner,
@@ -5347,6 +5397,20 @@ def apply_sync_operations(
         remove_labels = [label for label in existing_labels if label not in desired_labels]
         child_parent_epic_url = None if child.source_id == tracker_adoption_source_id else epic_url
         body = desired_body_for_sync(child, parent_epic_url=child_parent_epic_url)
+
+        if issue_is_closed(match):
+            skipped_closed.append(
+                {
+                    "source_id": child.source_id,
+                    "kind": child.kind,
+                    "issue_repo": issue_repo,
+                    "desired_issue_repo": landing,
+                    "number": match["number"],
+                    "url": str(match["url"]),
+                    "reason": "closed/completed issue must not be edited",
+                }
+            )
+            continue
 
         if match:
             issue_url = str(match["url"])
@@ -5476,6 +5540,7 @@ def apply_sync_operations(
         "created": created,
         "updated": updated,
         "unchanged": unchanged,
+        "skipped_closed": skipped_closed,
     }
 
 

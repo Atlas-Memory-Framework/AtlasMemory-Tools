@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:30847f5e08212e87f6ca663991aed84a7aef44a04f32f95b884763ba26441c46
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:635a267195b1d6840607b75a19c495654771a719b487a71183c657331e3b57b5
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -1717,6 +1717,7 @@ tracking:
                     "body": "## Source Plan\n- Plan path: `sync_preview.plan.md`\n- Plan key: `SYNC-PREVIEW`\n",
                     "labels": ["type:epic", "status:ready"],
                     "url": "https://example.test/issues/40",
+                    "state": "OPEN",
                 },
                 {
                     "number": 41,
@@ -1724,6 +1725,7 @@ tracking:
                     "body": "## Source Plan\n- Plan path: `sync_preview.plan.md`\n- Source section: `WS1 Existing issue body should be refreshed`\n\n## Parent Epic\nhttps://example.test/issues/40\n",
                     "labels": ["type:story", "status:ready"],
                     "url": "https://example.test/issues/41",
+                    "state": "OPEN",
                 },
                 {
                     "number": 99,
@@ -1751,10 +1753,12 @@ tracking:
 
     ops = {op["source_id"]: op for op in payload["sync_preview"]["operations"]}
     assert ops["SYNC-PREVIEW"]["match"]["number"] == 40
+    assert ops["SYNC-PREVIEW"]["match"]["state"] == "OPEN"
     assert ops["SYNC-PREVIEW"]["action"] == "update"
     assert "body" in ops["SYNC-PREVIEW"]["changed_fields"]
 
     assert ops["WS1"]["match"]["number"] == 41
+    assert ops["WS1"]["match"]["state"] == "OPEN"
     assert ops["WS1"]["action"] == "update"
     assert "labels" in ops["WS1"]["changed_fields"]
     assert ops["WS1"]["body_changed"] is True
@@ -1819,6 +1823,142 @@ def test_sync_preview_prefers_open_duplicate_title_match(tmp_path: Path) -> None
 
     assert match is not None
     assert match["number"] == 96
+
+
+def test_sync_preview_skips_single_closed_match(tmp_path: Path) -> None:
+    mod = load_plan_to_issues_module()
+    plan_path = tmp_path / "closed_match.plan.md"
+    plan_path.write_text("# Closed match plan\n", encoding="utf-8")
+    rel = mod.plan_reference_context(plan_path)[1]
+    repo = "OWNER/service"
+    epic = mod.IssueDraft(
+        title="[Epic][CLOSED-MATCH] Closed match plan",
+        body=f"## Source Plan\n- Plan path: `{rel}`\n- Plan key: `CLOSED-MATCH`\n",
+        labels=["type:epic"],
+        kind="epic",
+        source_id="CLOSED-MATCH",
+    )
+    child = mod.IssueDraft(
+        title="[WS1] Closed historical issue",
+        body=f"## Source Plan\n- Plan path: `{rel}`\n- Source section: `WS1 Closed historical issue`\n",
+        labels=["type:story", "status:blocked"],
+        kind="story",
+        source_id="WS1",
+    )
+
+    preview = mod.build_sync_preview(
+        epic_repo=repo,
+        plan_path=plan_path,
+        epic=epic,
+        children=[child],
+        issues_by_repo={
+            repo: [
+                {
+                    "number": 1,
+                    "title": epic.title,
+                    "body": epic.body,
+                    "labels": ["type:epic"],
+                    "url": "https://example.test/issues/1",
+                    "state": "OPEN",
+                },
+                {
+                    "number": 2,
+                    "title": child.title,
+                    "body": child.body,
+                    "labels": ["type:story"],
+                    "url": "https://example.test/issues/2",
+                    "state": "CLOSED",
+                },
+            ]
+        },
+    )
+
+    ops = {op["source_id"]: op for op in preview["operations"]}
+    assert ops["WS1"]["action"] == "skip-closed"
+    assert ops["WS1"]["changed_fields"] == []
+    assert ops["WS1"]["body_changed"] is False
+    assert ops["WS1"]["labels"]["add"] == []
+    assert ops["WS1"]["labels"]["remove"] == []
+
+
+def test_sync_apply_skips_single_closed_match(tmp_path: Path) -> None:
+    mod = load_plan_to_issues_module()
+    plan_path = tmp_path / "closed_apply.plan.md"
+    plan_path.write_text("# Closed apply plan\n", encoding="utf-8")
+    rel = mod.plan_reference_context(plan_path)[1]
+    repo = "OWNER/service"
+    epic = mod.IssueDraft(
+        title="[Epic][CLOSED-APPLY] Closed apply plan",
+        body=f"## Source Plan\n- Plan path: `{rel}`\n- Plan key: `CLOSED-APPLY`\n",
+        labels=["type:epic"],
+        kind="epic",
+        source_id="CLOSED-APPLY",
+    )
+    child = mod.IssueDraft(
+        title="[WS1] Closed historical issue",
+        body=f"## Source Plan\n- Plan path: `{rel}`\n- Source section: `WS1 Closed historical issue`\n",
+        labels=["type:story", "status:blocked"],
+        kind="story",
+        source_id="WS1",
+    )
+    edit_calls: list[tuple[str, int]] = []
+    create_calls: list[tuple[str, str]] = []
+
+    def fake_edit(repo_arg: str, number: int, **kwargs: object) -> str:
+        edit_calls.append((repo_arg, number))
+        return "ok"
+
+    def fake_create(repo_arg: str, draft: mod.IssueDraft) -> str:
+        create_calls.append((repo_arg, draft.source_id))
+        return f"https://example.test/{draft.source_id}"
+
+    with (
+        patch.object(mod, "gh_issue_edit", side_effect=fake_edit),
+        patch.object(mod, "gh_issue_create", side_effect=fake_create),
+        patch.object(mod, "gh_project_add"),
+    ):
+        result = mod.apply_sync_operations(
+            epic_repo=repo,
+            project_owner=None,
+            project_number=None,
+            plan_path=plan_path,
+            epic=epic,
+            children=[child],
+            issues_by_repo={
+                repo: [
+                    {
+                        "number": 1,
+                        "title": epic.title,
+                        "body": epic.body,
+                        "labels": ["type:epic"],
+                        "url": "https://example.test/issues/1",
+                        "state": "OPEN",
+                    },
+                    {
+                        "number": 2,
+                        "title": child.title,
+                        "body": child.body,
+                        "labels": ["type:story"],
+                        "url": "https://example.test/issues/2",
+                        "state": "CLOSED",
+                    },
+                ]
+            },
+        )
+
+    assert edit_calls == []
+    assert create_calls == []
+    assert result["skipped_closed"] == [
+        {
+            "source_id": "WS1",
+            "kind": "story",
+            "issue_repo": repo,
+            "desired_issue_repo": repo,
+            "number": 2,
+            "url": "https://example.test/issues/2",
+            "reason": "closed/completed issue must not be edited",
+        }
+    ]
 
 
 def test_sync_preview_adopts_existing_issue_from_non_landing_repo(tmp_path: Path) -> None:
@@ -2292,6 +2432,7 @@ tracking:
 ### Leaf issues
 - LEAF-001: Parser support for manifest leaves
   - Dispatch: agent-ready
+  - Issue ref: OWNER/service#716
   - Points: 1
   - Target repo: service
   - Depends on: none
@@ -2341,6 +2482,8 @@ tracking:
     ]
     assert payload["children"][0]["gates"] == ["G-ISSUE-DRY-RUN"]
     assert payload["children"][0]["execution_repo"] == "OWNER/service"
+    assert payload["children"][0]["legacy_issue_repo"] == "OWNER/service"
+    assert payload["children"][0]["legacy_issue_number"] == 716
     assert payload["children"][0]["base_branch"] == "main"
     assert "- Open dependencies: `none`" in payload["children"][0]["body"]
     assert "- Manual gates remaining: `none`" in payload["children"][0]["body"]
