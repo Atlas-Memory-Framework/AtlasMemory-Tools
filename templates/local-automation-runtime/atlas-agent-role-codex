@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Prepare or run a Codex-backed Atlas workflow role task."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+from typing import Any
+
+
+RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
+if str(RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_DIR))
+
+import atlas_agent_common as common
+
+
+def read_json(path: str | pathlib.Path) -> Any:
+    return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+
+
+def write_json(path: str | pathlib.Path, payload: Any) -> None:
+    pathlib.Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def markdown_list(values: list[str]) -> str:
+    return "\n".join(f"- {value}" for value in values) if values else "- none"
+
+
+def build_prompt(task: dict[str, Any], result_path: str | pathlib.Path) -> str:
+    role_id = str(task.get("role_id") or "")
+    outputs = [str(item) for item in task.get("must_produce") or []]
+    prompt = f"""You are executing one Atlas workflow role.
+
+Role: {role_id}
+Label: {task.get("label") or role_id}
+Agent reference: {task.get("agent_ref") or ""}
+Skills:
+{markdown_list([str(item) for item in task.get("skills") or []])}
+
+Consumes completed roles:
+{markdown_list([str(item) for item in task.get("consumes") or []])}
+
+Required outputs:
+{markdown_list(outputs)}
+
+Acceptance criteria:
+{markdown_list([str(item) for item in task.get("acceptance_criteria") or []])}
+
+Task packet:
+```json
+{json.dumps(task, indent=2, sort_keys=True)}
+```
+
+Write one JSON object to this exact path:
+`{result_path}`
+
+The JSON object must have this shape:
+```json
+{{
+  "role_id": "{role_id}",
+  "status": "complete",
+  "outputs": {{
+{output_json_stub(outputs)}
+  }},
+  "evidence": [],
+  "notes": ""
+}}
+```
+
+Do not mark status complete unless every required output has a concrete, non-empty value.
+If you cannot produce every required output, write status "failed" and explain the gap in notes.
+"""
+    return prompt
+
+
+def output_json_stub(outputs: list[str]) -> str:
+    if not outputs:
+        return ""
+    return ",\n".join(f'    "{name}": ""' for name in outputs)
+
+
+def fail_closed_result(task: dict[str, Any], result_path: pathlib.Path, prompt_path: pathlib.Path, notes: str) -> int:
+    write_json(
+        result_path,
+        {
+            "role_id": str(task.get("role_id") or ""),
+            "status": "failed",
+            "outputs": {},
+            "evidence": [str(prompt_path)],
+            "notes": notes,
+        },
+    )
+    return 2
+
+
+def config_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name) or common.read_config().get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().strip('"').strip("'").lower() not in {"0", "false", "no", "off"}
+
+
+def config_int(name: str, default: int) -> int:
+    raw = os.environ.get(name) or common.read_config().get(name)
+    if raw is None:
+        return default
+    try:
+        return int(str(raw).strip().strip('"').strip("'"))
+    except ValueError:
+        return default
+
+
+def codex_command(raw: str | None, *, profile_kind: str) -> list[str]:
+    if raw:
+        import shlex
+
+        return shlex.split(raw)
+    return ["codex", "exec", *common.codex_profile_args(profile_kind), "--ephemeral", "--skip-git-repo-check", "-"]
+
+
+def resolve_command(command: list[str]) -> list[str]:
+    if not command:
+        return command
+    executable = command[0]
+    if executable.startswith("./"):
+        return [str(RUNTIME_DIR / executable[2:]), *command[1:]]
+    return command
+
+
+def with_timeout(command: list[str], timeout_seconds: int) -> list[str]:
+    if timeout_seconds > 0 and shutil.which("timeout"):
+        return ["timeout", str(timeout_seconds), *command]
+    return command
+
+
+def execute_allowed(args: argparse.Namespace) -> bool:
+    return bool(args.allow_execute or config_bool("ATLAS_ROLE_CODEX_ALLOW_EXECUTE", False))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--task", default=os.environ.get("ATLAS_ROLE_TASK_FILE"))
+    parser.add_argument("--result", default=os.environ.get("ATLAS_ROLE_RESULT_FILE"))
+    parser.add_argument("--prompt")
+    parser.add_argument("--execute", action="store_true", help="Actually invoke Codex. Omit to prepare prompt and fail closed.")
+    parser.add_argument(
+        "--allow-execute",
+        action="store_true",
+        help="Second explicit gate for Codex execution. ATLAS_ROLE_CODEX_ALLOW_EXECUTE=true also enables this.",
+    )
+    parser.add_argument("--profile-kind", default=os.environ.get("ATLAS_ROLE_CODEX_PROFILE_KIND", "workflow-role"))
+    parser.add_argument("--timeout-seconds", type=int)
+    parser.add_argument("--codex-command", help="Override Codex command. Default: codex exec --ephemeral --skip-git-repo-check -")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if not args.task:
+        raise SystemExit("--task or ATLAS_ROLE_TASK_FILE is required")
+    if not args.result:
+        raise SystemExit("--result or ATLAS_ROLE_RESULT_FILE is required")
+    task_path = pathlib.Path(args.task)
+    result_path = pathlib.Path(args.result)
+    prompt_path = pathlib.Path(args.prompt) if args.prompt else result_path.with_suffix(".prompt.md")
+    task = read_json(task_path)
+    if not isinstance(task, dict):
+        raise SystemExit("role task must be a JSON object")
+    prompt = build_prompt(task, result_path)
+    prompt_path.write_text(prompt, encoding="utf-8")
+    if not args.execute:
+        return fail_closed_result(
+            task,
+            result_path,
+            prompt_path,
+            "Codex role prompt prepared but not executed. Re-run atlas-agent-role-codex with --execute after reviewing command policy.",
+        )
+    if not execute_allowed(args):
+        return fail_closed_result(
+            task,
+            result_path,
+            prompt_path,
+            "Codex role execution requested but not allowed. Pass --allow-execute or set ATLAS_ROLE_CODEX_ALLOW_EXECUTE=true after choosing the role execution policy.",
+        )
+    timeout_seconds = args.timeout_seconds
+    if timeout_seconds is None:
+        timeout_seconds = config_int("AGENT_CODEX_WORKFLOW_ROLE_TIMEOUT_SECONDS", config_int("AGENT_CODEX_TIMEOUT_SECONDS", 1800))
+    command = with_timeout(resolve_command(codex_command(args.codex_command, profile_kind=args.profile_kind)), timeout_seconds)
+    if not shutil.which(command[0]):
+        return fail_closed_result(task, result_path, prompt_path, f"Codex command is unavailable: {command[0]}")
+    env = os.environ.copy()
+    env.update(
+        {
+            "ATLAS_ROLE_TASK_FILE": str(task_path),
+            "ATLAS_ROLE_RESULT_FILE": str(result_path),
+            "ATLAS_ROLE_PROMPT_FILE": str(prompt_path),
+            "ATLAS_ROLE_CODEX_PROFILE_KIND": str(args.profile_kind),
+            "ATLAS_ROLE_ID": str(task.get("role_id") or ""),
+            "ATLAS_AGENT_REF": str(task.get("agent_ref") or ""),
+        }
+    )
+    proc = subprocess.run(
+        command,
+        input=prompt,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        check=False,
+    )
+    log_path = result_path.with_suffix(".codex.log")
+    log_path.write_text(proc.stdout or "", encoding="utf-8")
+    if not result_path.exists():
+        return fail_closed_result(
+            task,
+            result_path,
+            prompt_path,
+            f"Codex exited {proc.returncode} without writing the required result file. Log: {log_path}",
+        )
+    try:
+        result = read_json(result_path)
+    except json.JSONDecodeError:
+        return fail_closed_result(task, result_path, prompt_path, f"Codex wrote invalid JSON. Log: {log_path}")
+    if not isinstance(result, dict):
+        return fail_closed_result(task, result_path, prompt_path, f"Codex result was not a JSON object. Log: {log_path}")
+    evidence = result.get("evidence")
+    if isinstance(evidence, list):
+        for path in (str(prompt_path), str(log_path)):
+            if path not in evidence:
+                evidence.append(path)
+    else:
+        result["evidence"] = [str(prompt_path), str(log_path)]
+    result.setdefault("role_id", str(task.get("role_id") or ""))
+    result.setdefault("outputs", {})
+    result.setdefault("status", "complete" if proc.returncode == 0 else "failed")
+    write_json(result_path, result)
+    return 0 if proc.returncode == 0 and result.get("status") == "complete" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

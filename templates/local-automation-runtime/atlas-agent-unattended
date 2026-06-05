@@ -1242,7 +1242,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--decompose-candidate-label",
         action="append",
-        default=["status:draft", "agent:decomposition-required"],
+        default=["status:draft", "agent:decomposition-required", "decomposition:required"],
         help="Additional label to scan for oversized decomposition candidates. Repeatable.",
     )
     parser.add_argument(

@@ -1,0 +1,53 @@
+{
+  "id": "work-item-change-lifecycle",
+  "name": "Work Item Change Lifecycle",
+  "purpose": "Coordinate implementation, validation, review, semantic alignment, and evidence rollup for one work item.",
+  "workflow_kind": "work-item",
+  "roles": [
+    {
+      "id": "implementation",
+      "label": "Implementation",
+      "agent_ref": "agent-registry://implementation",
+      "skills": ["build"],
+      "must_produce": ["change_summary", "changed_files", "implementation_notes"],
+      "acceptance_criteria": ["Makes the scoped code/doc/config changes without expanding beyond the work item."]
+    },
+    {
+      "id": "test-runner",
+      "label": "Test Runner",
+      "agent_ref": "agents/test-engineer.md",
+      "skills": ["implementation-planning"],
+      "must_produce": ["commands_run", "test_results", "coverage_or_gap_notes"],
+      "acceptance_criteria": ["Runs focused verification or records a concrete validation gap."]
+    },
+    {
+      "id": "code-review",
+      "label": "Code Review",
+      "agent_ref": "agents/code-reviewer.md",
+      "skills": ["review"],
+      "must_produce": ["findings", "risk_level", "required_fixes"],
+      "acceptance_criteria": ["Prioritizes correctness, regressions, missing tests, and maintainability risks."]
+    },
+    {
+      "id": "semantic-alignment",
+      "label": "Semantic Alignment",
+      "agent_ref": "agent-registry://semantic-alignment",
+      "skills": ["plan-execution-readiness"],
+      "must_produce": ["plan_alignment", "behavioral_risks", "vision_drift_notes"],
+      "acceptance_criteria": ["Checks that the change still matches the broader plan and product intent."]
+    },
+    {
+      "id": "evidence-rollup",
+      "label": "Evidence Rollup",
+      "agent_ref": "agent-registry://evidence-rollup",
+      "skills": ["handoff"],
+      "consumes": ["implementation", "test-runner", "code-review", "semantic-alignment"],
+      "must_produce": ["final_evidence_document", "remaining_risks", "next_actions"],
+      "acceptance_criteria": ["Combines outputs into one lifecycle evidence document with unresolved risks called out."]
+    }
+  ],
+  "rollup": {
+    "document": "work-item-change-evidence.md",
+    "missing_outputs_block_completion": true
+  }
+}

@@ -145,6 +145,7 @@ class UnattendedLoopTests(unittest.TestCase):
         self.assertIn("status:ready", command.args)
         self.assertIn("status:draft", command.args)
         self.assertIn("agent:decomposition-required", command.args)
+        self.assertIn("decomposition:required", command.args)
         self.assertIn("--dry-run", command.args)
         self.assertIsNotNone(command.summary_file)
         assert command.summary_file is not None

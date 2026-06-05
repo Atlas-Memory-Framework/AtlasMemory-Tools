@@ -82,6 +82,56 @@ def child_blockers(child: dict) -> list[str]:
     return blockers
 
 
+TERMINAL_LIVE_LABELS = {
+    "agent:done",
+    "status:done",
+    "status:completed",
+    "status:closed",
+}
+
+
+def sync_operations_by_source(payload: dict) -> dict[str, dict]:
+    sync_preview = payload.get("sync_preview") or {}
+    operations = sync_preview.get("operations") or []
+    return {
+        str(operation.get("source_id")): operation
+        for operation in operations
+        if operation.get("source_id")
+    }
+
+
+def live_issue_blockers(child: dict, operation: dict | None, *, unavailable_reason: str | None = None) -> list[str]:
+    if operation is None:
+        reason = "live issue state unavailable"
+        if unavailable_reason:
+            reason = f"{reason}: {unavailable_reason}"
+        return [reason]
+    match = operation.get("match")
+    if not isinstance(match, dict):
+        return ["live issue state unavailable"]
+    state = str(match.get("state") or "").upper()
+    if state != "OPEN":
+        return [f"live issue state {state or 'unknown'}"]
+
+    labels = operation.get("labels") or {}
+    existing_labels = labels.get("existing") if isinstance(labels, dict) else []
+    terminal_labels = sorted(
+        str(label)
+        for label in existing_labels or []
+        if str(label).lower() in TERMINAL_LIVE_LABELS
+    )
+    if terminal_labels:
+        return [f"live issue completed label(s): {', '.join(terminal_labels[:5])}"]
+    return []
+
+
+def queue_blockers(child: dict, operation: dict | None, *, unavailable_reason: str | None = None) -> list[str]:
+    blockers = child_blockers(child)
+    if blockers:
+        return blockers
+    return live_issue_blockers(child, operation, unavailable_reason=unavailable_reason)
+
+
 def projection_args(args: argparse.Namespace, mode: str) -> list[str]:
     cmd = [sys.executable, str(PLAN_TO_ISSUES)]
     if args.plan:
@@ -109,10 +159,15 @@ def projection_args(args: argparse.Namespace, mode: str) -> list[str]:
 
 def compact_preview(payload: dict) -> dict:
     children = payload.get("children") or []
+    operations = sync_operations_by_source(payload)
+    unavailable_reason = payload.get("live_issue_state_error")
+    if unavailable_reason is not None:
+        unavailable_reason = str(unavailable_reason).splitlines()[0][:240]
     queueable = []
     blocked = []
     for child in children:
-        reasons = child_blockers(child)
+        operation = operations.get(str(child.get("source_id")))
+        reasons = queue_blockers(child, operation, unavailable_reason=unavailable_reason)
         item = {
             "source_id": child.get("source_id"),
             "title": child.get("title"),
@@ -121,6 +176,9 @@ def compact_preview(payload: dict) -> dict:
             "dispatch_recommendation": child.get("dispatch_recommendation"),
             "reasons": reasons,
         }
+        if operation:
+            item["issue_repo"] = operation.get("issue_repo")
+            item["match"] = operation.get("match")
         if reasons:
             blocked.append(item)
         else:
@@ -211,8 +269,14 @@ def main() -> int:
     parser.add_argument("--max-queue", type=int, default=3)
     args = parser.parse_args()
 
-    preview_mode = "--dry-run" if args.dry_run else "--sync-preview"
-    preview = run_json(projection_args(args, preview_mode))
+    preview_mode = "--sync-preview"
+    try:
+        preview = run_json(projection_args(args, preview_mode))
+    except SystemExit as exc:
+        if not args.dry_run:
+            raise
+        preview = run_json(projection_args(args, "--dry-run"))
+        preview["live_issue_state_error"] = str(exc)
     compact = compact_preview(preview)
     if args.dry_run:
         json.dump(compact, sys.stdout, indent=2)

@@ -1,0 +1,12 @@
+{
+  "_placeholder_repo": "OWNER/REPO",
+  "default": [
+    "./atlas-agent-role-codex",
+    "--execute",
+    "--allow-execute",
+    "--timeout-seconds",
+    "0",
+    "--codex-command",
+    "./atlas-agent-role-fake-codex"
+  ]
+}

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib import request
 
 import atlas_agent_common as common
+import atlas_work_items
 
 
 AGENT_LABELS = {
@@ -747,7 +749,55 @@ def maybe_dispatch_deploy_candidate(repo: str, issue: dict, args: argparse.Names
     )
 
 
+def process_atlas_work_items_once(args: argparse.Namespace) -> int:
+    store = atlas_work_items.AtlasWorkItemStore(args.atlas_work_items)
+    provider = atlas_work_items.AtlasWorkItemOperationProvider(store)
+    if getattr(args, "dry_run", False):
+        operations = provider.ready_operations(limit=max(1, int(getattr(args, "max_items", 1))))
+        if not operations:
+            print("DRY-RUN local Atlas work items: no ready items.", flush=True)
+            return 0
+        print(f"DRY-RUN local Atlas work items: {len(operations)} ready item(s).", flush=True)
+        for operation in operations:
+            print(
+                f"DRY-RUN {operation.source_id}: {operation.title} [{operation.operation_id}]",
+                flush=True,
+            )
+        return len(operations)
+    command = shlex.split(args.atlas_work_item_command) if args.atlas_work_item_command else None
+    if command is None and getattr(args, "atlas_role_command_config", None):
+        command_config = str(Path(args.atlas_role_command_config).resolve())
+        command = [
+            str(common.RUNTIME_DIR / "atlas-agent-role-runner"),
+            "--command-config",
+            command_config,
+            "--max-roles",
+            str(max(1, int(getattr(args, "atlas_role_max", 1)))),
+        ]
+    templates_dir = args.team_templates or str(common.RUNTIME_DIR / "team-templates")
+    worker = atlas_work_items.LocalCommandOperationWorker(
+        command,
+        jobs_dir=common.jobs_dir(),
+        templates_dir=templates_dir,
+        agent_registry_path=getattr(args, "agent_registry", None),
+        agent_root=getattr(args, "agent_root", None),
+    )
+    processed = atlas_work_items.run_worker_daemon_once(
+        provider,
+        worker,
+        limit=max(1, int(getattr(args, "max_items", 1))),
+    )
+    if processed:
+        print(f"Processed {processed} local Atlas work item(s).", flush=True)
+    else:
+        print("No ready local Atlas work items.", flush=True)
+    return processed
+
+
 def process_once(args: argparse.Namespace) -> int:
+    if getattr(args, "atlas_work_items", None):
+        return process_atlas_work_items_once(args)
+
     processed = 0
     queued = 0
     max_per_repo = getattr(args, "max_per_repo", 1)
@@ -939,6 +989,42 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Prevent concurrent workers on the same repo/base when issue Write Scope values overlap or are unknown.",
+    )
+    parser.add_argument(
+        "--atlas-work-items",
+        help="Run the local Atlas work-item provider against this JSON store instead of GitHub issue dispatch.",
+    )
+    parser.add_argument(
+        "--atlas-work-item-command",
+        help=(
+            "Optional local command to run after claiming an Atlas work item. "
+            "Receives ATLAS_WORK_ITEM_ID, ATLAS_OPERATION_FILE, ATLAS_JOB_DIR, and ATLAS_WORK_ITEM_STORE."
+        ),
+    )
+    parser.add_argument(
+        "--atlas-role-command-config",
+        help=(
+            "JSON command map for atlas-agent-role-runner. Used as the local work-item command when "
+            "--atlas-work-item-command is not provided."
+        ),
+    )
+    parser.add_argument(
+        "--atlas-role-max",
+        type=int,
+        default=100,
+        help="Maximum runnable workflow roles atlas-agent-role-runner should execute in one local work-item claim.",
+    )
+    parser.add_argument(
+        "--team-templates",
+        help="Directory of TeamTemplate JSON files used when local Atlas work items request workflow execution.",
+    )
+    parser.add_argument(
+        "--agent-registry",
+        help="Optional AgentRegistry JSON used to enrich local Atlas workflow role task packets.",
+    )
+    parser.add_argument(
+        "--agent-root",
+        help="Optional repository/root path used to resolve local markdown agent refs in workflow role task packets.",
     )
     parser.add_argument("--sleep-seconds", type=int, default=60)
     parser.add_argument("--inspect-failed", action="store_true")

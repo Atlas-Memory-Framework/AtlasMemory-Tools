@@ -16,6 +16,7 @@ import atlas_agent_common as common
 
 ONE_POINT_LABEL = "agent:one-point"
 DECOMPOSITION_REQUIRED_LABEL = "agent:decomposition-required"
+PLAN_DECOMPOSITION_REQUIRED_LABEL = "decomposition:required"
 DECOMPOSED_LABEL = "agent:decomposed"
 CHILD_INHERITED_LABEL_PREFIXES = ("area:", "owner:", "repo:", "tier:", "workstream:", "priority:")
 CHILD_INHERITED_LABELS = {"type:story", "type:spike", "type:task"}
@@ -175,7 +176,10 @@ def classify_issue(repo: str, issue: dict[str, Any]) -> dict[str, Any]:
         dispatch_blockers.append(f"dispatch-recommendation:{dispatch_recommendation}")
     action = "needs-points"
     reason = ""
-    if DECOMPOSED_LABEL in labels:
+    if DECOMPOSED_LABEL in labels and PLAN_DECOMPOSITION_REQUIRED_LABEL in labels:
+        action = "decompose"
+        reason = "stale decomposed label with plan decomposition requirement"
+    elif DECOMPOSED_LABEL in labels:
         action = "already-decomposed"
     elif len(point_values) > 1:
         action = "decompose" if any(value > 1 for value in point_values) else "needs-points"
@@ -379,7 +383,7 @@ def child_labels(parent: dict[str, Any], child: dict[str, Any]) -> list[str]:
         label
         for label in labels
         if not label.startswith("points:")
-        and label not in {DECOMPOSITION_REQUIRED_LABEL, DECOMPOSED_LABEL}
+        and label not in {DECOMPOSITION_REQUIRED_LABEL, PLAN_DECOMPOSITION_REQUIRED_LABEL, DECOMPOSED_LABEL}
     }
     labels.add("points:1")
     if child_blocked_by_parent(parent):
@@ -607,6 +611,44 @@ def fallback_children_from_write_scope(parent: dict[str, Any], max_children: int
     return children
 
 
+def fallback_children_from_promotion_path(parent: dict[str, Any], max_children: int) -> list[dict[str, Any]]:
+    section = parent_section_text(parent, "Promotion Path")
+    if not section:
+        return []
+    validation = parent_validation(parent)
+    children: list[dict[str, Any]] = []
+    pattern = re.compile(r"(?m)^\s*\d+\.\s+`(?P<source_id>[^`]+)`:\s*(?P<title>.+?)\s*$")
+    for match in pattern.finditer(section):
+        source_id = match.group("source_id").strip()
+        title = match.group("title").strip().rstrip(".")
+        body_lines = [
+            "Goal:",
+            title,
+            "",
+            "Parent issue:",
+            str(parent.get("url") or parent.get("number") or ""),
+            "",
+            "Acceptance criteria:",
+            "- The child scope is one point and independently reviewable.",
+            "- The implementation follows the parent issue safety and promotion boundaries.",
+            "- No canonical skill, plan, provider credential, or Codex home file is mutated unless the child explicitly allows it.",
+            "",
+            "## Validation Commands",
+            *[f"- {item}" for item in validation],
+            "- Confirm git diff is limited to the reviewed child scope.",
+        ]
+        children.append(
+            {
+                "title": f"[{source_id}] {title}",
+                "body": "\n".join(body_lines),
+                "labels": parent_child_labels(parent),
+            }
+        )
+        if len(children) >= max_children:
+            break
+    return children
+
+
 def codex_timeout_seconds() -> int:
     cfg = common.read_config()
     raw = (
@@ -709,6 +751,14 @@ def create_child_issue(repo: str, parent: dict[str, Any], child: dict[str, Any])
         tmp.unlink(missing_ok=True)
 
 
+def draft_child_issue(repo: str, parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": str(child.get("title") or "One-point child issue"),
+        "body": child_body(parent, repo, child),
+        "labels": child_labels(parent, child),
+    }
+
+
 def project_targets(path: str | None) -> list[tuple[str, int]]:
     if not path:
         return []
@@ -749,6 +799,41 @@ def add_issue_to_projects(issue_url: str, projects_file: str | None) -> list[str
         if proc.returncode == 0:
             added.append(f"{owner}/{project_number}")
     return added
+
+
+def child_plan_for_issue(repo: str, issue: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    promotion_children = fallback_children_from_promotion_path(issue, args.max_children)
+    if promotion_children:
+        return {
+            "children": promotion_children,
+            "notes": ["used deterministic promotion-path decomposition fallback"],
+        }
+    job_dir = common.jobs_dir() / f"issue-{issue.get('number')}-decompose-{common.now_id()}"
+    plan = run_planning_codex(issue, job_dir, args.max_children)
+    children = [child for child in plan.get("children") or [] if isinstance(child, dict)]
+    if not children:
+        children = fallback_children_from_write_scope(issue, args.max_children)
+        if children:
+            plan.setdefault("notes", []).append("used deterministic write-scope decomposition fallback")
+    plan["children"] = children[: args.max_children]
+    return plan
+
+
+def draft_children_for_issue(repo: str, issue: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    plan = child_plan_for_issue(repo, issue, args)
+    children = [child for child in plan.get("children") or [] if isinstance(child, dict)]
+    return {
+        "repo": repo,
+        "parent": {
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "url": issue.get("url"),
+            "points": issue_points(issue),
+        },
+        "dispatch_blocked_by_parent": child_blocked_by_parent(issue),
+        "notes": plan.get("notes") or [],
+        "children": [draft_child_issue(repo, issue, child) for child in children],
+    }
 
 
 def record_decomposition_accounting(repo: str, parent: dict[str, Any], created: list[str]) -> dict[str, Any]:
@@ -810,13 +895,8 @@ def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any],
         record["applied"] = "marked-decomposition-required"
         return record
 
-    job_dir = common.jobs_dir() / f"issue-{number}-decompose-{common.now_id()}"
-    plan = run_planning_codex(issue, job_dir, args.max_children)
+    plan = child_plan_for_issue(repo, issue, args)
     children = [child for child in plan.get("children") or [] if isinstance(child, dict)]
-    if not children:
-        children = fallback_children_from_write_scope(issue, args.max_children)
-        if children:
-            plan.setdefault("notes", []).append("used deterministic write-scope decomposition fallback")
     created: list[str] = []
     project_additions: dict[str, list[str]] = {}
     for child in children[: args.max_children]:
@@ -855,6 +935,7 @@ def apply_issue_action(repo: str, issue: dict[str, Any], record: dict[str, Any],
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
+    child_drafts: list[dict[str, Any]] = []
     remaining = args.max
     candidate_labels = args.candidate_label or ["status:ready"]
     repos = target_repos(args.repos_file)
@@ -884,6 +965,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )[:remaining]
         for issue in issues:
             record = classify_issue(repo, issue)
+            child_drafts_file = getattr(args, "child_drafts_file", None)
+            if child_drafts_file and record["action"] == "decompose":
+                child_drafts.append(draft_children_for_issue(repo, issue, args))
             if args.apply:
                 record = apply_issue_action(repo, issue, record, args)
             records.append(record)
@@ -894,7 +978,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for record in records:
         action = str(record.get("action") or "unknown")
         counts[action] = counts.get(action, 0) + 1
-    return {"records": records, "counts": counts}
+    payload: dict[str, Any] = {"records": records, "counts": counts}
+    child_drafts_file = getattr(args, "child_drafts_file", None)
+    if child_drafts_file:
+        payload["child_drafts_file"] = child_drafts_file
+        payload["child_draft_count"] = sum(len(group["children"]) for group in child_drafts)
+        common.write_json(Path(child_drafts_file), {"draft_groups": child_drafts})
+    return payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -915,6 +1005,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max", type=int, default=10)
     parser.add_argument("--max-children", type=int, default=8)
     parser.add_argument("--summary", default=str(common.RUNTIME_DIR / "jobs" / "decompose-summary.json"))
+    parser.add_argument(
+        "--child-drafts-file",
+        help="Write rendered one-point child issue drafts for review without creating GitHub issues.",
+    )
     parser.add_argument(
         "--projects-file",
         help="Optional project targets to add created child issues to, one per line as OWNER/NUMBER.",
@@ -942,6 +1036,8 @@ def main() -> None:
         raise SystemExit("--max must be >= 0")
     if args.max_children < 1:
         raise SystemExit("--max-children must be >= 1")
+    if args.apply and args.child_drafts_file:
+        raise SystemExit("--child-drafts-file is review-only; do not combine it with --apply")
     payload = run(args)
     common.write_json(Path(args.summary), payload)
     print(json.dumps(payload, indent=2), flush=True)

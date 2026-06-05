@@ -222,6 +222,149 @@ class RuntimeTemplateTests(unittest.TestCase):
 
         self.assertEqual(self.bridge.child_blockers(child), [])
 
+    def test_plan_queue_blocks_closed_ready_child_from_live_preview(self) -> None:
+        payload = {
+            "children": [
+                {
+                    "source_id": "PROXY-PLANNING-CONTRACT-001",
+                    "title": "[PROXY-PLANNING-CONTRACT-001] Stale ready issue",
+                    "labels": ["status:ready"],
+                    "dispatch_recommendation": "auto-dispatch",
+                    "dependencies": [],
+                    "blockers": [],
+                    "dependency_issue_refs": [],
+                    "blocker_issue_refs": [],
+                    "automation_blockers": [],
+                }
+            ],
+            "sync_preview": {
+                "operations": [
+                    {
+                        "source_id": "PROXY-PLANNING-CONTRACT-001",
+                        "issue_repo": "owner/repo",
+                        "match": {
+                            "number": 716,
+                            "title": "[PROXY-PLANNING-CONTRACT-001] Stale ready issue",
+                            "url": "https://github.com/owner/repo/issues/716",
+                            "state": "CLOSED",
+                        },
+                        "labels": {"existing": ["status:ready"], "desired": ["status:ready"]},
+                    }
+                ]
+            },
+        }
+
+        preview = self.bridge.compact_preview(payload)
+
+        self.assertEqual(preview["queueable_count"], 0)
+        self.assertEqual(preview["blocked"][0]["reasons"], ["live issue state CLOSED"])
+
+    def test_plan_queue_blocks_completed_closed_child_from_live_preview(self) -> None:
+        payload = {
+            "children": [
+                {
+                    "source_id": "DONE-CHILD-001",
+                    "title": "[DONE-CHILD-001] Completed stale ready issue",
+                    "labels": ["status:ready"],
+                    "dispatch_recommendation": "auto-dispatch",
+                    "dependencies": [],
+                    "blockers": [],
+                    "dependency_issue_refs": [],
+                    "blocker_issue_refs": [],
+                    "automation_blockers": [],
+                }
+            ],
+            "sync_preview": {
+                "operations": [
+                    {
+                        "source_id": "DONE-CHILD-001",
+                        "issue_repo": "owner/repo",
+                        "match": {
+                            "number": 717,
+                            "title": "[DONE-CHILD-001] Completed stale ready issue",
+                            "url": "https://github.com/owner/repo/issues/717",
+                            "state": "CLOSED",
+                        },
+                        "labels": {"existing": ["agent:done", "status:ready"], "desired": ["status:ready"]},
+                    }
+                ]
+            },
+        }
+
+        preview = self.bridge.compact_preview(payload)
+
+        self.assertEqual(preview["queueable_count"], 0)
+        self.assertIn("live issue state CLOSED", preview["blocked"][0]["reasons"])
+
+    def test_plan_queue_blocks_blocked_parent_shape(self) -> None:
+        child = {
+            "source_id": "SKILLOPT-ATLAS-EVAL-001",
+            "title": "[SKILLOPT-ATLAS-EVAL-001] Parent packet",
+            "labels": ["status:blocked", "points:8"],
+            "dispatch_recommendation": "review-before-dispatch",
+            "suggested_points": 8,
+            "dependencies": [],
+            "blockers": [],
+            "dependency_issue_refs": [],
+            "blocker_issue_refs": [],
+            "automation_blockers": ["review-before-dispatch"],
+            "body": (
+                "## Execution State\n"
+                "- Open dependencies: `none`\n"
+                "- Manual gates remaining: `decompose into reviewed one-point child issues`\n\n"
+                "## Dispatch Guardrails\n"
+                "- Do not add agent:ready or queue this parent.\n"
+            ),
+        }
+
+        blockers = self.bridge.child_blockers(child)
+
+        self.assertIn("automation_blockers: review-before-dispatch", blockers)
+        self.assertIn("points:8 requires decomposition before dispatch", blockers)
+        self.assertIn("dispatch_recommendation: review-before-dispatch", blockers)
+        self.assertIn("missing status:ready", blockers)
+        self.assertIn("manual gates remaining", blockers)
+        self.assertIn("dispatch guardrails", blockers)
+
+    def test_plan_queue_allows_open_one_point_child_from_live_preview(self) -> None:
+        payload = {
+            "children": [
+                {
+                    "source_id": "ATLASFS-CODEX-CHILD-001",
+                    "title": "[ATLASFS-CODEX-CHILD-001] One point child",
+                    "labels": ["status:ready", "points:1"],
+                    "dispatch_recommendation": "auto-dispatch",
+                    "suggested_points": 1,
+                    "dependencies": [],
+                    "blockers": [],
+                    "dependency_issue_refs": [],
+                    "blocker_issue_refs": [],
+                    "automation_blockers": [],
+                    "body": "## Execution State\n- Open dependencies: `none`\n- Manual gates remaining: `none`\n",
+                }
+            ],
+            "sync_preview": {
+                "operations": [
+                    {
+                        "source_id": "ATLASFS-CODEX-CHILD-001",
+                        "issue_repo": "owner/repo",
+                        "match": {
+                            "number": 801,
+                            "title": "[ATLASFS-CODEX-CHILD-001] One point child",
+                            "url": "https://github.com/owner/repo/issues/801",
+                            "state": "OPEN",
+                        },
+                        "labels": {"existing": ["status:ready", "points:1"], "desired": ["status:ready", "points:1"]},
+                    }
+                ]
+            },
+        }
+
+        preview = self.bridge.compact_preview(payload)
+
+        self.assertEqual(preview["queueable_count"], 1)
+        self.assertEqual(preview["blocked_count"], 0)
+
     def test_plan_queue_supports_leaf_issue_strategy(self) -> None:
         args = types.SimpleNamespace(
             plan="plan.md",
@@ -254,9 +397,20 @@ class RuntimeTemplateTests(unittest.TestCase):
             "atlas-agent-deployed-validate",
             "atlas-agent-worker",
             "atlas-agent-cycle-summary",
+            "atlas-agent-role-codex",
+            "atlas-agent-role-fake-codex",
+            "atlas-agent-role-runner",
+            "atlas-agent-workflow-lint",
+            "atlas-agent-workflow-select",
+            "atlas-agent-workflow-template-add",
+            "atlas-agent-work-item-add",
+            "atlas-agent-work-item-inspect",
+            "atlas-agent-work-item-requeue-stale",
             "atlas-agent-throttle-status",
             "atlas-agent-project-sync",
             "atlas_agent_common.py",
+            "atlas_work_items.py",
+            "atlas_workflows.py",
         ):
             self.assertEqual(
                 (ROOT / relative).read_bytes(),

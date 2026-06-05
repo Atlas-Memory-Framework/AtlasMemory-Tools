@@ -76,6 +76,25 @@ class IssueDecomposeTests(unittest.TestCase):
         self.assertEqual(record["reason"], "conflicting point metadata")
         self.assertEqual(record["point_values"], [1, 5])
 
+    def test_classify_decomposes_stale_decomposed_plan_required_parent(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(labels=["agent:decomposed", "decomposition:required", "points:5"]),
+        )
+
+        self.assertEqual(record["action"], "decompose")
+        self.assertEqual(record["reason"], "stale decomposed label with plan decomposition requirement")
+        self.assertEqual(record["points"], 5)
+
+    def test_classify_preserves_already_decomposed_without_plan_required_label(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(labels=["agent:decomposed", "points:5"]),
+        )
+
+        self.assertEqual(record["action"], "already-decomposed")
+        self.assertEqual(record["points"], 5)
+
     def test_classify_reports_dispatch_blockers_separately_from_decomposition(self) -> None:
         record = self.decompose.classify_issue(
             "owner/repo",
@@ -245,6 +264,7 @@ Manual gates remaining: `none`
         self.assertNotIn("points:5", labels)
         self.assertNotIn("points:7", labels)
         self.assertNotIn("agent:decomposition-required", labels)
+        self.assertNotIn("decomposition:required", labels)
 
     def test_child_body_infers_canonical_scope_and_validation_sections(self) -> None:
         parent = issue(
@@ -366,6 +386,79 @@ https://github.com/owner/repo/issues/1
         self.assertIn("- Combine policy: `one-issue-one-pr`", body)
         self.assertIn("- Conflict class: `src-api`", body)
         self.assertIn("- Validation tier: `T0`", body)
+
+    def test_promotion_path_fallback_creates_reviewable_one_point_children(self) -> None:
+        parent = issue(
+            body="""## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `review child split`
+
+## Promotion Path
+
+1. `SKILLOPT-DOC-001`: write Atlas SkillOpt adaptation research note.
+2. `SKILLOPT-FIXTURES-001`: create fixture corpus for plan failures.
+""",
+            labels=["points:8", "status:blocked", "area:core"],
+        )
+
+        children = self.decompose.fallback_children_from_promotion_path(parent, 7)
+
+        self.assertEqual(len(children), 2)
+        self.assertEqual(children[0]["title"], "[SKILLOPT-DOC-001] write Atlas SkillOpt adaptation research note")
+        labels = self.decompose.child_labels(parent, children[0])
+        self.assertIn("points:1", labels)
+        self.assertIn("status:blocked", labels)
+        self.assertIn("agent:one-point", labels)
+
+    def test_child_drafts_file_writes_rendered_drafts_without_apply(self) -> None:
+        original_fetch = self.decompose.fetch_issue
+        original_candidates = self.decompose.candidate_issues_for_labels
+        parent = issue(
+            body="""Points: 8
+Dispatch recommendation: `review-before-dispatch`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `review child split`
+
+## Promotion Path
+
+1. `SKILLOPT-DOC-001`: write Atlas SkillOpt adaptation research note.
+2. `SKILLOPT-FIXTURES-001`: create fixture corpus for plan failures.
+""",
+            labels=["points:8", "status:blocked", "repo:atlas-memory"],
+            number=726,
+        )
+        self.decompose.fetch_issue = lambda repo, number: parent if repo == "owner/repo" and number == 726 else None
+        self.decompose.candidate_issues_for_labels = lambda *_args, **_kwargs: self.fail("label scan should be bypassed")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repos = Path(tmp) / "repos.txt"
+                repos.write_text("owner/repo\n", encoding="utf-8")
+                drafts = Path(tmp) / "drafts.json"
+                args = self.decompose.build_parser().parse_args(
+                    [
+                        "--repos-file",
+                        str(repos),
+                        "--issue",
+                        "726",
+                        "--dry-run",
+                        "--child-drafts-file",
+                        str(drafts),
+                    ]
+                )
+                payload = self.decompose.run(args)
+                draft_payload = json.loads(drafts.read_text(encoding="utf-8"))
+        finally:
+            self.decompose.fetch_issue = original_fetch
+            self.decompose.candidate_issues_for_labels = original_candidates
+
+        self.assertEqual(payload["child_draft_count"], 2)
+        children = draft_payload["draft_groups"][0]["children"]
+        self.assertEqual(children[0]["title"], "[SKILLOPT-DOC-001] write Atlas SkillOpt adaptation research note")
+        self.assertIn("status:blocked", children[0]["labels"])
+        self.assertIn("points:1", children[0]["labels"])
+        self.assertIn("- Dispatch recommendation: `review-before-dispatch`", children[0]["body"])
 
     def test_dry_run_writes_summary_without_mutations(self) -> None:
         original_candidates = self.decompose.candidate_issues

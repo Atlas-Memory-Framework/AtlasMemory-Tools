@@ -1,0 +1,13 @@
+{
+  "_placeholder_repo": "OWNER/REPO",
+  "default": [
+    "python3",
+    "-c",
+    "import json, os; task=json.load(open(os.environ['ATLAS_ROLE_TASK_FILE'])); json.dump({'role_id': task.get('role_id'), 'status': 'failed', 'outputs': {}, 'evidence': [os.environ['ATLAS_ROLE_TASK_FILE']], 'notes': 'Example stub only. Replace role-commands.example.json with project-specific agent/Codex commands before treating role output as evidence.'}, open(os.environ['ATLAS_ROLE_RESULT_FILE'], 'w'))"
+  ],
+  "roles": {},
+  "agent_ids": {},
+  "agents": {},
+  "profiles": {},
+  "skills": {}
+}

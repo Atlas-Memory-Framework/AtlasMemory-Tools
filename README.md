@@ -7,7 +7,7 @@ AtlasMemory Tools is the canonical planning, issue projection, GitHub Project, a
 It owns four surfaces:
 
 - `skills/`: workflow contracts for planning, review, implementation, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
-- `agents/`: reusable role rubrics for implementation, code review, docs review, data contracts, infra, processing, and testing
+- `agents/`: reusable specialist role rubrics for planning, implementation, review, validation, data, infra, processing, and testing
 - `templates/local-automation-runtime/`: reusable local automation host for GitHub issue-to-PR execution
 - `manifests/atlas-tools.v1.json`: supported harness adapters, canonical skills, agents, templates, and generated-copy inventory
 
@@ -144,6 +144,8 @@ Current runtime behavior includes:
 - direct Project `AutomationState` updates for `Queued`, `Running`, `PR Open`, `Failed`, and `Done`
 - decomposition metadata inheritance so child issues retain plan key, parent epic, gates, risk, validation scope, and priority context
 - mandatory workstream completion bundles covering semantic review, garbage collection, docs updates or docs-not-needed rationale, validation evidence, and downstream readiness
+- local Atlas work-item bootstrap dispatch via `--atlas-work-items`, which records claim/result evidence in a JSON work-item lifecycle without GitHub issue or PR mutation
+- structured agent-role workflow templates via `TeamTemplate`/`TeamRun`, including dependency-aware role packets, consumed role outputs, and rollup evidence back onto the work-item lifecycle
 
 See `templates/local-automation-runtime/README.md` and `templates/local-automation-runtime/SETUP.md`.
 
@@ -151,6 +153,7 @@ See `templates/local-automation-runtime/README.md` and `templates/local-automati
 
 - `docs/source-of-truth.md`: canonical source and generated-copy workflow
 - `docs/automation-runtime-operational-layer.md`: operational model for runtime hosts and GitHub state
+- `docs/atlas-workflow-templates.md`: TeamTemplate/TeamRun model for structured agent-role workflows and rollup evidence
 - `docs/github-project-template-views.md`: standard Project fields and view expectations
 - `skills/plan/README.md`: human-facing `/plan` workflow
 - `skills/plan-to-issues/README.md`: issue and Project projection workflow

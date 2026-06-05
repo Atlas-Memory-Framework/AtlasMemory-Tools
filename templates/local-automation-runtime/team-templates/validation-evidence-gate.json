@@ -1,0 +1,47 @@
+{
+  "id": "validation-evidence-gate",
+  "name": "Validation Evidence Gate",
+  "purpose": "Coordinate automated, semantic, and manual validation evidence before lifecycle completion.",
+  "workflow_kind": "validation",
+  "roles": [
+    {
+      "id": "test-planning",
+      "label": "Test Planning",
+      "agent_ref": "agents/test-engineer.md",
+      "skills": ["implementation-planning"],
+      "must_produce": ["validation_matrix", "targeted_commands", "manual_validation_needs"],
+      "acceptance_criteria": ["Maps every material claim to an automated command, evidence artifact, or manual gate."]
+    },
+    {
+      "id": "local-validation",
+      "label": "Local Validation",
+      "agent_ref": "agent-registry://local-validation",
+      "skills": ["local-automation-runtime-operate"],
+      "consumes": ["test-planning"],
+      "must_produce": ["commands_run", "local_results", "local_artifacts"],
+      "acceptance_criteria": ["Records exact commands, current target revision, pass/fail result, and artifacts."]
+    },
+    {
+      "id": "deployed-validation",
+      "label": "Deployed Validation",
+      "agent_ref": "agent-registry://deployed-validation",
+      "skills": ["local-automation-runtime-operate"],
+      "consumes": ["test-planning"],
+      "must_produce": ["deployed_checks", "manual_gate_status", "environment_notes"],
+      "acceptance_criteria": ["Separates hosted/deployed evidence from local-only evidence and names environment limits."]
+    },
+    {
+      "id": "validation-rollup",
+      "label": "Validation Rollup",
+      "agent_ref": "agent-registry://validation-rollup",
+      "skills": ["handoff"],
+      "consumes": ["test-planning", "local-validation", "deployed-validation"],
+      "must_produce": ["validation_decision", "evidence_summary", "remaining_validation_gaps"],
+      "acceptance_criteria": ["Summarizes what is proven, what is waived, and what remains unverified."]
+    }
+  ],
+  "rollup": {
+    "document": "validation-evidence.md",
+    "missing_outputs_block_completion": true
+  }
+}
