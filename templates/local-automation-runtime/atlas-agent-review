@@ -192,10 +192,13 @@ def linked_issue_ref(repo: str, pr: dict[str, Any]) -> tuple[str, int] | None:
     return common.linked_issue_ref(pr, repo)
 
 
-def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = None) -> tuple[str, list[str]]:
+def check_rollup_state(repo: str, pr: dict[str, Any], required_checks: list[str] | None = None) -> tuple[str, list[str]]:
     checks = pr.get("statusCheckRollup") or []
     if not checks:
-        return "none", []
+        if required_checks:
+            checks = common.commit_check_runs(repo, str(pr.get("headRefOid") or ""))
+        if not checks:
+            return "none", []
     observed: dict[str, tuple[str, str]] = {}
     pending: list[str] = []
     failed: list[str] = []
@@ -211,12 +214,22 @@ def check_rollup_state(pr: dict[str, Any], required_checks: list[str] | None = N
             passed.append(name)
         else:
             failed.append(name if not conclusion else f"{name}={conclusion}")
-    missing = [name for name in (required_checks or []) if name not in observed]
-    if missing:
-        return "failed", [f"required check missing: {name}" for name in missing]
+    required = required_checks or []
+    missing_required = [name for name in required if name not in observed]
+    if missing_required:
+        for check in common.commit_check_runs(repo, str(pr.get("headRefOid") or "")):
+            name = str(check.get("name") or check.get("context") or "unnamed")
+            if name in observed:
+                continue
+            status = str(check.get("status") or "").upper()
+            conclusion = str(check.get("conclusion") or "").upper()
+            observed[name] = (status, conclusion)
+        missing_required = [name for name in required if name not in observed]
+    if missing_required:
+        return "failed", [f"required check missing: {name}" for name in missing_required]
     required_failed: list[str] = []
     required_pending: list[str] = []
-    for name in required_checks or []:
+    for name in required:
         status, conclusion = observed[name]
         if status and status != "COMPLETED":
             required_pending.append(name)
@@ -910,7 +923,7 @@ def classify(
     if mergeable and mergeable not in {"MERGEABLE", "UNKNOWN"}:
         label = NEEDS_REPAIR_LABEL
         reasons.append(f"mergeable is {mergeable}")
-    check_state, check_details = check_rollup_state(pr, required_checks)
+    check_state, check_details = check_rollup_state(repo, pr, required_checks)
     if check_state == "none":
         if manual_validation:
             if manual_approved:

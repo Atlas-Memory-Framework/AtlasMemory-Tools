@@ -61,6 +61,13 @@ class ReviewAgentTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.review = load_script("atlas_agent_review_test", "atlas-agent-review")
 
+    def setUp(self) -> None:
+        self._original_commit_check_runs = self.review.common.commit_check_runs
+        self.review.common.commit_check_runs = lambda _repo, _head_sha: []
+
+    def tearDown(self) -> None:
+        self.review.common.commit_check_runs = self._original_commit_check_runs
+
     def test_review_approves_green_pr_without_manual_validation(self) -> None:
         decision = self.review.classify(
             "owner/repo",
@@ -300,6 +307,40 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decision.label, "agent:local-validation-required")
         self.assertIn("no GitHub checks reported; required checks missing", decision.reasons)
+
+    def test_review_uses_commit_check_runs_when_rollup_is_empty(self) -> None:
+        self.review.common.commit_check_runs = lambda _repo, _head_sha: [
+            {"name": "ci", "status": "completed", "conclusion": "success"}
+        ]
+
+        decision = self.review.classify(
+            "owner/repo",
+            pr(statusCheckRollup=[]),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["ci"],
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+
+    def test_review_uses_commit_check_runs_for_missing_required_rollup_entry(self) -> None:
+        self.review.common.commit_check_runs = lambda _repo, _head_sha: [
+            {"name": "integration", "status": "completed", "conclusion": "success"}
+        ]
+
+        decision = self.review.classify(
+            "owner/repo",
+            pr(
+                statusCheckRollup=[
+                    {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                ]
+            ),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests", "integration"],
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
 
     def test_review_requires_local_validation_for_no_check_pr_without_required_checks(self) -> None:
         decision = self.review.classify(
