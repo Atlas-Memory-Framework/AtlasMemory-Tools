@@ -104,6 +104,82 @@ def project_config(owner: str, project_number: int) -> ProjectConfig:
     )
 
 
+PROJECT_RECONCILE_FIELDS = {
+    "ActivePR",
+    "AutomationState",
+    "BaseBranch",
+    "BlockerReason",
+    "BlockerType",
+    "CompletedBy",
+    "CompletionMode",
+    "DependsOn",
+    "DispatchMode",
+    "DispatchRecommendation",
+    "ExecutionRepo",
+    "ExecutionState",
+    "GateTier",
+    "IssueReady",
+    "ItemType",
+    "OnePRContract",
+    "ParentEpic",
+    "PlanKey",
+    "Priority",
+    "ReviewGates",
+    "ReviewVerdict",
+    "Risk",
+    "RiskTags",
+    "Size",
+    "SourceId",
+    "Status",
+    "TargetRepo",
+    "Validation",
+    "ValidationScope",
+    "Workstream",
+    "WriteScope",
+}
+
+
+def inferred_project_fields(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    names = set(PROJECT_RECONCILE_FIELDS)
+    for item in items:
+        for key in item:
+            if not key or key in {"id", "content", "labels", "title"}:
+                continue
+            names.add(key[:1].upper() + key[1:])
+    return [{"id": name, "name": name, "options": []} for name in sorted(names)]
+
+
+def snapshot_project_config(path: str, owner: str, project_number: int, *, allow_inferred: bool) -> ProjectConfig:
+    payload = common.read_project_snapshot(path)
+    project = payload.get("project") or {}
+    fields = common.project_snapshot_fields(path)
+    items = common.project_snapshot_items(path, owner, project_number)
+    if not fields and allow_inferred:
+        fields = inferred_project_fields(items)
+    if not fields:
+        raise RuntimeError(
+            "--project-snapshot must include Project field metadata for --apply; "
+            "run a live reconcile or save a snapshot with fields."
+        )
+    fields_by_name = {str(field.get("name")): field for field in fields}
+    status_field = fields_by_name.get("Status") or {"id": "Status", "options": []}
+    execution_field = fields_by_name.get("ExecutionState")
+    status_options = {str(option["name"]): str(option["id"]) for option in status_field.get("options") or []}
+    if allow_inferred and not status_options:
+        status_options = {name: name for name in ("Todo", "In Progress", "Done")}
+    execution_options = {
+        str(option["name"]): str(option["id"]) for option in (execution_field or {}).get("options") or []
+    }
+    return ProjectConfig(
+        project_id=str(project.get("id") or payload.get("project_id") or "SNAPSHOT"),
+        status_field_id=str(status_field.get("id") or "Status"),
+        status_options=status_options,
+        execution_state_field_id=str(execution_field.get("id")) if execution_field else None,
+        execution_state_options=execution_options,
+        fields=fields_by_name,
+    )
+
+
 def project_items(owner: str, project_number: int, limit: int) -> list[dict[str, Any]]:
     items = common.gh_json(
         ["project", "item-list", str(project_number), "--owner", owner, "--format", "json", "--limit", str(limit)],
@@ -125,6 +201,29 @@ def issue_key(item: dict[str, Any]) -> tuple[str, int] | None:
     if repo and number:
         return str(repo), int(number)
     return None
+
+
+def issue_filter(raw: str) -> tuple[str | None, int]:
+    text = str(raw).strip()
+    url_match = re.match(r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/issues/(?P<number>\d+)(?:\b|$)", text)
+    if url_match:
+        return url_match.group("repo"), int(url_match.group("number"))
+    if text.startswith("#"):
+        text = text[1:]
+    ref_match = re.match(r"^(?:(?P<repo>[^#\s]+/[^#\s]+)#)?(?P<number>\d+)$", text)
+    if not ref_match:
+        raise ValueError(f"Issue filter must be NUMBER, #NUMBER, OWNER/REPO#NUMBER, or a GitHub issue URL: {raw}")
+    return ref_match.group("repo"), int(ref_match.group("number"))
+
+
+def item_matches_issue_filters(item: dict[str, Any], filters: set[tuple[str | None, int]]) -> bool:
+    if not filters:
+        return True
+    key = issue_key(item)
+    if not key:
+        return False
+    repo, number = key
+    return any(number == filter_number and (filter_repo is None or repo == filter_repo) for filter_repo, filter_number in filters)
 
 
 def issue_ref(item: dict[str, Any]) -> str:
@@ -174,6 +273,40 @@ def issue_title(item: dict[str, Any]) -> str:
 def bracket_source_id(title: str) -> str:
     match = re.match(r"^\[([^\]]+)\]", title.strip())
     return match.group(1).strip() if match else ""
+
+
+def source_section_id(body: str) -> str:
+    match = re.search(r"(?im)^\s*-\s*Source section:\s*`([^`]+)`(?:\s*/\s*`([^`]+)`)?", body)
+    if not match:
+        return ""
+    return (match.group(2) or match.group(1) or "").strip()
+
+
+def explicit_source_id(body: str) -> str:
+    return first_body_field(body, "SourceId", "Source id", "Manifest leaf", "Manifest leaf id")
+
+
+def parent_issue_url(body: str) -> str:
+    return section_url(body, "Parent Issue")
+
+
+def item_source_id(item: dict[str, Any]) -> str:
+    content = item.get("content") or {}
+    body = str(content.get("body") or "")
+    title = issue_title(item)
+    explicit = explicit_source_id(body)
+    if explicit:
+        return explicit
+    section_source = source_section_id(body)
+    bracket_source = bracket_source_id(title)
+    key = issue_key(item)
+    labels = labels_for_item(item)
+    points = common.issue_points({"body": body, "labels": [{"name": label} for label in labels]})
+    if key and parent_issue_url(body) and ("agent:one-point" in labels or points == 1):
+        parent_source = section_source or bracket_source or normalized_workstream(labels, title)
+        if parent_source:
+            return f"{parent_source}#{key[1]}"
+    return section_source or bracket_source
 
 
 def normalized_workstream(labels: set[str], title: str) -> str:
@@ -293,9 +426,14 @@ def parent_issue_refs(item: dict[str, Any]) -> list[tuple[str, int]]:
 
 
 INHERITED_PROJECT_FIELDS = (
+    "Workstream",
+    "TargetRepo",
+    "ExecutionRepo",
+    "BaseBranch",
     "PlanKey",
     "ParentEpic",
     "ReviewGates",
+    "GateTier",
     "Risk",
     "RiskTags",
     "ValidationScope",
@@ -305,6 +443,42 @@ INHERITED_PROJECT_FIELDS = (
 
 def item_project_value(item: dict[str, Any], field: str) -> str:
     return item_value(item, field).strip()
+
+
+def item_body_value(item: dict[str, Any], field: str) -> str:
+    body = str((item.get("content") or {}).get("body") or "")
+    title = issue_title(item)
+    labels = labels_for_item(item)
+    repo = str((item.get("content") or {}).get("repository") or "")
+    if field == "Workstream":
+        return normalized_workstream(labels, title)
+    if field == "TargetRepo":
+        return first_body_field(body, "Target repo(s)", "Target repo") or repo
+    if field == "ExecutionRepo":
+        target_repo = first_body_field(body, "Target repo(s)", "Target repo") or repo
+        return first_body_field(body, "Execution repo") or target_repo
+    if field == "BaseBranch":
+        return first_body_field(body, "Base branch")
+    if field == "PlanKey":
+        return first_body_field(body, "Plan key")
+    if field == "ParentEpic":
+        return parent_issue_url(body) or section_url(body, "Parent Epic")
+    if field == "ReviewGates":
+        return section_text(body, "Named Gates") or section_text(body, "Required Gates")
+    if field == "GateTier":
+        return gate_tier_from(labels)
+    if field == "RiskTags":
+        return first_body_field(body, "Risk tags")
+    if field == "Risk":
+        return risk_from_tags(first_body_field(body, "Risk tags"))
+    if field == "ValidationScope":
+        return first_body_field(body, "Validation scope")
+    if field == "Priority":
+        priority = first_body_field(body, "Priority") or label_value(labels, "priority:")
+        if priority:
+            return priority.upper()
+        return priority_from_gate_tier(gate_tier_from(labels))
+    return ""
 
 
 def priority_workstream_key(workstream: str) -> str:
@@ -323,11 +497,11 @@ def inherited_project_metadata(
         if not parent:
             continue
         for field in INHERITED_PROJECT_FIELDS:
-            value = item_project_value(parent, field)
+            value = item_project_value(parent, field) or item_body_value(parent, field)
             if value and field not in inherited:
                 inherited[field] = value
     workstream = priority_workstream_key(
-        item_project_value(item, "Workstream") or normalized_workstream(labels_for_item(item), issue_title(item))
+        item_project_value(item, "Workstream") or item_body_value(item, "Workstream")
     )
     if workstream and "Priority" not in inherited:
         priority = priority_by_workstream.get(workstream)
@@ -377,6 +551,27 @@ def latest_pr_for_issue(repo: str, number: int) -> dict[str, Any] | None:
     return None
 
 
+def completion_pr_urls(item: dict[str, Any]) -> list[str]:
+    body = str((item.get("content") or {}).get("body") or "")
+    values: list[str] = []
+    for field in ("Completed by", "Completion PR", "Completion PRs", "Merged PR", "Merged PRs"):
+        values.extend(common.body_field_values(body, field))
+    urls: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for url in re.findall(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", value):
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+        for ref in re.findall(r"(?<![\w/-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+)", value):
+            repo, number = ref.rsplit("#", 1)
+            url = f"https://github.com/{repo}/pull/{number}"
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+    return urls
+
+
 def pr_label_names(pr: dict[str, Any] | None) -> set[str]:
     labels: set[str] = set()
     for label in (pr or {}).get("labels") or []:
@@ -412,6 +607,7 @@ def desired_metadata(
     points = common.issue_points({"body": body, "labels": [{"name": label} for label in labels]})
     dispatch_mode = first_body_field(body, "Dispatch mode")
     dispatch_recommendation = first_body_field(body, "Dispatch recommendation")
+    open_dependencies = first_body_field(body, "Open dependencies")
     target_repo = first_body_field(body, "Target repo(s)", "Target repo") or repo
     execution_repo = first_body_field(body, "Execution repo") or target_repo
     plan_key = first_body_field(body, "Plan key")
@@ -420,8 +616,11 @@ def desired_metadata(
     review_gates = section_text(body, "Named Gates") or section_text(body, "Required Gates")
     priority = first_body_field(body, "Priority") or label_value(labels, "priority:")
     parent_epic = section_url(body, "Parent Epic")
+    parent_issue = parent_issue_url(body)
     pr_state = str((pr or {}).get("state") or "").upper()
     pr_labels = pr_label_names(pr)
+    explicit_completion_prs = completion_pr_urls(item)
+    completion_mode = first_body_field(body, "Completion mode")
     is_closed = issue_state_value == "CLOSED"
     has_pr = bool(pr)
     has_open_pr = pr_state == "OPEN"
@@ -433,12 +632,13 @@ def desired_metadata(
         "ExecutionRepo": execution_repo,
         "BaseBranch": first_body_field(body, "Base branch"),
         "PlanKey": plan_key,
-        "SourceId": bracket_source_id(title),
-        "ParentEpic": parent_epic,
+        "SourceId": item_source_id(item),
+        "ParentEpic": parent_issue or parent_epic,
         "ReviewGates": review_gates,
         "GateTier": gate_tier_from(labels),
         "DispatchMode": dispatch_mode,
         "DispatchRecommendation": dispatch_recommendation,
+        "DependsOn": "" if open_dependencies.lower() in {"", "none", "n/a", "na", "-"} else open_dependencies,
         "Priority": priority.upper() if priority else "",
         "Risk": risk_from_tags(risk_tags),
         "RiskTags": risk_tags,
@@ -446,6 +646,8 @@ def desired_metadata(
         "IssueReady": issue_ready_from(body, labels),
         "WriteScope": section_text(body, "Write Scope"),
         "Validation": section_text(body, "Validation Commands"),
+        "CompletionMode": completion_mode,
+        "CompletedBy": "\n".join(explicit_completion_prs),
     }
     if points is not None:
         updates["Size"] = str(points)
@@ -456,6 +658,8 @@ def desired_metadata(
         updates["AutomationState"] = "Done"
         if has_pr:
             updates["ReviewVerdict"] = "Merged" if pr_state == "MERGED" else "Validated"
+        elif explicit_completion_prs:
+            updates["ReviewVerdict"] = "Merged"
     elif has_open_pr:
         updates["Status"] = "In Progress"
         updates["AutomationState"] = "PR Open"
@@ -471,6 +675,8 @@ def desired_metadata(
         updates["AutomationState"] = "Ready"
     if has_pr:
         updates["ActivePR"] = str(pr.get("url") or "")
+    elif explicit_completion_prs:
+        updates["ActivePR"] = "\n".join(explicit_completion_prs)
     for field, value in (inherited or {}).items():
         if not updates.get(field):
             updates[field] = value
@@ -479,7 +685,102 @@ def desired_metadata(
     return {field: value for field, value in updates.items() if value}
 
 
-ALWAYS_RECONCILE_FIELDS = {"Status", "AutomationState", "ActivePR", "ReviewVerdict"}
+ALWAYS_RECONCILE_FIELDS = {
+    "Status",
+    "AutomationState",
+    "ActivePR",
+    "ReviewVerdict",
+    "SourceId",
+    "Size",
+    "CompletionMode",
+    "CompletedBy",
+}
+
+
+def field_update_supported(config: ProjectConfig, field: str, value: str) -> bool:
+    field_config = config.fields.get(field)
+    if not field_config:
+        return False
+    if not value:
+        return True
+    options = {str(option.get("name")) for option in field_config.get("options") or []}
+    return not options or value in options
+
+
+def supported_field_updates(config: ProjectConfig, updates: dict[str, str]) -> dict[str, str]:
+    return {field: value for field, value in updates.items() if field_update_supported(config, field, value)}
+
+
+def parser_source_id(item: dict[str, Any]) -> str:
+    return item_source_id(item)
+
+
+def stable_source_id(item: dict[str, Any]) -> str:
+    return parser_source_id(item) or item_project_value(item, "SourceId")
+
+
+def ready_signals(item: dict[str, Any]) -> set[str]:
+    content = item.get("content") or {}
+    body = str(content.get("body") or "")
+    labels = labels_for_item(item)
+    signals: set[str] = set()
+    body_ready = first_body_field(body, "Issue ready").lower()
+    if body_ready == "true":
+        signals.add("body Issue ready=true")
+    if "status:ready" in labels or "agent:ready" in labels:
+        signals.add("ready label")
+    if item_project_value(item, "IssueReady") == "Ready":
+        signals.add("Project IssueReady=Ready")
+    if item_project_value(item, "AutomationState") == "Ready":
+        signals.add("Project AutomationState=Ready")
+    if str(item.get("automationState") or "") == "Ready":
+        signals.add("Project AutomationState=Ready")
+    return signals
+
+
+def normalized_dependency_value(value: str) -> str:
+    cleaned = value.strip().strip("`").strip()
+    return "" if cleaned.lower() in common.NONE_FIELD_VALUES else cleaned
+
+
+def audit_block_updates(config: ProjectConfig, *, clear_size: bool = False) -> dict[str, str]:
+    requested = {
+        "AutomationState": "Blocked",
+        "IssueReady": "Blocked",
+    }
+    if clear_size:
+        requested["Size"] = ""
+    return supported_field_updates(config, requested)
+
+
+def audit_decision(
+    owner: str,
+    project_number: int,
+    config: ProjectConfig,
+    item: dict[str, Any],
+    action: str,
+    reasons: list[str],
+    *,
+    clear_size: bool = False,
+    child_refs: list[str] | None = None,
+) -> ProjectDecision:
+    key = issue_key(item)
+    repo, number = key if key else ("project-only", 0)
+    return ProjectDecision(
+        owner=owner,
+        project_number=project_number,
+        project_id=config.project_id,
+        item_id=str(item.get("id") or ""),
+        repo=repo,
+        number=number,
+        title=issue_title(item) or str(item.get("title") or ""),
+        action=action,
+        status_from=str(item.get("status") or ""),
+        status_to=str(item.get("status") or ""),
+        reasons=reasons,
+        child_refs=child_refs or [],
+        field_updates=audit_block_updates(config, clear_size=clear_size),
+    )
 
 
 def metadata_decisions(
@@ -490,6 +791,8 @@ def metadata_decisions(
     issue_states: dict[tuple[str, int], str],
     *,
     hydrate_metadata: bool,
+    pr_lookup: bool = True,
+    parent_keys_with_children: set[tuple[str, int]] | None = None,
 ) -> list[ProjectDecision]:
     if not hydrate_metadata or not config.fields:
         return []
@@ -513,13 +816,19 @@ def metadata_decisions(
         if not key:
             continue
         repo, number = key
-        pr = latest_pr_for_issue(repo, number) if should_lookup_pr(item, issue_states.get(key, "UNKNOWN")) else None
+        pr = (
+            None
+            if completion_pr_urls(item)
+            else latest_pr_for_issue(repo, number) if pr_lookup and should_lookup_pr(item, issue_states.get(key, "UNKNOWN")) else None
+        )
         desired = desired_metadata(
             item,
             issue_states.get(key, "UNKNOWN"),
             pr,
             inherited_project_metadata(item, items_by_issue, priority_by_workstream),
         )
+        if key in (parent_keys_with_children or set()):
+            desired["Size"] = ""
         field_updates: dict[str, str] = {}
         for field, value in desired.items():
             field_config = config.fields.get(field)
@@ -553,6 +862,122 @@ def metadata_decisions(
                 field_updates=field_updates,
             )
         )
+    return decisions
+
+
+def project_audit_decisions(
+    owner: str,
+    project_number: int,
+    config: ProjectConfig,
+    items: list[dict[str, Any]],
+) -> list[ProjectDecision]:
+    decisions: list[ProjectDecision] = []
+    source_buckets: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        source_id = stable_source_id(item)
+        if source_id:
+            source_buckets.setdefault(source_id, []).append(item)
+
+    for source_id, rows in sorted(source_buckets.items()):
+        if len(rows) < 2:
+            continue
+        refs = [issue_ref(row) for row in rows]
+        for row in rows:
+            decisions.append(
+                audit_decision(
+                    owner,
+                    project_number,
+                    config,
+                    row,
+                    "audit-duplicate-source-id",
+                    [f"Duplicate Project SourceId {source_id}: {', '.join(refs)}"],
+                    clear_size=True,
+                )
+            )
+
+    for item in items:
+        key = issue_key(item)
+        source_from_parser = parser_source_id(item)
+        source_from_project = item_project_value(item, "SourceId")
+        current_size = item_project_value(item, "Size")
+        signals = ready_signals(item)
+        reasons: list[str] = []
+        clear_size = False
+
+        if not key:
+            if source_from_project or current_size:
+                reasons.append("Project-only row is not backed by an issue parser record")
+                clear_size = True
+        elif source_from_project and not source_from_parser:
+            reasons.append("Project SourceId is not present in parser-derived issue truth")
+            clear_size = True
+        elif current_size and not source_from_parser:
+            reasons.append("Project Size is not backed by parser-derived SourceId")
+            clear_size = True
+        elif signals and not source_from_parser:
+            reasons.append("Ready issue is missing parser-derived SourceId")
+
+        content = item.get("content") or {}
+        body = str(content.get("body") or "")
+        labels = labels_for_item(item)
+        body_ready = first_body_field(body, "Issue ready").lower()
+        if signals and body_ready == "false":
+            reasons.append("Ready markers disagree with body Issue ready=false")
+        if signals and "status:blocked" in labels:
+            reasons.append("Ready markers disagree with status:blocked label")
+
+        open_dependencies_values = common.body_field_values(body, "Open dependencies")
+        body_depends = normalized_dependency_value(open_dependencies_values[0]) if open_dependencies_values else ""
+        project_depends = normalized_dependency_value(item_project_value(item, "DependsOn"))
+        if signals and re.search(r"(?im)^##\s+Dependencies\s*$", body) and not open_dependencies_values:
+            reasons.append("Dependencies section is missing Open dependencies runtime marker")
+        if signals and body_depends:
+            reasons.append("Ready markers coexist with non-empty Open dependencies")
+        if signals and project_depends and project_depends != body_depends:
+            reasons.append("Project DependsOn disagrees with body Open dependencies")
+
+        manual_gates = first_body_field(body, "Manual gates remaining")
+        if signals and manual_gates:
+            reasons.append("Ready markers coexist with non-empty Manual gates remaining")
+
+        for field in ("DispatchMode", "DispatchRecommendation"):
+            body_value = first_body_field(body, field.replace("Dispatch", "Dispatch ").lower().title())
+            project_value = item_project_value(item, field)
+            if signals and body_value and project_value and body_value != project_value:
+                reasons.append(f"Project {field} disagrees with issue body")
+
+        if signals:
+            point_values = common.issue_point_values({"body": body, "labels": [{"name": label} for label in labels]})
+            if len(point_values) > 1:
+                joined = ", ".join(str(value) for value in sorted(point_values))
+                reasons.append(f"Ready markers coexist with conflicting point metadata: {joined}")
+                clear_size = True
+            elif point_values and point_values[0] > 1:
+                reasons.append(f"Ready markers coexist with multi-point Size {point_values[0]}")
+                clear_size = True
+            elif not point_values and "agent:one-point" not in labels:
+                reasons.append("Ready markers coexist with missing point metadata")
+
+            priority = item_project_value(item, "Priority") or item_body_value(item, "Priority")
+            if not priority:
+                priority = priority_from_gate_tier(item_project_value(item, "GateTier"))
+            if not priority:
+                reasons.append("Ready markers coexist with missing Priority metadata")
+            elif "Priority" in config.fields and not field_update_supported(config, "Priority", priority):
+                reasons.append(f"Inferred Priority {priority} is not available in Project options")
+
+        if reasons:
+            decisions.append(
+                audit_decision(
+                    owner,
+                    project_number,
+                    config,
+                    item,
+                    "audit-blocked",
+                    reasons,
+                    clear_size=clear_size,
+                )
+            )
     return decisions
 
 
@@ -591,6 +1016,40 @@ def issue_state(repo: str, number: int) -> str:
     return str(data.get("state") or "UNKNOWN").upper()
 
 
+def issue_states_for_items(items: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
+    by_repo: dict[str, set[int]] = {}
+    for item in items:
+        key = issue_key(item)
+        if key:
+            repo, number = key
+            by_repo.setdefault(repo, set()).add(number)
+    issue_states: dict[tuple[str, int], str] = {}
+    for repo, numbers in by_repo.items():
+        expected = set(numbers)
+        rows = common.gh_json_or_none(
+            [
+                "issue",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--limit",
+                str(max(1000, len(expected))),
+                "--json",
+                "number,state",
+            ],
+            retries=2,
+        ) or []
+        for row in rows:
+            number = int(row.get("number") or 0)
+            if number in expected:
+                issue_states[(repo, number)] = str(row.get("state") or "UNKNOWN").upper()
+        for missing in sorted(expected - {number for item_repo, number in issue_states if item_repo == repo}):
+            issue_states[(repo, missing)] = issue_state(repo, missing)
+    return issue_states
+
+
 def item_complete(item: dict[str, Any], issue_states: dict[tuple[str, int], str]) -> bool:
     key = issue_key(item)
     state = issue_states.get(key or ("", 0), "UNKNOWN")
@@ -605,6 +1064,50 @@ def target_status_for_children(children: list[dict[str, Any]], issue_states: dic
     return "Todo"
 
 
+def children_by_parent_issue(items: list[dict[str, Any]]) -> dict[tuple[str, int], list[dict[str, Any]]]:
+    children: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for item in items:
+        for parent_ref in parent_issue_refs(item):
+            children.setdefault(parent_ref, []).append(item)
+    return children
+
+
+def parent_size_rollup_decisions(
+    owner: str,
+    project_number: int,
+    config: ProjectConfig,
+    items: list[dict[str, Any]],
+    children_by_parent: dict[tuple[str, int], list[dict[str, Any]]],
+) -> list[ProjectDecision]:
+    if "Size" not in config.fields:
+        return []
+    items_by_issue = {key: item for item in items if (key := issue_key(item))}
+    decisions: list[ProjectDecision] = []
+    for parent_key, children in sorted(children_by_parent.items()):
+        parent = items_by_issue.get(parent_key)
+        if not parent or not item_project_value(parent, "Size"):
+            continue
+        child_refs = [issue_ref(child) for child in children]
+        decisions.append(
+            ProjectDecision(
+                owner=owner,
+                project_number=project_number,
+                project_id=config.project_id,
+                item_id=str(parent["id"]),
+                repo=parent_key[0],
+                number=parent_key[1],
+                title=issue_title(parent),
+                action="clear-parent-size",
+                status_from=str(parent.get("status") or ""),
+                status_to=str(parent.get("status") or ""),
+                reasons=["Decomposed child items supersede parent Size for rollups"],
+                child_refs=child_refs,
+                field_updates={"Size": ""},
+            )
+        )
+    return decisions
+
+
 def decide(
     owner: str,
     project_number: int,
@@ -612,12 +1115,11 @@ def decide(
     items: list[dict[str, Any]],
     *,
     hydrate_metadata: bool = True,
+    pr_lookup: bool = True,
+    audit: bool = True,
 ) -> list[ProjectDecision]:
-    issue_states: dict[tuple[str, int], str] = {}
-    for item in items:
-        key = issue_key(item)
-        if key:
-            issue_states[key] = issue_state(*key)
+    issue_states = issue_states_for_items(items)
+    children_by_parent_key = children_by_parent_issue(items)
 
     by_url = {issue_url(item): item for item in items if issue_url(item)}
     children_by_parent: dict[str, list[dict[str, Any]]] = {}
@@ -632,7 +1134,12 @@ def decide(
         items,
         issue_states,
         hydrate_metadata=hydrate_metadata,
+        pr_lookup=pr_lookup,
+        parent_keys_with_children=set(children_by_parent_key),
     )
+    decisions.extend(parent_size_rollup_decisions(owner, project_number, config, items, children_by_parent_key))
+    if audit:
+        decisions.extend(project_audit_decisions(owner, project_number, config, items))
     for parent_url, children in children_by_parent.items():
         parent = by_url.get(parent_url)
         if not parent or not is_epic_item(parent) or parent.get("status") != "Done":
@@ -684,26 +1191,89 @@ def apply_project_field(config: ProjectConfig, item_id: str, field_name: str, va
     field = config.fields.get(field_name)
     if not field:
         return
-    common.run(
-        [
-            "gh",
-            "project",
-            "item-edit",
-            "--id",
-            item_id,
-            "--project-id",
-            config.project_id,
-            "--field-id",
-            str(field["id"]),
-            *project_field_value_args(field_name, field, value),
-        ],
-        retries=3,
-    )
+    try:
+        common.run(
+            [
+                "gh",
+                "project",
+                "item-edit",
+                "--id",
+                item_id,
+                "--project-id",
+                config.project_id,
+                "--field-id",
+                str(field["id"]),
+                *project_field_value_args(field_name, field, value),
+            ],
+            retries=3,
+        )
+    except RuntimeError as exc:
+        if "Could not resolve to a node" in str(exc):
+            print(f"SKIP PROJECT-RECONCILE {item_id}: Project item no longer exists while updating {field_name}")
+            return
+        raise
 
 
 def apply_decision(decision: ProjectDecision, config: ProjectConfig) -> None:
     for field_name, value in (decision.field_updates or {}).items():
         apply_project_field(config, decision.item_id, field_name, value)
+
+
+def graphql_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def graphql_project_field_value(field_name: str, field: dict[str, Any], value: str) -> str:
+    if field_name == "Size":
+        return "{number: " + str(float(value)) + "}"
+    options = {str(option.get("name")): str(option.get("id")) for option in field.get("options") or []}
+    if options:
+        option_id = options.get(value)
+        if not option_id:
+            raise RuntimeError(f"Project field {field_name} has no option {value!r}")
+        return "{singleSelectOptionId: " + graphql_string(option_id) + "}"
+    return "{text: " + graphql_string(value) + "}"
+
+
+def project_field_mutation(config: ProjectConfig, decision: ProjectDecision, field_name: str, value: str, alias: str) -> str:
+    field = config.fields.get(field_name)
+    if not field:
+        return ""
+    project_id = graphql_string(config.project_id)
+    item_id = graphql_string(decision.item_id)
+    field_id = graphql_string(str(field["id"]))
+    if not value:
+        return (
+            f"{alias}: clearProjectV2ItemFieldValue(input: "
+            f"{{projectId: {project_id}, itemId: {item_id}, fieldId: {field_id}}}) "
+            "{ projectV2Item { id } }"
+        )
+    value_literal = graphql_project_field_value(field_name, field, value)
+    return (
+        f"{alias}: updateProjectV2ItemFieldValue(input: "
+        f"{{projectId: {project_id}, itemId: {item_id}, fieldId: {field_id}, value: {value_literal}}}) "
+        "{ projectV2Item { id } }"
+    )
+
+
+def apply_decisions(decisions: list[ProjectDecision], configs: dict[tuple[str, int], ProjectConfig]) -> None:
+    mutations: list[str] = []
+    batch_size = max(1, common.config_int("AGENT_PROJECT_GRAPHQL_BATCH_SIZE", 40))
+    for decision in decisions:
+        config = configs[(decision.owner, decision.project_number)]
+        for field_name, value in (decision.field_updates or {}).items():
+            alias = f"m{len(mutations)}"
+            mutation = project_field_mutation(config, decision, field_name, value, alias)
+            if mutation:
+                mutations.append(mutation)
+    total = len(mutations)
+    applied = 0
+    for start in range(0, total, batch_size):
+        chunk = mutations[start : start + batch_size]
+        query = "mutation {\n" + "\n".join(chunk) + "\n}"
+        common.run(["gh", "api", "graphql", "-f", f"query={query}"], retries=3)
+        applied += len(chunk)
+        print(f"APPLY PROJECT-RECONCILE fields {applied}/{total}", flush=True)
 
 
 def write_summary(path: str, decisions: list[ProjectDecision]) -> None:
@@ -751,6 +1321,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Populate missing/stale issue row metadata such as ItemType, repos, Workstream, ActivePR, and lifecycle fields.",
     )
+    parser.add_argument(
+        "--issue",
+        action="append",
+        default=[],
+        help="Limit reconciliation to one issue. Repeatable. Accepts NUMBER, #NUMBER, OWNER/REPO#NUMBER, or issue URL.",
+    )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument(
         "--dry-run",
@@ -758,6 +1334,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview project status changes. This is the default unless --apply is passed.",
     )
     parser.add_argument("--summary")
+    parser.add_argument(
+        "--project-snapshot",
+        help="Optional saved gh project item-list JSON snapshot. Dry-run can use item-list snapshots without Project v2 field metadata; apply requires field metadata.",
+    )
+    parser.add_argument(
+        "--pr-lookup",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Search GitHub PRs while hydrating metadata. Defaults to off for snapshot dry-runs and on otherwise.",
+    )
+    parser.add_argument(
+        "--audit",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include fail-closed Project audit decisions such as duplicate SourceId and unsafe ready markers.",
+    )
     return parser
 
 
@@ -765,18 +1357,36 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    issue_filters = {issue_filter(raw) for raw in args.issue}
+    pr_lookup = args.pr_lookup
+    if pr_lookup is None:
+        pr_lookup = not (args.project_snapshot and not args.apply)
     configs: dict[tuple[str, int], ProjectConfig] = {}
     decisions: list[ProjectDecision] = []
     for owner, project_number in project_targets(args.projects_file, args.owner, args.project_number):
-        config = project_config(owner, project_number)
+        config = (
+            snapshot_project_config(args.project_snapshot, owner, project_number, allow_inferred=not args.apply)
+            if args.project_snapshot
+            else project_config(owner, project_number)
+        )
         configs[(owner, project_number)] = config
+        raw_items = (
+            common.project_snapshot_items(args.project_snapshot, owner, project_number)
+            if args.project_snapshot
+            else project_items(owner, project_number, args.limit)
+        )
+        if args.project_snapshot and len(raw_items) >= args.limit:
+            raw_items = raw_items[: args.limit]
+        items = [item for item in raw_items if item_matches_issue_filters(item, issue_filters)]
         decisions.extend(
             decide(
                 owner,
                 project_number,
                 config,
-                project_items(owner, project_number, args.limit),
+                items,
                 hydrate_metadata=args.hydrate_metadata,
+                pr_lookup=pr_lookup,
+                audit=args.audit,
             )
         )
     if args.summary:
@@ -790,8 +1400,8 @@ def main() -> None:
             + (f" ({children})" if children else ""),
             flush=True,
         )
-        if args.apply:
-            apply_decision(decision, configs[(decision.owner, decision.project_number)])
+    if args.apply:
+        apply_decisions(decisions, configs)
 
 
 if __name__ == "__main__":

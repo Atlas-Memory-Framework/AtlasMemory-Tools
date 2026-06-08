@@ -99,6 +99,10 @@ Use the Human readability review schema below.
 - Tie review freshness to the current validator/package outputs for the plan state being reviewed.
 - If review packaging, validator evidence, or refreshed stamps no longer match the current plan state, treat the review as stale and rerun it.
 - In `registry-first`, package contradictions against authority boundaries and validator outputs rather than against a markdown-only planning model.
+- For new or refreshed reviews, record both:
+  - `RefreshedAt: YYYY-MM-DDTHH:MM:SS`
+  - `ReviewedPlanHash: sha256:<hash of current plan content excluding ## Planning Reviews>`
+- Date-only `Refreshed: YYYY-MM-DD` is legacy context only; do not use it as the freshness proof for new reviews.
 
 ## Finding Closure Protocol (required)
 - After remediation, rewrite the original finding line while keeping the same `F-xxx` id:
@@ -214,7 +218,7 @@ Unless the user explicitly requests otherwise, run **one sub-agent per review ty
 - Human readability review: run `/review mode=human-readability`
 - Automation readiness review: run `/review mode=automation-readiness` when `AutomationTarget != none`.
 
-Then merge outputs into the plan’s `## Planning Reviews` section, preserving stable `F-xxx` ids per review block and recording `Refreshed: YYYY-MM-DD` for each required review.
+Then merge outputs into the plan’s `## Planning Reviews` section, preserving stable `F-xxx` ids per review block and recording `RefreshedAt: YYYY-MM-DDTHH:MM:SS` plus `ReviewedPlanHash: sha256:<hash>` for each required review.
 
 ### Automation readiness review (conditional)
 - Focus on whether issue projection and unattended execution can be derived from explicit manifest data, not prose inference.

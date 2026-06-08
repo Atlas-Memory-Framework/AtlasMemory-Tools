@@ -144,7 +144,8 @@ Use the source-level runtime helpers instead of hand-copying over live state:
 ```bash
 python3 scripts/sync_runtime_template.py --runtime-dir /path/to/runtime
 python3 scripts/runtime_control.py --runtime-dir /path/to/runtime status
-python3 scripts/runtime_control.py --runtime-dir /path/to/runtime queue --plan /path/to/plan.md --repo OWNER/REPO --dry-run
+python3 scripts/runtime_control.py --runtime-dir /path/to/runtime plan-preview --plan /path/to/plan.md --repo OWNER/REPO
+python3 scripts/runtime_control.py --runtime-dir /path/to/runtime queue --plan /path/to/plan.md --repo OWNER/REPO --yes
 ```
 
 `scripts/sync_runtime_template.py` refreshes template files while preserving runtime-local config, secrets,

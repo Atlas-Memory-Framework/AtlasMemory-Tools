@@ -213,7 +213,53 @@ def with_timeout(cmd: list[str]) -> list[str]:
     return cmd
 
 
-def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> str:
+def disable_repo_hooks() -> bool:
+    return os.environ.get("AGENT_DISABLE_REPO_HOOKS", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def tools_mount_paths() -> list[pathlib.Path]:
+    configured = os.environ.get("AGENT_TOOLS_MOUNT_PATHS", "").strip()
+    if configured:
+        candidates = [pathlib.Path(item.strip()).expanduser() for item in configured.split(",") if item.strip()]
+    else:
+        candidates = [
+            pathlib.Path("/var/home/mat/Desktop/AtlasMemory-Tools"),
+            pathlib.Path("/run/host/var/home/mat/Desktop/AtlasMemory-Tools"),
+        ]
+    return [path for path in candidates if path.exists()]
+
+
+def repair_container_volumes(
+    run_home: pathlib.Path,
+    repair_path: pathlib.Path,
+    job_dir: pathlib.Path,
+    repo_cache_path: pathlib.Path,
+) -> list[str]:
+    volumes = [
+        "-v",
+        f"{run_home}:/home/agent/.codex:Z",
+        "-v",
+        f"{repair_path}:/work:Z",
+        "-v",
+        f"{job_dir}:/job:Z",
+        # Git worktrees use a .git file that points back into the cached clone.
+        # Mount the cache at the same absolute path so git commands work inside /work.
+        "-v",
+        f"{repo_cache_path}:{repo_cache_path}:Z",
+    ]
+    for path in tools_mount_paths():
+        # Plan validation commands can reference the Tools checkout by host path.
+        # Keep this read-only; repair workers should not edit the SSOT tooling repo.
+        volumes.extend(["-v", f"{path}:{path}:ro,Z"])
+    return volumes
+
+
+def run_codex(
+    repair_path: pathlib.Path,
+    job_dir: pathlib.Path,
+    prompt: str,
+    repo_cache_path: pathlib.Path,
+) -> str:
     prompt_path = job_dir / "prompt.md"
     prompt_path.write_text(prompt, encoding="utf-8")
     run_home = common.codex_home_copy(job_dir)
@@ -235,7 +281,7 @@ def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> st
                 "-lc",
                 f"codex exec {profile_segment}--ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox - < {prompt_path}",
             ]),
-            cwd=repo_path,
+            cwd=repair_path,
             check=False,
             env=env,
         )
@@ -247,18 +293,13 @@ def run_codex(repo_path: pathlib.Path, job_dir: pathlib.Path, prompt: str) -> st
             "--rm",
             *common.podman_userns_args(),
             "--network=slirp4netns",
-            "-v",
-            f"{run_home}:/home/agent/.codex:Z",
-            "-v",
-            f"{repo_path}:/work:Z",
-            "-v",
-            f"{job_dir}:/job:Z",
+            *repair_container_volumes(run_home, repair_path, job_dir, repo_cache_path),
             common.codex_image(),
             "bash",
             "-lc",
             shell_command,
         ]
-        proc = common.run(with_timeout(cmd), cwd=repo_path, check=False)
+        proc = common.run(with_timeout(cmd), cwd=repair_path, check=False)
         if proc.returncode != 0 and "podman: command not found" in (proc.stdout or "").lower():
             fallback = run_local_codex()
             if fallback is not None:
@@ -303,6 +344,8 @@ def repair(args: argparse.Namespace) -> None:
     common.write_json(job_dir / "pr.json", pr)
 
     repo_path = common.ensure_repo(repo)
+    if disable_repo_hooks():
+        common.run(["git", "config", "core.hooksPath", "/dev/null"], cwd=repo_path)
     head = pr["headRefName"]
     repair_path = common.jobs_dir() / "checkouts" / common.safe_repo_name(repo) / f"pr-{number}-repair-{common.now_id()}"
     repair_path.parent.mkdir(parents=True, exist_ok=True)
@@ -321,7 +364,12 @@ def repair(args: argparse.Namespace) -> None:
     checks = collect_checks(repo, number, job_dir)
     failed_log = collect_failed_run_log(repo, head, job_dir)
     review_comments = collect_review_comments(repo, number, job_dir)
-    run_codex(repair_path, job_dir, build_prompt(pr, checks, failed_log, review_comments, current_head_semantic_review(pr)))
+    run_codex(
+        repair_path,
+        job_dir,
+        build_prompt(pr, checks, failed_log, review_comments, current_head_semantic_review(pr)),
+        repo_path,
+    )
 
     status = common.run(["git", "status", "--short"], cwd=repair_path).stdout
     current_head = common.run(["git", "rev-parse", "HEAD"], cwd=repair_path).stdout.strip()

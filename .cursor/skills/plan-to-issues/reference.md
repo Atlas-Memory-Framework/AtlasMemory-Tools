@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan-to-issues/reference.md manifest=atlas-tools.v1 checksum=sha256:a4104ed0641fe928f81c47d12c8d0254d9a9d005f3d821c08c311c483a3d0da0 -->
+<!-- atlas-tools-generated: source=skills/plan-to-issues/reference.md manifest=atlas-tools.v1 checksum=sha256:98c30a63d11a13391fd119fa1b996036e02fdb78b5fde2a2663543e7e550e5d0 -->
 <!-- atlas-tools-generated-end -->
 # Plan-To-Issues Reference
 
@@ -98,7 +98,9 @@ Story body should include:
 Manifest leaf issue body should include:
 
 - source `## Automation Issue Manifest` / `### Leaf issues` leaf id
+- stable `SourceId` / plan-source marker in the issue body
 - dispatch mode and dispatch recommendation
+- scheduler metadata when present: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, validation tier
 - execution repo and base branch
 - write scope
 - validation commands
@@ -126,7 +128,16 @@ Always run dry-run first. Preview:
 - inferred workstream ids
 - unresolved gaps that need user input
 
-Only apply after the user explicitly confirms.
+Before apply, audit existing target issues and Project rows for duplicate or conflicting source mappings.
+Fail the apply if any `SourceId`, manifest leaf id, workstream id, or `trackingIssue` mapping points to
+more than one open issue/row, or if a Project row has no matching issue-body source marker.
+
+Only apply after the user explicitly confirms and the duplicate/source-id audit passes.
+
+After apply, run `project-queue-audit` against the created or updated issues and execution Project.
+Treat these as hard failures: missing `Priority`, duplicate `SourceId`, ready/agent-ready state on an
+issue larger than one point, Project-only rows, and Project `Size` mismatches against body `Points` or
+`points:*` labels.
 
 ## Automation Issue Manifest
 
@@ -139,6 +150,13 @@ Canonical section:
   - Dispatch: agent-ready
   - Points: 1
   - Target repo: service
+  - Parallel group: parser-docs
+  - Blocks: LEAF-002
+  - Critical path rank: 1
+  - Merge group: manifest-projection
+  - Combine policy: combine-with-merge-group
+  - Conflict class: plan-to-issues-parser
+  - Validation tier: T2
   - Files in scope:
     - `skills/plan-to-issues/scripts/plan_to_issues.py`
     - `skills/plan-to-issues/scripts/test_plan_to_issues.py`
@@ -153,3 +171,4 @@ Dependency rules:
 - GitHub issue refs and sibling manifest leaf ids are projectable.
 - Merge points, gates, decisions, assumptions, risks, and opaque prose dependencies are guardrails.
 - Guardrailed leaves remain `tracking-only` until dependencies are converted to explicit issue refs or runnable manifest leaf ids.
+- `Blocks` is scheduler metadata for downstream ordering; it is projected to issue bodies and the `Blocks` Project field when present. It does not replace `Depends on`.

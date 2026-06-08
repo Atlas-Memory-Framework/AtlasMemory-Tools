@@ -147,6 +147,38 @@ def podman_userns_segment():
     return "" if parts and parts[0] == "sudo" else "--userns=keep-id "
 
 
+def disable_repo_hooks():
+    return os.environ.get("AGENT_DISABLE_REPO_HOOKS", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def tools_mount_paths():
+    configured = os.environ.get("AGENT_TOOLS_MOUNT_PATHS", "").strip()
+    if configured:
+        candidates = [pathlib.Path(item.strip()).expanduser() for item in configured.split(",") if item.strip()]
+    else:
+        candidates = [
+            pathlib.Path("/var/home/mat/Desktop/AtlasMemory-Tools"),
+            pathlib.Path("/run/host/var/home/mat/Desktop/AtlasMemory-Tools"),
+        ]
+    return [path for path in candidates if path.exists()]
+
+
+def worker_container_volumes(run_home, worktree_dir, job_dir, repo_dir):
+    volumes = [
+        f"-v {quote_path(run_home)}:/home/agent/.codex:Z",
+        f"-v {quote_path(worktree_dir)}:/work:Z",
+        f"-v {quote_path(job_dir)}:/job:Z",
+        # Git worktrees use a .git file that points back into the cached clone.
+        # Mount the cache at the same absolute path so git commands work inside /work.
+        f"-v {quote_path(repo_dir)}:{quote_path(repo_dir)}:Z",
+    ]
+    for path in tools_mount_paths():
+        # Issue validation commands can reference the Tools checkout by host path.
+        # Keep this read-only; workers should not edit the SSOT tooling repo.
+        volumes.append(f"-v {quote_path(path)}:{quote_path(path)}:ro,Z")
+    return " ".join(volumes)
+
+
 def changed_paths(repo_dir):
     rows = run("git diff --cached --name-status --diff-filter=ACDMRTUXB", cwd=repo_dir).splitlines()
     paths = []
@@ -174,6 +206,10 @@ def executable_paths(repo_dir):
 
 
 def blocked_policy_violations(paths, labels):
+    return [f"{item['path']} requires {item['label']}" for item in blocked_policy_requirements(paths, labels)]
+
+
+def blocked_policy_requirements(paths, labels):
     workflow_patterns = [
         ".github/workflows/**",
         ".github/actions/**",
@@ -187,20 +223,91 @@ def blocked_policy_violations(paths, labels):
         "terraform/**",
     ]
 
-    violations = []
+    requirements = []
     allow_workflows = os.environ["AGENT_ALLOW_WORKFLOWS_LABEL"] in labels
     allow_infra = os.environ["AGENT_ALLOW_INFRA_LABEL"] in labels
 
     for path in paths:
         if not allow_workflows and any(fnmatch.fnmatch(path, pat) for pat in workflow_patterns):
-            violations.append(f"{path} requires {os.environ['AGENT_ALLOW_WORKFLOWS_LABEL']}")
+            requirements.append({"path": path, "label": os.environ["AGENT_ALLOW_WORKFLOWS_LABEL"]})
         if not allow_infra and any(fnmatch.fnmatch(path, pat) for pat in infra_patterns):
-            violations.append(f"{path} requires {os.environ['AGENT_ALLOW_INFRA_LABEL']}")
-    return violations
+            requirements.append({"path": path, "label": os.environ["AGENT_ALLOW_INFRA_LABEL"]})
+    return requirements
 
 
-def build_prompt(issue, repo):
-    return f"""You are working on GitHub issue #{issue["number"]} in repo {repo}.
+def changed_file_records(paths, statuses):
+    records = []
+    for index, path in enumerate(paths):
+        records.append({"path": path, "status": statuses[index] if index < len(statuses) else ""})
+    return records
+
+
+def write_policy_gate_record(
+    job_dir,
+    issue,
+    repo,
+    job_id,
+    base_sha,
+    paths,
+    statuses,
+    required_labels,
+    diff_stat,
+    diff_lines,
+    policy_errors,
+):
+    record = {
+        "issue": {
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "url": issue.get("url"),
+            "labels": sorted(label_names(issue)),
+        },
+        "repo": repo,
+        "job_id": job_id,
+        "base_sha": base_sha,
+        "changed_files": changed_file_records(paths, statuses),
+        "required_labels": sorted(set(required_labels)),
+        "diff_stats": {
+            "stat": diff_stat,
+            "line_count": diff_lines,
+            "file_count": len(paths),
+        },
+        "policy_errors": policy_errors,
+        "next_action": "Add the required approval labels, then requeue the issue. The worker will rerun from scratch.",
+    }
+    (job_dir / "policy-gate.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return record
+
+
+def build_policy_gate_comment(number, job_id, base_sha, required_labels, policy_errors, status, job_dir):
+    return f"""Agent stopped for issue #{number}: awaiting human policy approval.
+
+Job: `{job_id}`
+Base: `{base_sha}`
+
+Required approval labels:
+{bullet_list(required_labels)}
+
+Policy errors:
+```text
+{chr(10).join(policy_errors)[:5000]}
+```
+
+Changed files:
+```text
+{status[:3000]}
+```
+
+Resumable record:
+`{job_dir}/policy-gate.json`
+
+Next action: add the required approval label(s), then requeue the issue. The worker will rerun from scratch and will not auto-apply this saved diff.
+"""
+
+
+def build_prompt(issue, repo, issue_repo=None):
+    issue_context = f"{issue_repo}#{issue['number']}" if issue_repo and issue_repo != repo else f"#{issue['number']}"
+    return f"""You are working on GitHub issue {issue_context} and implementing changes in repo {repo}.
 
 Title:
 {issue.get("title", "")}
@@ -255,7 +362,8 @@ def extract_codex_final_response(codex_log, limit=5000):
     start = max(0, len(lines) - 80)
     heading = re.compile(r"^(Implemented|Changed|Summary|Tests|Verification|Fixed|Added|Updated)\b", re.I)
     for index in range(len(lines) - 1, -1, -1):
-        if heading.match(lines[index].strip()):
+        candidate = lines[index].strip().strip("*").strip()
+        if heading.match(candidate):
             start = index
             break
     return compact_lines("\n".join(lines[start:]), limit)
@@ -264,18 +372,136 @@ def extract_codex_final_response(codex_log, limit=5000):
 def extract_validation_section(final_response):
     lines = (final_response or "").splitlines()
     start = None
+    inline_value = ""
     for index, line in enumerate(lines):
-        if re.match(r"^\s*(Tests|Verification)\s*:?\s*$", line, re.I):
+        inline_match = re.match(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?(Tests|Verification)(?:\*\*)?\s*:\s*(\S.*)$", line, re.I)
+        if inline_match:
+            start = index
+            inline_value = inline_match.group(2).strip()
+            break
+        if re.match(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?(Tests|Verification)(?:\*\*)?\s*:?\s*$", line, re.I):
             start = index
             break
     if start is None:
         return ""
-    collected = []
+    collected = [inline_value] if inline_value else []
     for line in lines[start + 1 :]:
-        if collected and re.match(r"^[A-Z][A-Za-z ]+\s*:?\s*$", line.strip()):
+        stripped = line.strip()
+        heading_text = re.sub(r"^\s*#{1,6}\s*", "", stripped).strip().strip("*").strip()
+        if re.match(r"^[A-Z][A-Za-z ]+\s*:?\s*$", heading_text):
             break
+        if not collected and not stripped:
+            continue
         collected.append(line)
     return compact_lines("\n".join(collected).strip(), 1600)
+
+
+def validation_waiver(issue):
+    labels = label_names(issue)
+    if "agent:validation-waived" in labels:
+        return "label `agent:validation-waived`"
+
+    body = issue.get("body") or ""
+    for line in body.splitlines():
+        match = re.match(
+            r"^\s*(?:[-*]\s*)?(?:\*\*)?(Validation\s*Waiver|ValidationWaiver)(?:\*\*)?\s*:\s*(.+?)\s*$",
+            line,
+            re.I,
+        )
+        if not match:
+            continue
+        value = match.group(2).strip().strip("`*_ ")
+        normalized = value.lower().strip(". ")
+        if normalized and normalized not in {"none", "no", "false", "n/a", "na", "null", "0"}:
+            return value
+    return ""
+
+
+def validation_skip_without_reason(validation_text):
+    text = (validation_text or "").strip()
+    if not text:
+        return False
+    lower = text.lower()
+    skip_patterns = [
+        r"\btests?\s+(?:were\s+)?not\s+run\b",
+        r"\btests?\s+(?:were\s+)?not\s+executed\b",
+        r"\btests?\s+(?:were\s+)?skipped\b",
+        r"\bskipped\s+tests?\b",
+        r"\bdid\s+not\s+run\s+tests?\b",
+        r"\bno\s+tests?\s+run\b",
+        r"^\s*(?:[-*]\s*)?not\s+run\b",
+        r"^\s*(?:[-*]\s*)?skipped\b",
+    ]
+    if not any(re.search(pattern, lower, re.M) for pattern in skip_patterns):
+        return False
+    if re.search(r"\bwithout\s+(?:a\s+)?reason\b|\bno\s+reason\b", lower):
+        return True
+    if re.search(r"\b(?:not\s+run|skipped|not\s+executed|no\s+tests?\s+run)\b\s*[:(-]\s*(?:none|n/a|na)\b", lower):
+        return True
+    reason_patterns = [
+        r"\bbecause\b",
+        r"\bdue\s+to\b",
+        r"\breason\s*:",
+        r"\bblocked\s+by\b",
+        r"\bnot\s+applicable\b",
+        r"\bn/a\b",
+        r"\bdocs?\s+only\b",
+        r"\bdocumentation\s+only\b",
+        r"\bno\s+tests?\s+(?:available|configured|exist)\b",
+        r"\bno\s+test\s+suite\b",
+        r"\brequires?\b",
+        r"\bunavailable\b",
+        r"\bnot\s+installed\b",
+        r"\bcannot\b",
+        r"\bcould\s+not\b",
+    ]
+    if any(re.search(pattern, lower) for pattern in reason_patterns):
+        return False
+    if re.search(r"\b(?:not\s+run|skipped|not\s+executed|no\s+tests?\s+run)\b\s*[:(-]\s*[a-z0-9].{3,}", lower):
+        return False
+    return True
+
+
+def classify_validation_gate(issue, final_response):
+    validation = extract_validation_section(final_response)
+    waiver = validation_waiver(issue)
+    if not validation:
+        status = "waived" if waiver else "failed"
+        return {
+            "status": status,
+            "publish_allowed": bool(waiver),
+            "reason": "No explicit Tests or Verification section was found in the worker final response.",
+            "validation": "",
+            "waiver": waiver,
+        }
+    if validation_skip_without_reason(validation):
+        status = "waived" if waiver else "failed"
+        return {
+            "status": status,
+            "publish_allowed": bool(waiver),
+            "reason": "The Tests or Verification section says tests were not run or were skipped without a reason.",
+            "validation": validation,
+            "waiver": waiver,
+        }
+    return {
+        "status": "passed",
+        "publish_allowed": True,
+        "reason": "Explicit validation evidence was found in the worker final response.",
+        "validation": validation,
+        "waiver": waiver,
+    }
+
+
+def validation_gate_status_text(gate):
+    lines = [
+        f"Status: {gate['status']}",
+        f"Reason: {gate['reason']}",
+    ]
+    if gate.get("waiver"):
+        lines.append(f"Waiver: {gate['waiver']}")
+    if gate.get("validation"):
+        lines.extend(["", "Evidence:", gate["validation"]])
+    return "\n".join(lines)
 
 
 def pr_title(issue):
@@ -284,9 +510,10 @@ def pr_title(issue):
     return compact_lines(title.replace("\n", " "), 120)
 
 
-def build_pr_body(issue, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log):
+def build_pr_body(issue, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log, issue_repo=None):
     final_response = extract_codex_final_response(codex_log)
-    validation = extract_validation_section(final_response)
+    validation_gate = classify_validation_gate(issue, final_response)
+    validation = validation_gate["validation"]
     changed_files = []
     for raw in (status or "").splitlines():
         parts = raw.strip().split(maxsplit=1)
@@ -299,11 +526,16 @@ def build_pr_body(issue, job_id, base_sha, base_branch, branch, status, diff_sta
             "No explicit test command/result section was found in the worker final response. "
             "Do not approve this PR until validation evidence is added by CI, local validation, or a reviewer comment."
         )
+    if validation_gate.get("waiver"):
+        validation_text = f"{validation_text}\n\nValidation waiver: {validation_gate['waiver']}"
+    issue_repo = issue_repo or os.environ.get("AGENT_ISSUE_REPO") or os.environ.get("AGENT_REPO", "")
+    close_ref = f"{issue_repo}#{issue['number']}" if issue_repo else f"#{issue['number']}"
     return f"""## Summary
 
-Automated local Codex implementation for issue #{issue["number"]}: **{issue.get("title", "")}**.
+Automated local Codex implementation for issue {close_ref}: **{issue.get("title", "")}**.
 
 - Issue: {issue.get("url", "not recorded")}
+- Issue repo: `{issue_repo}`
 - Job: `{job_id}`
 - Base branch: `{base_branch}`
 - Base SHA: `{base_sha}`
@@ -343,7 +575,7 @@ Diff stat:
 - If GitHub checks are absent, require `agent:local-validation-passed` evidence for this exact head before approval.
 - Keep this PR draft until review and validation gates are satisfied.
 
-Closes #{issue["number"]}
+Closes {close_ref}
 """
 
 
@@ -398,8 +630,20 @@ def clear_running_labels(repo, number, done=False, failed=False, pr_open=False):
         common.update_issue_automation_state(repo, int(number), "Done", status="Done")
 
 
+def configure_worktree_identity(worktree_dir):
+    run(
+        f"git config user.name {shlex.quote(os.environ.get('AGENT_GIT_USER_NAME', 'Atlas Local Codex Agent'))}",
+        cwd=worktree_dir,
+    )
+    run(
+        f"git config user.email {shlex.quote(os.environ.get('AGENT_GIT_USER_EMAIL', 'atlas-local-codex-agent@users.noreply.github.com'))}",
+        cwd=worktree_dir,
+    )
+
+
 def process_issue(issue, publish):
     repo = require_env("AGENT_REPO")
+    issue_repo = os.environ.get("AGENT_ISSUE_REPO") or repo
     base_branch = os.environ.get("AGENT_BASE_BRANCH", "main")
     repos_dir = pathlib.Path(require_env("AGENT_REPOS")).expanduser()
     jobs_dir = pathlib.Path(require_env("AGENT_JOBS")).expanduser()
@@ -414,18 +658,22 @@ def process_issue(issue, publish):
 
     try:
         run(
-            f'gh issue edit {number} --repo {shlex.quote(repo)} '
+            f'gh issue edit {number} --repo {shlex.quote(issue_repo)} '
             f'--add-label "{os.environ["AGENT_RUNNING_LABEL"]}"'
         )
-        common.update_issue_automation_state(repo, int(number), "Running", status="In Progress")
+        common.update_issue_automation_state(issue_repo, int(number), "Running", status="In Progress")
 
         issue_full = gh_json(
-            f"gh issue view {number} --repo {shlex.quote(repo)} "
+            f"gh issue view {number} --repo {shlex.quote(issue_repo)} "
             "--json number,title,body,comments,labels,author,url"
         )
         labels = label_names(issue_full)
         (job_dir / "issue.json").write_text(json.dumps(issue_full, indent=2), encoding="utf-8")
-        (job_dir / "prompt.md").write_text(build_prompt(issue_full, repo), encoding="utf-8")
+        (job_dir / "routing.json").write_text(
+            json.dumps({"issue_repo": issue_repo, "execution_repo": repo, "issue_number": number}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (job_dir / "prompt.md").write_text(build_prompt(issue_full, repo, issue_repo), encoding="utf-8")
 
         safe_repo = repo.replace("/", "__")
         repo_dir = repos_dir / safe_repo
@@ -438,6 +686,8 @@ def process_issue(issue, publish):
                 run(f"git clone https://github.com/{repo}.git {quote_path(repo_dir)}")
             else:
                 run("git fetch --all --prune", cwd=repo_dir)
+            if disable_repo_hooks():
+                run("git config core.hooksPath /dev/null", cwd=repo_dir)
             run(
                 f"git worktree add --detach {quote_path(worktree_dir)} origin/{shlex.quote(base_branch)}",
                 cwd=repo_dir,
@@ -447,6 +697,7 @@ def process_issue(issue, publish):
 
         base_sha = run("git rev-parse HEAD", cwd=worktree_dir).strip()
         run(f"git checkout -B {shlex.quote(branch)}", cwd=worktree_dir)
+        configure_worktree_identity(worktree_dir)
         overlay_paths = common.apply_repo_env_overlay(repo, worktree_dir)
         if overlay_paths:
             (job_dir / "repo-env-overlay.txt").write_text("\n".join(overlay_paths) + "\n", encoding="utf-8")
@@ -459,9 +710,7 @@ def process_issue(issue, publish):
                 f"{podman_command()} run --rm "
                 f"{podman_userns_segment()}"
                 "--network=slirp4netns "
-                f"-v {quote_path(run_home)}:/home/agent/.codex:Z "
-                f"-v {quote_path(worktree_dir)}:/work:Z "
-                f"-v {quote_path(job_dir)}:/job:Z "
+                f"{worker_container_volumes(run_home, worktree_dir, job_dir, repo_dir)} "
                 f"{shlex.quote(image)} "
                 "bash -lc "
                 + shlex.quote(
@@ -494,7 +743,8 @@ def process_issue(issue, publish):
         max_lines = env_int("AGENT_MAX_DIFF_LINES", "1200")
         allow_large = os.environ["AGENT_ALLOW_LARGE_LABEL"] in labels
 
-        policy_errors = blocked_policy_violations(paths, labels)
+        policy_requirements = blocked_policy_requirements(paths, labels)
+        policy_errors = [f"{item['path']} requires {item['label']}" for item in policy_requirements]
         new_execs = executable_paths(worktree_dir)
         if new_execs:
             policy_errors.extend(f"{path} is a new executable file" for path in new_execs)
@@ -509,8 +759,9 @@ def process_issue(issue, publish):
             )
 
         if not paths:
+            validation_gate = classify_validation_gate(issue_full, extract_codex_final_response(codex_log))
             comment_issue(
-                repo,
+                issue_repo,
                 number,
                 job_dir,
                 f"""Agent dry-run completed for issue #{number}, but no file changes were produced.
@@ -518,16 +769,54 @@ def process_issue(issue, publish):
 Job: `{job_id}`
 Base: `{base_sha}`
 
+Validation gate:
+```text
+{validation_gate_status_text(validation_gate)[:5000]}
+```
+
 Codex log:
 `{job_dir}/codex.log`
 """,
             )
-            clear_running_labels(repo, number, failed=True)
+            clear_running_labels(issue_repo, number, failed=True)
             return
 
         if policy_errors:
+            recoverable_policy_gate = bool(policy_requirements) and len(policy_errors) == len(policy_requirements)
+            if recoverable_policy_gate:
+                required_labels = sorted({item["label"] for item in policy_requirements})
+                write_policy_gate_record(
+                    job_dir,
+                    issue_full,
+                    repo,
+                    job_id,
+                    base_sha,
+                    paths,
+                    statuses,
+                    required_labels,
+                    diff_stat,
+                    diff_lines,
+                    policy_errors,
+                )
+                comment_issue(
+                    issue_repo,
+                    number,
+                    job_dir,
+                    build_policy_gate_comment(
+                        number,
+                        job_id,
+                        base_sha,
+                        required_labels,
+                        policy_errors,
+                        status,
+                        job_dir,
+                    ),
+                )
+                clear_running_labels(issue_repo, number, failed=True)
+                return
+
             comment_issue(
-                repo,
+                issue_repo,
                 number,
                 job_dir,
                 f"""Agent stopped for issue #{number}: policy gate failed.
@@ -549,15 +838,46 @@ Local artifacts:
 `{job_dir}`
 """,
             )
-            clear_running_labels(repo, number, failed=True)
+            clear_running_labels(issue_repo, number, failed=True)
             return
 
+        final_response = extract_codex_final_response(codex_log)
+        validation_gate = classify_validation_gate(issue_full, final_response)
+        validation_status = validation_gate_status_text(validation_gate)
+
         if publish:
+            if not validation_gate["publish_allowed"]:
+                comment_issue(
+                    issue_repo,
+                    number,
+                    job_dir,
+                    f"""Agent stopped for issue #{number}: validation evidence gate failed.
+
+Job: `{job_id}`
+Base: `{base_sha}`
+
+Validation gate:
+```text
+{validation_status[:5000]}
+```
+
+Changed files:
+```text
+{status[:3000]}
+```
+
+Local artifacts:
+`{job_dir}`
+""",
+                )
+                clear_running_labels(issue_repo, number, failed=True)
+                return
+
             run("git add -A", cwd=worktree_dir)
             run(f'git commit -m "agent: address issue #{number}"', cwd=worktree_dir)
             run(f"git push -u origin {shlex.quote(branch)}", cwd=worktree_dir)
 
-            pr_body = build_pr_body(issue_full, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log)
+            pr_body = build_pr_body(issue_full, job_id, base_sha, base_branch, branch, status, diff_stat, codex_log, issue_repo)
             (job_dir / "pr-body.md").write_text(pr_body, encoding="utf-8")
             pr_url = run(
                 f"gh pr create --repo {shlex.quote(repo)} "
@@ -579,9 +899,9 @@ Changed files:
 {status[:3000]}
 ```
 
-Validation evidence:
+Validation gate:
 ```text
-{extract_validation_section(extract_codex_final_response(codex_log)) or "No explicit test command/result section was found in the worker final response."}
+{validation_status[:5000]}
 ```
 """
         else:
@@ -601,20 +921,25 @@ Diff stat:
 {diff_stat[:3000]}
 ```
 
+Validation gate:
+```text
+{validation_status[:5000]}
+```
+
 Local artifacts:
 `{job_dir}`
 
 Run the worker with `--publish` after reviewing the dry-run behavior.
 """
 
-        comment_issue(repo, number, job_dir, comment)
-        clear_running_labels(repo, number, pr_open=publish, failed=not publish)
+        comment_issue(issue_repo, number, job_dir, comment)
+        clear_running_labels(issue_repo, number, pr_open=publish, failed=not publish)
 
     except Exception as exc:
         err = str(exc)
         (job_dir / "error.txt").write_text(err, encoding="utf-8")
         comment_issue(
-            repo,
+            issue_repo,
             number,
             job_dir,
             f"""Local Codex agent failed on issue #{number}.
@@ -630,7 +955,7 @@ Local artifacts:
 `{job_dir}`
 """,
         )
-        clear_running_labels(repo, number, failed=True)
+        clear_running_labels(issue_repo, number, failed=True)
 
 
 def requested_issue_number(argv):
@@ -649,6 +974,7 @@ def main():
     only_issue = requested_issue_number(sys.argv)
 
     repo = require_env("AGENT_REPO")
+    issue_repo = os.environ.get("AGENT_ISSUE_REPO") or repo
     pathlib.Path(require_env("AGENT_REPOS")).expanduser().mkdir(parents=True, exist_ok=True)
     pathlib.Path(require_env("AGENT_JOBS")).expanduser().mkdir(parents=True, exist_ok=True)
     pathlib.Path(require_env("AGENT_LOGS")).expanduser().mkdir(parents=True, exist_ok=True)
@@ -656,10 +982,10 @@ def main():
     run("gh auth status", capture=True)
 
     while True:
-        query = f'repo:{repo} is:issue is:open label:"{os.environ["AGENT_READY_LABEL"]}"'
+        query = f'repo:{issue_repo} is:issue is:open label:"{os.environ["AGENT_READY_LABEL"]}"'
         issues = gh_json(
             "gh issue list "
-            f"--repo {shlex.quote(repo)} "
+            f"--repo {shlex.quote(issue_repo)} "
             f"--search {shlex.quote(query)} "
             "--json number,title,body,author,labels,url"
         )

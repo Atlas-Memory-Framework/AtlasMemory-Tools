@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib import request
 
 import atlas_agent_common as common
+import atlas_work_items
 
 
 AGENT_LABELS = {
@@ -31,8 +33,6 @@ AGENT_LABELS = {
     "agent:allow-large": "C5DEF5",
     "agent:approved-dispatch": "C5DEF5",
 }
-ENSURED_LABEL_REPOS: set[str] = set()
-
 HARD_NON_EXECUTION_LABELS = {
     "type:epic",
     "type:tracker",
@@ -40,7 +40,6 @@ HARD_NON_EXECUTION_LABELS = {
     "agent:decomposed",
 }
 NON_EXECUTION_TITLE_PREFIXES = ("[Epic]", "[Tracker]")
-
 def target_repos(path: str | None) -> list[str]:
     repo_file = common.RUNTIME_DIR / (path or "repos.txt")
     repos: list[str] = []
@@ -52,14 +51,7 @@ def target_repos(path: str | None) -> list[str]:
 
 
 def ensure_agent_labels(repo: str) -> None:
-    if repo in ENSURED_LABEL_REPOS:
-        return
-    for label, color in AGENT_LABELS.items():
-        common.run(
-            ["gh", "label", "create", label, "--repo", repo, "--color", color],
-            check=False,
-        )
-    ENSURED_LABEL_REPOS.add(repo)
+    common.ensure_labels_cached(repo, AGENT_LABELS)
 
 
 def ready_issues(repo: str, limit: int) -> list[dict]:
@@ -138,6 +130,10 @@ def has_open_pr_for_issue(repo: str, number: int) -> bool:
     return bool(prs)
 
 
+def execution_repo_for_issue(source_repo: str, issue: dict) -> str:
+    return common.issue_body_execution_repo(issue) or source_repo
+
+
 def issue_points(issue: dict) -> int | None:
     return common.issue_points(issue)
 
@@ -181,6 +177,85 @@ def failed_inspection_hard_reasons(issue: dict, *, require_one_point: bool = Fal
     return reasons
 
 
+def recommended_policy_allow_labels(issue: dict) -> set[str]:
+    body = str(issue.get("body") or "").lower()
+    labels = common.label_names(issue)
+    tokens = set(labels)
+    for token in ("infra", "ci-cd", "auth", "needs-deployed-validation", "cross-repo", "tier:t4+", "t5"):
+        if token in body:
+            tokens.add(token)
+    wanted: set[str] = set()
+    if {"infra", "auth", "needs-deployed-validation"} & tokens:
+        wanted.add("agent:allow-infra")
+    if {"ci-cd", "needs-deployed-validation"} & tokens:
+        wanted.add("agent:allow-workflows")
+    if {"tier:t4+", "t5"} & tokens:
+        wanted.add("agent:allow-large")
+    return wanted
+
+
+def dispatch_blockers(repo: str, issue: dict, args: argparse.Namespace, *, check_open_pr: bool) -> list[str]:
+    labels = common.label_names(issue)
+    author = (issue.get("author") or {}).get("login")
+    reasons = hard_non_execution_reasons(
+        issue,
+        require_one_point=bool(getattr(args, "require_one_point", False)),
+    )
+    if author not in common.trusted_authors():
+        reasons.append(f"untrusted author {author}")
+    missing_allow = sorted(recommended_policy_allow_labels(issue) - labels)
+    if missing_allow:
+        reasons.append("missing policy allow label(s): " + ", ".join(missing_allow))
+    execution_repo = execution_repo_for_issue(repo, issue)
+    if check_open_pr and has_open_pr_for_issue(execution_repo, issue["number"]):
+        reasons.append("open PR appears linked")
+    if "agent:running" in labels:
+        reasons.append("agent:running label")
+    return reasons
+
+
+def dispatch_preview_record(repo: str, issue: dict, reasons: list[str]) -> dict:
+    return {
+        "repo": repo,
+        "number": int(issue["number"]),
+        "title": issue.get("title") or "",
+        "url": issue.get("url") or "",
+        "labels": sorted(common.label_names(issue)),
+        "reasons": reasons,
+    }
+
+
+def write_dispatch_preview(summary_path: str | None, preview: dict) -> None:
+    if not summary_path:
+        return
+    path = Path(summary_path)
+    payload: dict = {}
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+    payload["dispatch_preview"] = preview
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def print_dispatch_preview(preview: dict) -> None:
+    runnable = preview.get("next_runnable") or []
+    blocked = preview.get("blocked") or []
+    print(
+        f"Dispatch preview: {len(runnable)} runnable, {len(blocked)} blocked before dispatch.",
+        flush=True,
+    )
+    for item in runnable[:5]:
+        print(f"RUNNABLE {item['repo']}#{item['number']}: {item['title']}", flush=True)
+    for item in blocked[:8]:
+        print(
+            f"BLOCKED {item['repo']}#{item['number']}: {', '.join(item.get('reasons') or [])}",
+            flush=True,
+        )
+
+
 def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
     labels = common.label_names(issue)
     blocked = {
@@ -202,7 +277,7 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
     if author not in common.trusted_authors():
         print(f"Not queueing {repo}#{issue['number']}: untrusted author {author}.", flush=True)
         return False
-    if args.auto_queue_skip_open_pr and has_open_pr_for_issue(repo, issue["number"]):
+    if args.auto_queue_skip_open_pr and has_open_pr_for_issue(execution_repo_for_issue(repo, issue), issue["number"]):
         print(f"Not queueing {repo}#{issue['number']}: open PR appears linked.", flush=True)
         return False
     if getattr(args, "dry_run", False):
@@ -214,9 +289,16 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
     return True
 
 
-def run_worker(repo: str, number: int, publish: bool, base_branch: str | None = None) -> int:
-    env = common.env_for_repo(repo, base_branch=base_branch)
-    common.ensure_git_identity(common.ensure_repo(repo))
+def run_worker(
+    issue_repo: str,
+    execution_repo: str,
+    number: int,
+    publish: bool,
+    base_branch: str | None = None,
+) -> int:
+    env = common.env_for_repo(execution_repo, base_branch=base_branch)
+    env["AGENT_ISSUE_REPO"] = issue_repo
+    common.ensure_git_identity(common.ensure_repo(execution_repo))
     cmd = [str(common.local_worker()), "--once", "--issue", str(number)]
     if publish:
         cmd.append("--publish")
@@ -667,11 +749,65 @@ def maybe_dispatch_deploy_candidate(repo: str, issue: dict, args: argparse.Names
     )
 
 
+def process_atlas_work_items_once(args: argparse.Namespace) -> int:
+    store = atlas_work_items.AtlasWorkItemStore(args.atlas_work_items)
+    provider = atlas_work_items.AtlasWorkItemOperationProvider(store)
+    if getattr(args, "dry_run", False):
+        operations = provider.ready_operations(limit=max(1, int(getattr(args, "max_items", 1))))
+        if not operations:
+            print("DRY-RUN local Atlas work items: no ready items.", flush=True)
+            return 0
+        print(f"DRY-RUN local Atlas work items: {len(operations)} ready item(s).", flush=True)
+        for operation in operations:
+            print(
+                f"DRY-RUN {operation.source_id}: {operation.title} [{operation.operation_id}]",
+                flush=True,
+            )
+        return len(operations)
+    command = shlex.split(args.atlas_work_item_command) if args.atlas_work_item_command else None
+    if command is None and getattr(args, "atlas_role_command_config", None):
+        command_config = str(Path(args.atlas_role_command_config).resolve())
+        command = [
+            str(common.RUNTIME_DIR / "atlas-agent-role-runner"),
+            "--command-config",
+            command_config,
+            "--max-roles",
+            str(max(1, int(getattr(args, "atlas_role_max", 1)))),
+        ]
+    templates_dir = args.team_templates or str(common.RUNTIME_DIR / "team-templates")
+    worker = atlas_work_items.LocalCommandOperationWorker(
+        command,
+        jobs_dir=common.jobs_dir(),
+        templates_dir=templates_dir,
+        agent_registry_path=getattr(args, "agent_registry", None),
+        agent_root=getattr(args, "agent_root", None),
+    )
+    processed = atlas_work_items.run_worker_daemon_once(
+        provider,
+        worker,
+        limit=max(1, int(getattr(args, "max_items", 1))),
+    )
+    if processed:
+        print(f"Processed {processed} local Atlas work item(s).", flush=True)
+    else:
+        print("No ready local Atlas work items.", flush=True)
+    return processed
+
+
 def process_once(args: argparse.Namespace) -> int:
+    if getattr(args, "atlas_work_items", None):
+        return process_atlas_work_items_once(args)
+
     processed = 0
     queued = 0
     max_per_repo = getattr(args, "max_per_repo", 1)
     lease_stale_seconds = getattr(args, "lease_stale_seconds", 6 * 60 * 60)
+    dispatch_preview = {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "next_runnable": [],
+        "blocked": [],
+        "counts": {"runnable": 0, "blocked": 0},
+    }
     if args.triage_needs_human:
         triage_cmd = [str(common.RUNTIME_DIR / "atlas-agent-triage"), "--limit", str(args.limit)]
         if args.repos_file:
@@ -713,6 +849,30 @@ def process_once(args: argparse.Namespace) -> int:
         if repo_ready is None:
             print(f"Skipping {repo}: ready issue query did not complete.", flush=True)
             continue
+        blockers_by_number: dict[int, list[str]] = {}
+        repo_runnable = 0
+        for issue in repo_ready:
+            execution_repo = execution_repo_for_issue(repo, issue)
+            reasons = dispatch_blockers(
+                repo,
+                issue,
+                args,
+                check_open_pr=bool(args.auto_queue_skip_open_pr),
+            )
+            blockers_by_number[int(issue["number"])] = reasons
+            if reasons:
+                dispatch_preview["blocked"].append(dispatch_preview_record(repo, issue, reasons))
+            elif repo_runnable < max_per_repo and len(dispatch_preview["next_runnable"]) < args.max_items:
+                record = dispatch_preview_record(repo, issue, [])
+                record["execution_repo"] = execution_repo
+                dispatch_preview["next_runnable"].append(record)
+                repo_runnable += 1
+        dispatch_preview["counts"] = {
+            "runnable": len(dispatch_preview["next_runnable"]),
+            "blocked": len(dispatch_preview["blocked"]),
+        }
+        write_dispatch_preview(getattr(args, "triage_summary", None), dispatch_preview)
+        print_dispatch_preview(dispatch_preview)
 
         if args.inspect_failed:
             for issue in repo_failed:
@@ -738,44 +898,29 @@ def process_once(args: argparse.Namespace) -> int:
             if repo_processed >= max_per_repo:
                 break
             labels = common.label_names(issue)
-            author = (issue.get("author") or {}).get("login")
-            reasons = hard_non_execution_reasons(
-                issue,
-                require_one_point=bool(getattr(args, "require_one_point", False)),
-            )
+            reasons = blockers_by_number.get(int(issue["number"]), [])
             if "agent:running" in labels or reasons:
                 if reasons:
                     print(f"Skipping {repo}#{issue['number']}: {', '.join(reasons)}.", flush=True)
-                    if not getattr(args, "dry_run", False):
+                    if not getattr(args, "dry_run", False) and not any("missing policy allow label" in reason for reason in reasons):
                         common.run(
                             ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
                             check=False,
                         )
                 continue
-            if author not in common.trusted_authors():
-                print(f"Skipping {repo}#{issue['number']}: untrusted author {author}.", flush=True)
-                if not getattr(args, "dry_run", False):
-                    common.run(
-                        ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
-                        check=False,
-                    )
-                continue
-            if args.auto_queue_skip_open_pr and has_open_pr_for_issue(repo, issue["number"]):
-                print(f"Skipping {repo}#{issue['number']}: open PR appears linked.", flush=True)
-                if not getattr(args, "dry_run", False):
-                    common.run(
-                        ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
-                        check=False,
-                    )
-                continue
             if getattr(args, "dry_run", False):
-                print(f"DRY-RUN process {repo}#{issue['number']}: {issue['title']}", flush=True)
+                execution_repo = execution_repo_for_issue(repo, issue)
+                print(
+                    f"DRY-RUN process {repo}#{issue['number']} in {execution_repo}: {issue['title']}",
+                    flush=True,
+                )
                 processed += 1
                 repo_processed += 1
                 if processed >= args.max_items:
                     return processed
                 continue
-            print(f"Processing {repo}#{issue['number']}: {issue['title']}")
+            execution_repo = execution_repo_for_issue(repo, issue)
+            print(f"Processing {repo}#{issue['number']} in {execution_repo}: {issue['title']}")
             lease = acquire_issue_lease(repo, issue, lease_stale_seconds)
             if not lease:
                 continue
@@ -787,11 +932,11 @@ def process_once(args: argparse.Namespace) -> int:
                     check=False,
                 )
                 continue
-            base_branch = dispatch_base_branch(repo, issue)
+            base_branch = dispatch_base_branch(execution_repo, issue)
             scope_lease: list[Path] = []
             if getattr(args, "write_scope_locks", True):
                 scope_lease, scope_blocker = acquire_write_scope_lease(
-                    repo,
+                    execution_repo,
                     issue,
                     base_branch,
                     lease_stale_seconds,
@@ -805,6 +950,7 @@ def process_once(args: argparse.Namespace) -> int:
             try:
                 rc = run_worker(
                     repo,
+                    execution_repo,
                     issue["number"],
                     publish=args.publish,
                     base_branch=common.issue_body_base_branch(issue),
@@ -843,6 +989,42 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Prevent concurrent workers on the same repo/base when issue Write Scope values overlap or are unknown.",
+    )
+    parser.add_argument(
+        "--atlas-work-items",
+        help="Run the local Atlas work-item provider against this JSON store instead of GitHub issue dispatch.",
+    )
+    parser.add_argument(
+        "--atlas-work-item-command",
+        help=(
+            "Optional local command to run after claiming an Atlas work item. "
+            "Receives ATLAS_WORK_ITEM_ID, ATLAS_OPERATION_FILE, ATLAS_JOB_DIR, and ATLAS_WORK_ITEM_STORE."
+        ),
+    )
+    parser.add_argument(
+        "--atlas-role-command-config",
+        help=(
+            "JSON command map for atlas-agent-role-runner. Used as the local work-item command when "
+            "--atlas-work-item-command is not provided."
+        ),
+    )
+    parser.add_argument(
+        "--atlas-role-max",
+        type=int,
+        default=100,
+        help="Maximum runnable workflow roles atlas-agent-role-runner should execute in one local work-item claim.",
+    )
+    parser.add_argument(
+        "--team-templates",
+        help="Directory of TeamTemplate JSON files used when local Atlas work items request workflow execution.",
+    )
+    parser.add_argument(
+        "--agent-registry",
+        help="Optional AgentRegistry JSON used to enrich local Atlas workflow role task packets.",
+    )
+    parser.add_argument(
+        "--agent-root",
+        help="Optional repository/root path used to resolve local markdown agent refs in workflow role task packets.",
     )
     parser.add_argument("--sleep-seconds", type=int, default=60)
     parser.add_argument("--inspect-failed", action="store_true")

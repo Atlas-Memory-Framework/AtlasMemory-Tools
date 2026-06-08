@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Add a ready local Atlas work item to a JSON store."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import sys
+from typing import Any
+
+
+RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
+if str(RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_DIR))
+
+import atlas_work_items
+import atlas_workflows
+
+
+def optional_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def scheduler_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    scheduler: dict[str, Any] = {}
+    for field in (
+        "workflow_kind",
+        "team_template",
+        "priority",
+        "parallel_group",
+        "combine_policy",
+        "validation_tier",
+        "execution_repo",
+        "target_repo",
+        "base_branch",
+    ):
+        value = getattr(args, field, None)
+        if value:
+            scheduler[field] = value
+    critical_path_rank = optional_int(args.critical_path_rank)
+    if critical_path_rank is not None:
+        scheduler["critical_path_rank"] = critical_path_rank
+    for field in ("required_outputs", "write_scope", "depends_on", "blockers"):
+        values = atlas_work_items.list_value(getattr(args, field, None))
+        if values:
+            scheduler[field] = values
+    return scheduler
+
+
+def template_selection_from_scheduler(
+    scheduler: dict[str, Any],
+    templates_path: str | pathlib.Path,
+    *,
+    select_template: bool = False,
+    require_match: bool = False,
+) -> dict[str, Any]:
+    templates = atlas_workflows.load_team_templates(templates_path)
+    report = atlas_workflows.template_selection_report(
+        templates,
+        {
+            "workflow_kind": scheduler.get("workflow_kind") or "",
+            "team_template": scheduler.get("team_template") or "",
+            "required_outputs": scheduler.get("required_outputs") or [],
+        },
+    )
+    selected = report.get("selected_template")
+    if selected and select_template and not scheduler.get("team_template"):
+        scheduler["team_template"] = selected
+    if require_match and not selected:
+        selection = report.get("selection") or {}
+        missing = ", ".join(selection.get("uncovered_required_outputs") or []) or "none"
+        action = selection.get("suggested_action") or "inspect_template_catalog"
+        raise ValueError(f"no matching workflow template; suggested_action={action}; uncovered_required_outputs={missing}")
+    return atlas_workflows.compact_template_selection_report(report)
+
+
+def add_work_item(
+    store_path: str | pathlib.Path,
+    *,
+    source_id: str,
+    title: str,
+    scheduler: dict[str, Any],
+    actor: str,
+    labels: list[str] | None = None,
+    workflow_selection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    store = atlas_work_items.AtlasWorkItemStore(store_path)
+    created_at = atlas_work_items.now_rfc3339()
+    item: dict[str, Any] = {
+        "id": source_id,
+        "title": title or source_id,
+        "status": "ready",
+        "state": "ready",
+        "scheduler": scheduler,
+        "lifecycle": {
+            "state": "ready",
+            "created_at": created_at,
+            "created_by": actor,
+        },
+        "evidence": [
+            atlas_work_items.event(
+                "create",
+                status="ready",
+                operation_id=f"atlas-work-item:{source_id}",
+                evidence={
+                    "created_by": actor,
+                    "scheduler": scheduler,
+                    **({"workflow_selection": workflow_selection} if workflow_selection else {}),
+                },
+            )
+        ],
+    }
+    cleaned_labels = atlas_work_items.list_value(labels)
+    if cleaned_labels:
+        item["labels"] = cleaned_labels
+    with store.lock():
+        payload = store.load()
+        items = payload.setdefault("work_items", [])
+        if any(atlas_work_items.item_id(existing) == source_id for existing in items):
+            raise ValueError(f"Atlas work item already exists: {source_id}")
+        items.append(item)
+        store.save(payload)
+    return item
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("store", help="Path to a local Atlas work-item JSON store.")
+    parser.add_argument("--id", required=True, dest="source_id", help="Local Atlas work-item id.")
+    parser.add_argument("--title", default="", help="Human-readable work-item title.")
+    parser.add_argument("--actor", default="atlas-agent-work-item-add")
+    parser.add_argument("--workflow-kind")
+    parser.add_argument("--team-template")
+    parser.add_argument(
+        "--team-templates",
+        help="Template JSON file or directory used to validate/select the work item's workflow request.",
+    )
+    parser.add_argument(
+        "--select-team-template",
+        action="store_true",
+        help="When a catalog match exists and --team-template is unset, stamp the selected template id into scheduler metadata.",
+    )
+    parser.add_argument(
+        "--require-template-match",
+        action="store_true",
+        help="Fail instead of adding the item when the workflow request has no matching template.",
+    )
+    parser.add_argument("--required-output", action="append", dest="required_outputs", default=[])
+    parser.add_argument("--priority")
+    parser.add_argument("--critical-path-rank")
+    parser.add_argument("--parallel-group")
+    parser.add_argument("--combine-policy")
+    parser.add_argument("--validation-tier")
+    parser.add_argument("--execution-repo")
+    parser.add_argument("--target-repo")
+    parser.add_argument("--base-branch")
+    parser.add_argument("--write-scope", action="append", default=[])
+    parser.add_argument("--depends-on", action="append", default=[])
+    parser.add_argument("--blocker", action="append", dest="blockers", default=[])
+    parser.add_argument("--label", action="append", dest="labels", default=[])
+    parser.add_argument("--json", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        scheduler = scheduler_from_args(args)
+        workflow_selection = None
+        templates_path = args.team_templates
+        if args.select_team_template or args.require_template_match:
+            templates_path = templates_path or RUNTIME_DIR / "team-templates"
+        if templates_path:
+            workflow_selection = template_selection_from_scheduler(
+                scheduler,
+                templates_path,
+                select_template=args.select_team_template,
+                require_match=args.require_template_match,
+            )
+        item = add_work_item(
+            args.store,
+            source_id=args.source_id,
+            title=args.title,
+            scheduler=scheduler,
+            actor=args.actor,
+            labels=args.labels,
+            workflow_selection=workflow_selection,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"item": item}, indent=2, sort_keys=True))
+    else:
+        print(f"Added local Atlas work item {item['id']} ({item['status']}).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

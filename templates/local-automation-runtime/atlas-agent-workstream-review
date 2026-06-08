@@ -27,10 +27,31 @@ LABELS = {
     "status:blocked": "D4C5F9",
 }
 
+COMPLETION_CATEGORIES = {
+    "semantic_correctness": "Semantic correctness",
+    "garbage_collection": "Garbage collection",
+    "documentation_updates": "Documentation updates",
+    "validation_evidence": "Validation evidence",
+    "downstream_readiness": "Downstream readiness",
+}
+FOLLOWUP_COMPLETION_CATEGORIES = {
+    "semantic": "semantic",
+    "semantic-correctness": "semantic",
+    "semantic_correctness": "semantic",
+    "garbage-collection": "garbage-collection",
+    "garbage_collection": "garbage-collection",
+    "gc": "garbage-collection",
+    "documentation": "documentation",
+    "documentation-updates": "documentation",
+    "documentation_updates": "documentation",
+    "docs": "documentation",
+    "implementation": "implementation",
+    "other": "other",
+}
+
 
 def ensure_labels(repo: str) -> None:
-    for label, color in LABELS.items():
-        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+    common.ensure_labels_cached(repo, LABELS)
 
 
 def issue_json(repo: str, number: int) -> dict[str, Any]:
@@ -78,29 +99,136 @@ def child_issues(repo: str, parent: dict[str, Any]) -> list[dict[str, Any]]:
             number = int(row.get("number") or 0)
             if number in seen:
                 continue
+            if "agent:workstream-followup" in common.label_names(row):
+                continue
             seen.add(number)
-            issues.append(row)
+            issues.append(issue_json(repo, number))
     return sorted(issues, key=lambda item: int(item.get("number") or 0))
 
 
-def prs_for_issue(repo: str, number: int) -> list[dict[str, Any]]:
+def issue_body_field(issue: dict[str, Any], *fields: str) -> str:
+    body = str(issue.get("body") or "")
+    for field in fields:
+        for value in common.body_field_values(body, field):
+            cleaned = value.strip().strip("`").strip()
+            if cleaned and cleaned.lower() not in common.NONE_FIELD_VALUES:
+                return cleaned
+    return ""
+
+
+def issue_target_repo(issue: dict[str, Any], fallback: str) -> str:
+    raw = issue_body_field(issue, "Target repo(s)", "Target repo")
+    if not raw:
+        return fallback
+    return raw.split(",", 1)[0].strip()
+
+
+def repo_relative_path(repo: str, path: str) -> str:
+    cleaned = path.strip().strip("`").strip()
+    repo_name = repo.rsplit("/", 1)[-1]
+    prefix = f"{repo_name}/"
+    if cleaned.startswith(prefix):
+        return cleaned[len(prefix) :]
+    return cleaned
+
+
+def issue_text_for_links(issue: dict[str, Any]) -> str:
+    parts = [str(issue.get("body") or "")]
+    for comment in issue.get("comments") or []:
+        if isinstance(comment, dict):
+            parts.append(str(comment.get("body") or ""))
+    return "\n".join(parts)
+
+
+def linked_pr_refs(issue: dict[str, Any]) -> list[tuple[str, int]]:
+    refs: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for match in re.finditer(r"https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)", issue_text_for_links(issue)):
+        linked_repo = f"{match.group(1)}/{match.group(2)}"
+        linked_number = int(match.group(3))
+        key = (linked_repo, linked_number)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(key)
+    return refs
+
+
+def completed_pr_refs(issue: dict[str, Any]) -> list[tuple[str, int]]:
+    body = str(issue.get("body") or "")
+    refs: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for value in common.body_field_values(body, "Completed by"):
+        for match in re.finditer(r"https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)", value):
+            key = (f"{match.group(1)}/{match.group(2)}", int(match.group(3)))
+            if key not in seen:
+                seen.add(key)
+                refs.append(key)
+        for ref in re.findall(r"(?<![\w/-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+)", value):
+            ref_repo, ref_number = ref.rsplit("#", 1)
+            key = (ref_repo, int(ref_number))
+            if key not in seen:
+                seen.add(key)
+                refs.append(key)
+    return refs
+
+
+def completion_mode(issue: dict[str, Any]) -> str:
+    values = common.body_field_values(str(issue.get("body") or ""), "Completion mode")
+    return values[0] if values else ""
+
+
+def pr_view(repo: str, number: int) -> dict[str, Any] | None:
     return common.gh_json_or_none(
         [
             "pr",
-            "list",
+            "view",
+            str(number),
             "--repo",
             repo,
-            "--state",
-            "all",
-            "--search",
-            f"#{number}",
-            "--limit",
-            "20",
             "--json",
             "number,title,url,state,isDraft,mergedAt,labels,headRefName,headRefOid,updatedAt",
         ],
         retries=2,
-    ) or []
+    )
+
+
+def prs_for_issue(repo: str, issue: dict[str, Any]) -> list[dict[str, Any]]:
+    number = int(issue.get("number") or 0)
+    explicit_completed = completed_pr_refs(issue)
+    if explicit_completed:
+        rows = []
+    elif issue_target_repo(issue, repo) == repo:
+        rows = common.gh_json_or_none(
+            [
+                "pr",
+                "list",
+                "--repo",
+                repo,
+                "--state",
+                "all",
+                "--search",
+                f"#{number}",
+                "--limit",
+                "20",
+                "--json",
+                "number,title,url,state,isDraft,mergedAt,labels,headRefName,headRefOid,updatedAt",
+            ],
+            retries=2,
+        ) or []
+    else:
+        rows = []
+    seen: set[tuple[str, int]] = {(repo, int(row.get("number") or 0)) for row in rows}
+    for linked_repo, linked_number in (explicit_completed or linked_pr_refs(issue)):
+        key = (linked_repo, linked_number)
+        if key in seen:
+            continue
+        linked = pr_view(linked_repo, linked_number)
+        if linked:
+            linked["repository"] = linked_repo
+            rows.append(linked)
+            seen.add(key)
+    return rows
 
 
 def body_write_scope(issue: dict[str, Any]) -> list[str]:
@@ -126,8 +254,9 @@ def git_file_at(repo: str, base: str, path: str) -> str:
 def file_evidence(repo: str, base: str, paths: list[str], max_files: int = 12) -> str:
     chunks: list[str] = []
     for path in paths[:max_files]:
-        content = git_file_at(repo, base, path)
-        chunks.append(f"### {path}\n```\n{compact(content, 5000)}\n```")
+        repo_path = repo_relative_path(repo, path)
+        content = git_file_at(repo, base, repo_path)
+        chunks.append(f"### {path} ({repo}:{repo_path})\n```\n{compact(content, 5000)}\n```")
     return "\n\n".join(chunks)
 
 
@@ -155,6 +284,60 @@ def extract_json(raw: str) -> dict[str, Any]:
     if candidates:
         return candidates[-1]
     raise ValueError("no JSON object found in workstream review output")
+
+
+def normalize_check_status(value: Any) -> tuple[str, str]:
+    if isinstance(value, dict):
+        raw_status = value.get("status") or value.get("result") or value.get("state")
+        rationale = str(value.get("rationale") or value.get("notes") or value.get("summary") or "").strip()
+    elif isinstance(value, bool):
+        raw_status = "pass" if value else "fail"
+        rationale = ""
+    else:
+        raw_status = value
+        rationale = ""
+    status = str(raw_status or "").strip().lower().replace("_", "-")
+    if status in {"pass", "passed", "ok", "complete", "completed", "yes", "not-needed", "not needed", "n/a", "na"}:
+        return "pass", rationale
+    if status in {"fail", "failed", "blocked", "incomplete", "missing", "no", "unresolved"}:
+        return "fail", rationale
+    if status in {"needs-human", "needs human", "manual", "unknown", "unclear", "pending"}:
+        return "needs-human", rationale
+    return "missing", rationale
+
+
+def completion_review(review: dict[str, Any]) -> dict[str, dict[str, str]]:
+    raw = review.get("completion_review") or review.get("completion_checks") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    checks: dict[str, dict[str, str]] = {}
+    for key, label in COMPLETION_CATEGORIES.items():
+        status, rationale = normalize_check_status(raw.get(key))
+        if key == "documentation_updates" and status == "pass" and not rationale:
+            status = "missing"
+            rationale = "Documentation updates require a docs change summary or a docs-not-needed rationale."
+        checks[key] = {"label": label, "status": status, "rationale": rationale}
+    return checks
+
+
+def normalize_result(review: dict[str, Any]) -> str:
+    result = str(review.get("result") or "needs-human").strip().lower()
+    if result not in {"pass", "fail", "needs-human"}:
+        result = "needs-human"
+    checks = completion_review(review)
+    unresolved = [check for check in checks.values() if check["status"] != "pass"]
+    if unresolved and result == "pass":
+        result = "needs-human" if any(check["status"] in {"missing", "needs-human"} for check in unresolved) else "fail"
+        existing = [str(item) for item in review.get("blocking_findings") or []]
+        for check in unresolved:
+            if check["status"] == "missing":
+                existing.append(f"{check['label']} completion check was missing from the review output.")
+            else:
+                detail = f": {check['rationale']}" if check["rationale"] else ""
+                existing.append(f"{check['label']} completion check is unresolved ({check['status']}){detail}.")
+        review["blocking_findings"] = existing
+        review["summary"] = (str(review.get("summary") or "").strip() + "\n\nCompletion review is incomplete; downstream work remains blocked.").strip()
+    return result
 
 
 def codex_timeout_seconds() -> int:
@@ -274,8 +457,12 @@ def build_prompt(
                 "title": child.get("title"),
                 "state": child.get("state"),
                 "closedAt": child.get("closedAt"),
+                "target_repo": issue_target_repo(child, repo),
                 "write_scope": body_write_scope(child),
+                "completion_mode": completion_mode(child),
+                "completed_by": [f"{ref_repo}#{ref_number}" for ref_repo, ref_number in completed_pr_refs(child)],
                 "prs": prs.get(number, []),
+                "completion_comments": [comment.get("body") for comment in child.get("comments") or [] if isinstance(comment, dict)],
             }
         )
     return f"""You are reviewing a completed automation workstream before downstream work is unblocked.
@@ -288,12 +475,35 @@ Return ONLY JSON with this exact shape:
 {{
   "result": "pass|fail|needs-human",
   "summary": "...",
+  "completion_review": {{
+    "semantic_correctness": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Did the workstream do the right work and preserve the intended semantic meaning?"
+    }},
+    "garbage_collection": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Are stale artifacts, obsolete branches/files/config, generated junk, and duplicate authority cleaned up or intentionally retained?"
+    }},
+    "documentation_updates": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Were operator docs, runtime docs, README, issue body notes, or an explicit docs-not-needed rationale updated?"
+    }},
+    "validation_evidence": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Does every completed child/PR include exact validation commands and results, or an explicit scoped waiver?"
+    }},
+    "downstream_readiness": {{
+      "status": "pass|fail|needs-human",
+      "rationale": "Can downstream dependency promotion safely rely on this workstream now?"
+    }}
+  }},
   "blocking_findings": ["..."],
   "followups": [
     {{
       "title": "...",
       "body": "...",
       "write_scope": ["path"],
+      "completion_category": "semantic|garbage-collection|documentation|implementation|other",
       "ready": true,
       "manual_gates": "none"
     }}
@@ -304,10 +514,20 @@ Rules:
 - Use "pass" only if downstream work can safely depend on this workstream.
 - Use "fail" when code follow-up work is required before downstream work should proceed.
 - Use "needs-human" when product/back-end judgment is required before unblocking.
+- A pass requires explicit pass statuses for semantic_correctness, garbage_collection, documentation_updates, validation_evidence, and downstream_readiness.
+- Mark semantic_correctness unresolved when the child work completed tasks mechanically but did not satisfy the parent intent, changed the wrong behavior, or left ambiguous product/back-end meaning.
+- Mark garbage_collection unresolved when stale artifacts, obsolete branches/files/config, generated junk, or duplicate authorities remain without an explicit retention rationale.
+- Mark documentation_updates unresolved when operator docs, runtime docs, README, issue body notes, or a clear docs-not-needed rationale are missing.
+- Mark validation_evidence unresolved when child PRs lack exact commands/results or rely on unscoped skipped-test notes.
+- Mark downstream_readiness unresolved when manual gates, open dependencies, unresolved follow-ups, or unclear promotion state remain.
+- If any completion_review category is fail, result must be "fail" unless the fix requires human judgment.
+- If any completion_review category needs human judgment or is unclear, result must be "needs-human".
 - Each follow-up must be one PR, one point, and include explicit write_scope.
+- Set followup.completion_category to "semantic", "garbage-collection", or "documentation" when the follow-up resolves one of those completion review categories.
 - Prefer follow-up issues over vague findings when a concrete fix is possible.
 
 Repository: {repo}
+Evidence repository: {repo}
 Parent issue #{parent.get('number')}: {parent.get('title')}
 Parent state: {parent.get('state')}
 Parent body:
@@ -327,12 +547,17 @@ Current base file evidence:
 def comment_body(parent: dict[str, Any], result: str, review: dict[str, Any], job_dir: Path, created: list[str]) -> str:
     findings = "\n".join(f"- {item}" for item in review.get("blocking_findings") or []) or "- none"
     followups = "\n".join(f"- {url}" for url in created) or "- none"
+    checks = "\n".join(
+        f"- {check['label']}: `{check['status']}`" + (f" - {check['rationale']}" if check["rationale"] else "")
+        for check in completion_review(review).values()
+    )
     return (
         f"{COMMENT_MARKER}\n"
         f"Workstream review for issue #{parent.get('number')}.\n\n"
         f"Result: {result}\n"
         f"Artifacts: `{job_dir}`\n\n"
         f"Summary:\n{review.get('summary') or ''}\n\n"
+        f"Completion checks:\n{checks}\n\n"
         f"Blocking findings:\n{findings}\n\n"
         f"Created follow-up issues:\n{followups}\n"
     )
@@ -361,11 +586,23 @@ def followup_base_branch(repo: str, parent: dict[str, Any]) -> str:
     return common.issue_body_base_branch(parent) or common.default_base_branch(repo)
 
 
+def followup_completion_category(followup: dict[str, Any]) -> str:
+    raw = str(followup.get("completion_category") or followup.get("category") or "implementation").strip().lower().replace("_", "-")
+    return FOLLOWUP_COMPLETION_CATEGORIES.get(raw, "other")
+
+
 def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any], projects_file: str | None) -> str:
     ready = bool(followup.get("ready"))
     scope = [str(item).strip().strip("`") for item in followup.get("write_scope") or [] if str(item).strip()]
     manual = str(followup.get("manual_gates") or "none").strip() or "none"
     base_branch = followup_base_branch(repo, parent)
+    completion_category = followup_completion_category(followup)
+    target_repo = issue_target_repo(parent, repo)
+    execution_repo = issue_body_field(parent, "Execution repo") or target_repo
+    if target_repo != repo or execution_repo != repo:
+        ready = False
+        if manual.lower() in common.NONE_FIELD_VALUES:
+            manual = "cross-repo mirror required"
     body = "\n".join(
         [
             "## Automation Manifest Metadata",
@@ -374,14 +611,19 @@ def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any],
             f"- Dispatch mode: `{'agent-ready' if ready else 'blocked'}`",
             f"- Dispatch recommendation: `{'auto-dispatch' if ready else 'review-before-dispatch'}`",
             "- Validation scope: `ci`",
-            f"- Target repo(s): `{repo}`",
-            f"- Execution repo: `{repo}`",
+            f"- Target repo(s): `{target_repo}`",
+            f"- Execution repo: `{execution_repo}`",
             f"- Base branch: `{base_branch}`",
             "- One PR contract: `yes`",
+            f"- Completion category: `{completion_category}`",
             "",
             "## Execution State",
             "- Open dependencies: `none`",
             f"- Manual gates remaining: `{manual}`",
+            "",
+            "## Completion Review Follow-up",
+            f"- Category: `{completion_category}`",
+            "- Resolve this category before downstream workstream dependencies are unblocked.",
             "",
             str(followup.get("body") or "").strip(),
             "",
@@ -398,8 +640,19 @@ def create_followup(repo: str, parent: dict[str, Any], followup: dict[str, Any],
     )
     tmp = common.jobs_dir() / f"workstream-followup-{repo.replace('/', '__')}-{parent.get('number')}.md"
     tmp.write_text(body, encoding="utf-8")
+    labels = followup_labels(parent, ready)
+    common.ensure_labels_cached(
+        repo,
+        {
+            "agent:one-point": "0E8A16",
+            "agent:workstream-followup": "FBCA04",
+            "points:1": "EDEDED",
+            "status:ready": "D4C5F9",
+            "status:blocked": "D4C5F9",
+        },
+    )
     cmd = ["gh", "issue", "create", "--repo", repo, "--title", str(followup.get("title") or "Workstream follow-up"), "--body-file", str(tmp)]
-    for label in followup_labels(parent, ready):
+    for label in labels:
         cmd.extend(["--label", label])
     proc = common.run(cmd)
     tmp.unlink(missing_ok=True)
@@ -427,21 +680,20 @@ def apply_review(repo: str, parent: dict[str, Any], result: str, body: str) -> N
 def review_one(repo: str, number: int, args: argparse.Namespace) -> dict[str, Any]:
     parent = issue_json(repo, number)
     children = child_issues(repo, parent)
-    prs = {int(child["number"]): prs_for_issue(repo, int(child["number"])) for child in children}
-    base = common.issue_body_base_branch(parent) or common.default_base_branch(repo)
+    prs = {int(child["number"]): prs_for_issue(repo, child) for child in children}
+    evidence_repo = issue_target_repo(parent, repo)
+    base = common.issue_body_base_branch(parent) or common.default_base_branch(evidence_repo)
     paths = body_write_scope(parent)
-    evidence = file_evidence(repo, base, paths)
+    evidence = file_evidence(evidence_repo, base, paths)
     feedback = Path(args.feedback_file).read_text(encoding="utf-8") if args.feedback_file else ""
     job_dir = common.jobs_dir() / f"issue-{number}-workstream-review-{common.now_id()}"
     job_dir.mkdir(parents=True, exist_ok=True)
     common.write_json(job_dir / "parent.json", parent)
     common.write_json(job_dir / "children.json", children)
     common.write_json(job_dir / "prs.json", prs)
-    prompt = build_prompt(repo, parent, children, prs, evidence, feedback)
+    prompt = build_prompt(evidence_repo, parent, children, prs, evidence, feedback)
     review = run_codex(job_dir, prompt)
-    result = str(review.get("result") or "needs-human").strip().lower()
-    if result not in {"pass", "fail", "needs-human"}:
-        result = "needs-human"
+    result = normalize_result(review)
     created: list[str] = []
     if args.apply and result != "pass":
         for followup in review.get("followups") or []:

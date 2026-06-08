@@ -16,6 +16,8 @@ When invoked, return findings using this exact schema.
 
 Rules:
 - Focus on the top gotchas that could cause rework/bugs and avoid polish-only asks.
+- Check the plan against the `/plan` PlanReadiness bar, especially file deltas with owners/rationale, workstream dependencies and file ownership, merge points, named gates with where/entrypoint/green means, test matrix location, rollout/rollback, and whether future agents can execute without asking the user what was intended.
+- For `PlanTier: Full`, treat missing agent roster, `Agent type`, delegation guidance, `Delegation Quality Gate`, or conflict-free file ownership as implementer-readiness risks.
 - If a point is optional and does not block implementation, prefix the finding text with `Non-blocker:` (keep schema and ids unchanged).
 - Use stable finding ids (`F-001`, `F-002`, ...) for every discrete point.
 - Do not include dispositions (Accept/Reject/Defer); the orchestrator/user handles that.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import argparse
+import json
 import sys
 import tempfile
 import unittest
@@ -74,6 +76,103 @@ class IssueDecomposeTests(unittest.TestCase):
         self.assertEqual(record["reason"], "conflicting point metadata")
         self.assertEqual(record["point_values"], [1, 5])
 
+    def test_classify_decomposes_stale_decomposed_plan_required_parent(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(labels=["agent:decomposed", "decomposition:required", "points:5"]),
+        )
+
+        self.assertEqual(record["action"], "decompose")
+        self.assertEqual(record["reason"], "stale decomposed label with plan decomposition requirement")
+        self.assertEqual(record["points"], 5)
+
+    def test_classify_preserves_already_decomposed_without_plan_required_label(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(labels=["agent:decomposed", "points:5"]),
+        )
+
+        self.assertEqual(record["action"], "already-decomposed")
+        self.assertEqual(record["points"], 5)
+
+    def test_classify_reports_dispatch_blockers_separately_from_decomposition(self) -> None:
+        record = self.decompose.classify_issue(
+            "owner/repo",
+            issue(
+                body="""Points: 3
+Dispatch recommendation: `tracking-only`
+Open dependencies: `#12`
+Manual gates remaining: `none`
+""",
+                labels=["status:ready"],
+            ),
+        )
+
+        self.assertEqual(record["action"], "decompose")
+        self.assertEqual(record["dispatch_blockers"], ["open-dependencies", "dispatch-recommendation:tracking-only"])
+        self.assertFalse(record["dispatchable_after_decomposition"])
+
+    def test_run_filters_label_scan_to_project_issues(self) -> None:
+        originals = {
+            "target_repos": self.decompose.target_repos,
+            "candidate_issues_for_labels": self.decompose.candidate_issues_for_labels,
+            "project_targets": self.decompose.project_targets,
+            "project_items": self.decompose.common.project_items,
+        }
+        self.decompose.target_repos = lambda _path: ["owner/repo"]
+        self.decompose.candidate_issues_for_labels = lambda _repo, _labels, _limit: [
+            issue(number=3, labels=["points:5"]),
+            issue(number=74, labels=["points:3"]),
+        ]
+        self.decompose.project_targets = lambda _path: [("owner", 1)]
+        self.decompose.common.project_items = lambda _owner, _number: [
+            {"content": {"repository": "owner/repo", "number": 74}}
+        ]
+        try:
+            result = self.decompose.run(
+                argparse.Namespace(
+                    repos_file=None,
+                    candidate_label=["status:ready"],
+                    issue=[],
+                    max=10,
+                    projects_file="projects.txt",
+                    apply=False,
+                )
+            )
+        finally:
+            for name, value in originals.items():
+                if name == "project_items":
+                    setattr(self.decompose.common, name, value)
+                else:
+                    setattr(self.decompose, name, value)
+
+        self.assertEqual([record["number"] for record in result["records"]], [74])
+
+    def test_project_issue_keys_can_use_snapshot_without_project_api(self) -> None:
+        original_project_items = self.decompose.common.project_items
+        self.decompose.common.project_items = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("project API should not be called")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = Path(tmp) / "project.json"
+            snapshot.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"content": {"repository": "owner/repo", "number": 74}},
+                            {"content": {"repository": "owner/other", "number": 2}},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            try:
+                keys = self.decompose.project_issue_keys(None, str(snapshot))
+            finally:
+                self.decompose.common.project_items = original_project_items
+
+        self.assertEqual(keys, {("owner/repo", 74), ("owner/other", 2)})
+
     def test_extract_json_object_handles_repeated_planner_json(self) -> None:
         raw = (
             "thinking\n"
@@ -109,11 +208,63 @@ class IssueDecomposeTests(unittest.TestCase):
 
         self.assertEqual(
             self.decompose.child_labels(parent, child),
-            ["agent:one-point", "points:1", "status:blocked"],
+            ["agent:one-point", "points:1", "status:blocked", "type:story"],
         )
         body = self.decompose.child_body(parent, "owner/repo", child)
         self.assertIn("- Open dependencies: `#7; #9`", body)
         self.assertIn("- Dispatch recommendation: `dependency-gated`", body)
+
+    def test_planning_prompt_uses_blocked_child_status_for_gated_parent(self) -> None:
+        prompt = self.decompose.planning_prompt(
+            issue(
+                body="""Points: 3
+Open dependencies: `#7`
+Manual gates remaining: `none`
+""",
+                labels=["status:ready"],
+            ),
+            4,
+        )
+
+        self.assertIn("`status:blocked`", prompt)
+        self.assertIn("children must remain blocked until gates clear", prompt)
+
+    def test_child_labels_inherit_parent_project_routing_metadata(self) -> None:
+        parent = issue(
+            body="""## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            labels=[
+                "points:5",
+                "status:ready",
+                "agent:decomposition-required",
+                "area:core",
+                "owner:runtime",
+                "repo:atlas-memory",
+                "tier:t0",
+                "type:story",
+                "workstream:ws2-runtime-safety",
+                "priority:p1",
+            ],
+        )
+        child = {"body": "Scope: update one file.", "labels": ["points:7", "status:ready"]}
+
+        labels = self.decompose.child_labels(parent, child)
+
+        self.assertIn("area:core", labels)
+        self.assertIn("owner:runtime", labels)
+        self.assertIn("repo:atlas-memory", labels)
+        self.assertIn("tier:t0", labels)
+        self.assertIn("type:story", labels)
+        self.assertIn("workstream:ws2-runtime-safety", labels)
+        self.assertIn("priority:p1", labels)
+        self.assertIn("points:1", labels)
+        self.assertIn("status:ready", labels)
+        self.assertNotIn("points:5", labels)
+        self.assertNotIn("points:7", labels)
+        self.assertNotIn("agent:decomposition-required", labels)
+        self.assertNotIn("decomposition:required", labels)
 
     def test_child_body_infers_canonical_scope_and_validation_sections(self) -> None:
         parent = issue(
@@ -180,6 +331,135 @@ https://github.com/owner/repo/issues/1
         self.assertIn("## Parent Epic\nhttps://github.com/owner/repo/issues/1", body)
         self.assertIn("Parent issue: #5", body)
 
+    def test_child_body_uses_first_scalar_routing_metadata(self) -> None:
+        parent = issue(
+            number=5,
+            body="""## Source Plan
+- Execution repo: `owner/repo`
+
+## Automation Manifest Metadata
+- Target repo(s): `owner/repo`
+- Execution repo: `owner/repo`
+- Validation scope: `ci`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            labels=["points:5"],
+        )
+        child = {"body": "Scope: server/src/app.py", "labels": ["points:1"]}
+
+        body = self.decompose.child_body(parent, "owner/repo", child)
+
+        self.assertIn("- Execution repo: `owner/repo`", body)
+        self.assertNotIn("- Execution repo: `owner/repo; owner/repo`", body)
+
+    def test_child_body_includes_scheduler_metadata(self) -> None:
+        parent = issue(
+            body="""## Automation Manifest Metadata
+- Highest tier: `T0`
+- Depends on: `CORE-001`
+- Blocks: `UI-002`
+- Parallel group: `pg-ui-contract`
+- Critical path rank: `3`
+- Merge group: `mg-contract`
+- Combine policy: `one-issue-one-pr`
+- Conflict class: `src-api`
+- Validation tier: `T0`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `none`
+""",
+            labels=["points:5"],
+        )
+        child = {"body": "Scope: src/api/workflows.ts", "labels": ["points:1"]}
+
+        body = self.decompose.child_body(parent, "owner/repo", child)
+
+        self.assertIn("- Depends on: `CORE-001`", body)
+        self.assertIn("- Blocks: `UI-002`", body)
+        self.assertIn("- Parallel group: `pg-ui-contract`", body)
+        self.assertIn("- Critical path rank: `3`", body)
+        self.assertIn("- Merge group: `mg-contract`", body)
+        self.assertIn("- Combine policy: `one-issue-one-pr`", body)
+        self.assertIn("- Conflict class: `src-api`", body)
+        self.assertIn("- Validation tier: `T0`", body)
+
+    def test_promotion_path_fallback_creates_reviewable_one_point_children(self) -> None:
+        parent = issue(
+            body="""## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `review child split`
+
+## Promotion Path
+
+1. `SKILLOPT-DOC-001`: write Atlas SkillOpt adaptation research note.
+2. `SKILLOPT-FIXTURES-001`: create fixture corpus for plan failures.
+""",
+            labels=["points:8", "status:blocked", "area:core"],
+        )
+
+        children = self.decompose.fallback_children_from_promotion_path(parent, 7)
+
+        self.assertEqual(len(children), 2)
+        self.assertEqual(children[0]["title"], "[SKILLOPT-DOC-001] write Atlas SkillOpt adaptation research note")
+        labels = self.decompose.child_labels(parent, children[0])
+        self.assertIn("points:1", labels)
+        self.assertIn("status:blocked", labels)
+        self.assertIn("agent:one-point", labels)
+
+    def test_child_drafts_file_writes_rendered_drafts_without_apply(self) -> None:
+        original_fetch = self.decompose.fetch_issue
+        original_candidates = self.decompose.candidate_issues_for_labels
+        parent = issue(
+            body="""Points: 8
+Dispatch recommendation: `review-before-dispatch`
+
+## Execution State
+- Open dependencies: `none`
+- Manual gates remaining: `review child split`
+
+## Promotion Path
+
+1. `SKILLOPT-DOC-001`: write Atlas SkillOpt adaptation research note.
+2. `SKILLOPT-FIXTURES-001`: create fixture corpus for plan failures.
+""",
+            labels=["points:8", "status:blocked", "repo:atlas-memory"],
+            number=726,
+        )
+        self.decompose.fetch_issue = lambda repo, number: parent if repo == "owner/repo" and number == 726 else None
+        self.decompose.candidate_issues_for_labels = lambda *_args, **_kwargs: self.fail("label scan should be bypassed")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repos = Path(tmp) / "repos.txt"
+                repos.write_text("owner/repo\n", encoding="utf-8")
+                drafts = Path(tmp) / "drafts.json"
+                args = self.decompose.build_parser().parse_args(
+                    [
+                        "--repos-file",
+                        str(repos),
+                        "--issue",
+                        "726",
+                        "--dry-run",
+                        "--child-drafts-file",
+                        str(drafts),
+                    ]
+                )
+                payload = self.decompose.run(args)
+                draft_payload = json.loads(drafts.read_text(encoding="utf-8"))
+        finally:
+            self.decompose.fetch_issue = original_fetch
+            self.decompose.candidate_issues_for_labels = original_candidates
+
+        self.assertEqual(payload["child_draft_count"], 2)
+        children = draft_payload["draft_groups"][0]["children"]
+        self.assertEqual(children[0]["title"], "[SKILLOPT-DOC-001] write Atlas SkillOpt adaptation research note")
+        self.assertIn("status:blocked", children[0]["labels"])
+        self.assertIn("points:1", children[0]["labels"])
+        self.assertIn("- Dispatch recommendation: `review-before-dispatch`", children[0]["body"])
+
     def test_dry_run_writes_summary_without_mutations(self) -> None:
         original_candidates = self.decompose.candidate_issues
         self.decompose.candidate_issues = lambda _repo, _label, _limit: [
@@ -236,6 +516,52 @@ https://github.com/owner/repo/issues/1
 
         self.assertEqual(calls, ["status:ready", "status:draft"])
         self.assertEqual(payload["counts"], {"mark-one-point": 1, "decompose": 1})
+
+    def test_run_can_target_explicit_issue_refs_without_label_scan(self) -> None:
+        original_fetch = self.decompose.fetch_issue
+        original_candidates = self.decompose.candidate_issues_for_labels
+        self.decompose.fetch_issue = lambda repo, number: issue(body="Points: 3", number=number) if repo == "owner/repo" else None
+        self.decompose.candidate_issues_for_labels = lambda *_args, **_kwargs: self.fail("label scan should be bypassed")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repos = Path(tmp) / "repos.txt"
+                repos.write_text("owner/repo\n", encoding="utf-8")
+                args = self.decompose.build_parser().parse_args(
+                    ["--repos-file", str(repos), "--issue", "7", "--issue", "owner/repo#8", "--dry-run"]
+                )
+                payload = self.decompose.run(args)
+        finally:
+            self.decompose.fetch_issue = original_fetch
+            self.decompose.candidate_issues_for_labels = original_candidates
+
+        self.assertEqual([record["number"] for record in payload["records"]], [7, 8])
+        self.assertEqual(payload["counts"], {"decompose": 2})
+
+    def test_run_mixed_explicit_issue_refs_do_not_apply_unqualified_refs_to_extra_repos(self) -> None:
+        fetched: list[tuple[str, int]] = []
+        original_fetch = self.decompose.fetch_issue
+        original_candidates = self.decompose.candidate_issues_for_labels
+
+        def fetch(repo, number):
+            fetched.append((repo, number))
+            return issue(body="Points: 3", number=number)
+
+        self.decompose.fetch_issue = fetch
+        self.decompose.candidate_issues_for_labels = lambda *_args, **_kwargs: self.fail("label scan should be bypassed")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                repos = Path(tmp) / "repos.txt"
+                repos.write_text("owner/repo\n", encoding="utf-8")
+                args = self.decompose.build_parser().parse_args(
+                    ["--repos-file", str(repos), "--issue", "7", "--issue", "other/repo#8", "--dry-run"]
+                )
+                payload = self.decompose.run(args)
+        finally:
+            self.decompose.fetch_issue = original_fetch
+            self.decompose.candidate_issues_for_labels = original_candidates
+
+        self.assertEqual(fetched, [("owner/repo", 7), ("other/repo", 8)])
+        self.assertEqual([(record["repo"], record["number"]) for record in payload["records"]], [("owner/repo", 7), ("other/repo", 8)])
 
 
 if __name__ == "__main__":

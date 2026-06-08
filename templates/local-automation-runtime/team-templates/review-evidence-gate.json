@@ -1,0 +1,45 @@
+{
+  "id": "review-evidence-gate",
+  "name": "Review Evidence Gate",
+  "purpose": "Coordinate independent review roles before a work item can claim review completion.",
+  "workflow_kind": "review",
+  "roles": [
+    {
+      "id": "code-review",
+      "label": "Code Review",
+      "agent_ref": "agents/code-reviewer.md",
+      "skills": ["review"],
+      "must_produce": ["correctness_findings", "regression_risks", "test_gaps"],
+      "acceptance_criteria": ["Findings lead with concrete defects, behavioral regressions, or missing verification."]
+    },
+    {
+      "id": "security-review",
+      "label": "Security Review",
+      "agent_ref": "agent-registry://security-review",
+      "skills": ["critical-ideation"],
+      "must_produce": ["trust_boundary_findings", "abuse_case_findings", "security_gate_status"],
+      "acceptance_criteria": ["Security claims are either proven by evidence or called out as unresolved."]
+    },
+    {
+      "id": "semantic-review",
+      "label": "Semantic Review",
+      "agent_ref": "agent-registry://semantic-review",
+      "skills": ["plan-execution-readiness"],
+      "must_produce": ["plan_alignment_findings", "scope_drift_findings", "user_intent_questions"],
+      "acceptance_criteria": ["Checks behavior against the plan, user intent, and known product constraints."]
+    },
+    {
+      "id": "review-rollup",
+      "label": "Review Rollup",
+      "agent_ref": "agent-registry://review-rollup",
+      "skills": ["handoff"],
+      "consumes": ["code-review", "security-review", "semantic-review"],
+      "must_produce": ["review_decision", "required_fixes", "residual_risks"],
+      "acceptance_criteria": ["Combines review evidence into one actionable decision without hiding disagreement."]
+    }
+  ],
+  "rollup": {
+    "document": "review-evidence.md",
+    "missing_outputs_block_completion": true
+  }
+}

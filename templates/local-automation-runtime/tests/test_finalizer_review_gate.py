@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import argparse
 import sys
 import unittest
 from pathlib import Path
@@ -51,6 +52,13 @@ class FinalizerReviewGateTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.finalize = load_script("atlas_agent_finalize_review_gate_test", "atlas-agent-finalize")
 
+    def setUp(self) -> None:
+        self._original_commit_check_runs = self.finalize.common.commit_check_runs
+        self.finalize.common.commit_check_runs = lambda _repo, _head_sha: []
+
+    def tearDown(self) -> None:
+        self.finalize.common.commit_check_runs = self._original_commit_check_runs
+
     def test_green_pr_without_required_review_label_is_blocked(self) -> None:
         decision = self.finalize.decide(
             "owner/repo",
@@ -80,6 +88,51 @@ class FinalizerReviewGateTests(unittest.TestCase):
     def test_pr_view_fields_include_labels(self) -> None:
         self.assertIn("labels", self.finalize.PR_VIEW_FIELDS.split(","))
         self.assertIn("files", self.finalize.PR_VIEW_FIELDS.split(","))
+
+    def test_scan_can_filter_to_project_issues(self) -> None:
+        originals = {
+            "target_repos": self.finalize.target_repos,
+            "open_prs": self.finalize.open_prs,
+            "pr_view": self.finalize.pr_view,
+            "project_targets": self.finalize.common.project_targets,
+            "project_items": self.finalize.common.project_items,
+        }
+        self.finalize.target_repos = lambda _path: ["owner/repo"]
+        self.finalize.open_prs = lambda _repo, _limit: [
+            {"number": 7, "title": "agent: address issue #12", "headRefName": "agent/issue-12/work"},
+            {"number": 8, "title": "agent: address issue #13", "headRefName": "agent/issue-13/work"},
+        ]
+        self.finalize.pr_view = lambda _repo, number: green_pr(
+            number=number,
+            body=f"Closes #{number + 5}",
+            headRefName=f"agent/issue-{number + 5}/work",
+        )
+        self.finalize.common.project_targets = lambda _path: [("owner", 1)]
+        self.finalize.common.project_items = lambda _owner, _number: [
+            {"content": {"repository": "owner/repo", "number": 12}}
+        ]
+        try:
+            decisions = self.finalize.scan(
+                argparse.Namespace(
+                    repos_file=None,
+                    limit=50,
+                    issue=None,
+                    projects_file="projects.txt",
+                    allow_no_checks=False,
+                    merge=False,
+                    required_checks_file=None,
+                    check_dependencies=False,
+                    require_review_label=None,
+                )
+            )
+        finally:
+            for name, value in originals.items():
+                if name in {"project_targets", "project_items"}:
+                    setattr(self.finalize.common, name, value)
+                else:
+                    setattr(self.finalize, name, value)
+
+        self.assertEqual([decision.number for decision in decisions], [7])
 
     def test_local_validation_passed_no_check_draft_is_readied_not_merged(self) -> None:
         decision = self.finalize.decide(
@@ -159,6 +212,27 @@ class FinalizerReviewGateTests(unittest.TestCase):
         self.assertEqual(decision.action, "blocked")
         self.assertIn("no checks reported", decision.reasons)
 
+    def test_empty_rollup_uses_commit_check_runs_for_required_checks(self) -> None:
+        original = self.finalize.common.commit_check_runs
+        self.finalize.common.commit_check_runs = lambda _repo, _head_sha: [
+            {"name": "ci", "status": "completed", "conclusion": "success"}
+        ]
+        try:
+            decision = self.finalize.decide(
+                "owner/repo",
+                green_pr(labels=["reviewed"], statusCheckRollup=[]),
+                allow_no_checks=False,
+                merge=True,
+                required_check_names=["ci"],
+                check_dependencies=False,
+                require_review_label="reviewed",
+            )
+        finally:
+            self.finalize.common.commit_check_runs = original
+
+        self.assertEqual(decision.action, "merge")
+        self.assertEqual(decision.reasons, [])
+
     def test_no_checks_path_policy_can_merge_docs_only_pr(self) -> None:
         decision = self.finalize.decide(
             "OWNER/REPO",
@@ -170,6 +244,24 @@ class FinalizerReviewGateTests(unittest.TestCase):
             allow_no_checks=False,
             merge=True,
             required_check_names=[],
+            required_checks_file=str(ROOT / "config" / "required-checks.example.json"),
+            check_dependencies=False,
+            require_review_label="reviewed",
+        )
+
+        self.assertEqual(decision.action, "merge")
+
+    def test_no_checks_path_policy_can_override_required_checks_for_allowed_paths(self) -> None:
+        decision = self.finalize.decide(
+            "OWNER/REPO",
+            green_pr(
+                labels=["reviewed", "agent:no-checks-expected"],
+                statusCheckRollup=[],
+                files=[{"path": "docs/readme.md"}],
+            ),
+            allow_no_checks=False,
+            merge=True,
+            required_check_names=["ci"],
             required_checks_file=str(ROOT / "config" / "required-checks.example.json"),
             check_dependencies=False,
             require_review_label="reviewed",

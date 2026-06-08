@@ -1,4 +1,4 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:f4afee78a93a1bf1e28d196f69a386970f5153f3329981d3c17d390cfdcb7fb9
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:0790029324dc0a6bf1ac4d4d63d7cde354d10d05608ed69f20b858ec59fae196
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -102,6 +102,11 @@ REPO_SLUG_ALIASES = {
 }
 DEFAULT_BRANCH_HINTS: dict[str, str] = {}
 ALLOWED_POINT_VALUES = {1, 2, 3, 5, 8, 13}
+GITHUB_LABEL_NAME_MAX_LENGTH = 50
+LABEL_DIGEST_LENGTH = 8
+GITHUB_ISSUE_LIST_LIMIT = 1000
+GITHUB_PROJECT_ITEM_LIST_LIMIT = 1000
+ALLOWED_AGENT_TYPES = {"generalPurpose", "test-engineer", "code-reviewer", "explore"}
 
 # Frozen join-metadata transport (DR-017 / WS2). Escaped-byte budgets apply to full
 # `<!-- ... -->` segments after JSON serialization of the inner envelope object.
@@ -377,6 +382,7 @@ class IssueDraft:
     base_branch: str | None = None
     suggested_points: int | None = None
     dependencies: list[str] = field(default_factory=list)
+    blocks: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
     merge_points: list[str] = field(default_factory=list)
     gates: list[str] = field(default_factory=list)
@@ -390,13 +396,21 @@ class IssueDraft:
     status_label: str = "status:draft"
     dispatch_recommendation: str = "tracking-only"
     dispatch_mode: str | None = None
+    agent_type: str | None = None
     write_scope: list[str] = field(default_factory=list)
     validation_commands: list[str] = field(default_factory=list)
     validation_scope: str = "local"
+    parallel_group: str | None = None
+    critical_path_rank: int | None = None
+    merge_group: str | None = None
+    combine_policy: str | None = None
+    conflict_class: str | None = None
+    validation_tier: str | None = None
     risk_tags: list[str] = field(default_factory=list)
     dependency_issue_refs: list[str] = field(default_factory=list)
     blocker_issue_refs: list[str] = field(default_factory=list)
     automation_blockers: list[str] = field(default_factory=list)
+    priority: str | None = None
 
 
 @dataclass
@@ -1143,11 +1157,6 @@ def build_registry_story_drafts(
             for g in (story.get("typed_gate_evidence") or [])
             if isinstance(g, dict)
         ) if story.get("typed_gate_evidence") else True
-        status_label = status_label_for_issue(
-            issue_ready=issue_ready,
-            azure_closeout_only=False,
-            explicit_blockers=[],
-        )
         validation_requirements: list[str] = []
         validation_scope = infer_validation_scope(
             title=title,
@@ -1178,6 +1187,24 @@ def build_registry_story_drafts(
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
         )
+        status_label = runtime_status_label(
+            issue_ready=issue_ready,
+            azure_closeout_only=False,
+            blockers=[],
+            automation_blockers=automation_blockers,
+            dispatch_recommendation=dispatch_recommendation,
+        )
+        priority = infer_priority_value(
+            explicit_priority=None,
+            title=title,
+            excerpt=title,
+            highest_tier=infer_highest_tier(gates),
+            risk_tags=risk_tags,
+            blockers=[],
+            automation_blockers=automation_blockers,
+            validation_scope=validation_scope,
+            gates=gates,
+        )
         labels = infer_labels(
             title,
             title,
@@ -1187,6 +1214,7 @@ def build_registry_story_drafts(
             highest_tier=infer_highest_tier(gates),
             status_label=status_label,
             points=points,
+            priority=priority,
         )
         meta_suffix, diag = build_registry_join_metadata_block(
             story,
@@ -1202,9 +1230,10 @@ def build_registry_story_drafts(
             "",
             "## Suggested Draft Metadata",
             f"- Suggested points: `{points}`",
-            f"- Issue ready: `{'true' if issue_ready else 'false'}`",
+            f"- Issue ready: `{'true' if status_label == 'status:ready' else 'false'}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
+            f"- Priority: `{priority}`",
         ]
         if risk_tags:
             body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
@@ -1262,6 +1291,7 @@ def build_registry_story_drafts(
                 validation_scope=validation_scope,
                 risk_tags=risk_tags,
                 automation_blockers=automation_blockers,
+                priority=priority,
                 legacy_issue_repo=story.get("_legacy_issue_repo"),
                 legacy_issue_number=story.get("_legacy_issue_number"),
             )
@@ -1537,10 +1567,11 @@ def resolve_issue_execution_context(
     *,
     issue_repo: str | None,
     repo_targets: list[str],
+    explicit_execution_repo: str | None = None,
     explicit_base_branch: str | None = None,
     default_base_branch: str | None = None,
 ) -> tuple[str | None, str | None]:
-    execution_repo = infer_issue_execution_repo(issue_repo, repo_targets)
+    execution_repo = normalize_repo_slug(explicit_execution_repo) or infer_issue_execution_repo(issue_repo, repo_targets)
     base_branch = explicit_base_branch or default_base_branch
     if not base_branch:
         base_branch = lookup_repo_default_branch(execution_repo)
@@ -1630,7 +1661,7 @@ def _parse_scalar_frontmatter_block(block: str) -> dict[str, object]:
 
 def _flatten_frontmatter(data: Mapping[str, object]) -> dict[str, str]:
     frontmatter: dict[str, str] = {}
-    for key in ("name", "overview", "summary"):
+    for key in ("name", "overview", "summary", "ProjectionWorkstreamLabel", "projectionWorkstreamLabel"):
         value = data.get(key)
         scalar = _clean_frontmatter_scalar(value)
         if scalar:
@@ -1832,6 +1863,44 @@ def ordered_unique(items: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(item for item in items if item))
 
 
+def shorten_label_name(label: str, *, max_length: int = GITHUB_LABEL_NAME_MAX_LENGTH) -> str:
+    """Return a deterministic GitHub label name within GitHub's 50-character limit."""
+    if len(label) <= max_length:
+        return label
+    digest = hashlib.sha1(label.encode("utf-8")).hexdigest()[:LABEL_DIGEST_LENGTH]
+    suffix = f"-{digest}"
+    prefix = ""
+    token = label
+    if ":" in label:
+        prefix, token = label.split(":", 1)
+        prefix = f"{prefix}:"
+    token_budget = max_length - len(prefix) - len(suffix)
+    if token_budget <= 0:
+        return f"{label[: max_length - len(suffix)]}{suffix}"
+    shortened_token = token[:token_budget].rstrip("-_:.")
+    if not shortened_token:
+        shortened_token = token[:token_budget]
+    return f"{prefix}{shortened_token}{suffix}"
+
+
+def normalize_label_names(labels: Iterable[str]) -> list[str]:
+    return sorted(set(shorten_label_name(label) for label in labels if label))
+
+
+def projection_workstream_label_scope(frontmatter: Mapping[str, str], fallback: str) -> str:
+    for key in (
+        "ProjectionWorkstreamLabel",
+        "projectionWorkstreamLabel",
+        "tracking.ProjectionWorkstreamLabel",
+        "tracking.projectionWorkstreamLabel",
+        "tracking.workstreamLabel",
+    ):
+        value = frontmatter.get(key)
+        if value and value.strip():
+            return value.strip()
+    return fallback
+
+
 def split_csv_values(values: list[str]) -> list[str]:
     items: list[str] = []
     for value in values:
@@ -1946,9 +2015,101 @@ def point_dispatch_guardrails(points: int | None) -> list[str]:
     return []
 
 
+def requires_decomposition(points: int | None, automation_blockers: Iterable[str] = ()) -> bool:
+    return bool(points is not None and points > 1) or any(
+        blocker.startswith("Decompose `points:") for blocker in automation_blockers
+    )
+
+
+def effective_issue_ready(
+    issue_ready: bool,
+    points: int | None,
+    automation_blockers: Iterable[str] = (),
+) -> bool:
+    """Return the machine-readable readiness after dispatch guardrails apply."""
+    if requires_decomposition(points, automation_blockers):
+        return False
+    return issue_ready
+
+
+def non_decomposition_automation_blockers(
+    automation_blockers: Iterable[str],
+) -> list[str]:
+    return [
+        blocker
+        for blocker in automation_blockers
+        if not blocker.startswith("Decompose `points:")
+    ]
+
+
+def runtime_status_label(
+    *,
+    issue_ready: bool,
+    azure_closeout_only: bool,
+    blockers: list[str],
+    automation_blockers: list[str],
+    dispatch_recommendation: str,
+) -> str:
+    if azure_closeout_only or not issue_ready:
+        return "status:draft"
+    if blockers or non_decomposition_automation_blockers(automation_blockers):
+        return "status:blocked"
+    if dispatch_recommendation in {"auto-dispatch", "auto-dispatch-pilot"}:
+        return "status:ready"
+    return "status:draft"
+
+
+def effective_dispatch_mode(
+    requested_mode: str | None,
+    *,
+    issue_ready: bool,
+    blockers: list[str],
+    automation_blockers: list[str],
+) -> str | None:
+    if requested_mode is None:
+        return None
+    if requested_mode == "blocked":
+        return "tracking-only"
+    if not issue_ready or blockers or automation_blockers:
+        return "tracking-only"
+    return requested_mode
+
+
 def runtime_field_value(values: list[str]) -> str:
     cleaned = ordered_unique([value.replace("`", "").strip() for value in values if value.strip()])
     return "none" if not cleaned else "; ".join(cleaned)
+
+
+def clean_manifest_field_value(value: str) -> str:
+    return value.replace("`", "").strip()
+
+
+def clean_optional_manifest_scalar(values: list[str]) -> str | None:
+    cleaned = [
+        clean_manifest_field_value(value)
+        for value in values
+        if clean_manifest_field_value(value)
+    ]
+    if not cleaned:
+        return None
+    value = cleaned[-1]
+    return None if value.lower() in {"none", "n/a", "na"} else value
+
+
+def normalize_agent_type(values: list[str]) -> str | None:
+    value = clean_optional_manifest_scalar(values)
+    if value in ALLOWED_AGENT_TYPES:
+        return value
+    return None
+
+
+def clean_manifest_list_values(values: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for value in split_csv_values(values):
+        item = clean_manifest_field_value(value)
+        if item and item.lower() not in {"none", "n/a", "na"}:
+            cleaned.append(item)
+    return ordered_unique(cleaned)
 
 
 def build_execution_state_lines(
@@ -2242,6 +2403,74 @@ def infer_dispatch_recommendation(
     return "auto-dispatch"
 
 
+def normalize_priority_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    token = value.replace("`", "").strip().lower()
+    if not token or token in {"none", "n/a", "na"}:
+        return None
+    aliases = {
+        "critical": "P0",
+        "blocker": "P0",
+        "highest": "P0",
+        "high": "P1",
+        "urgent": "P1",
+        "medium": "P2",
+        "normal": "P2",
+        "default": "P2",
+        "low": "P3",
+    }
+    if token in aliases:
+        return aliases[token]
+    match = re.search(r"\bp([0-3])\b", token, flags=re.IGNORECASE)
+    if match:
+        return f"P{match.group(1)}"
+    numeric = parse_int_value(token)
+    if numeric is not None and 0 <= numeric <= 3:
+        return f"P{numeric}"
+    return None
+
+
+def explicit_priority_from_lines(lines: list[str]) -> str | None:
+    for value in reversed(collect_field_values(lines, "priority", "issue priority")):
+        priority = normalize_priority_value(value)
+        if priority:
+            return priority
+    return None
+
+
+def infer_priority_value(
+    *,
+    explicit_priority: str | None,
+    title: str,
+    excerpt: str,
+    highest_tier: str | None,
+    risk_tags: list[str],
+    blockers: list[str],
+    automation_blockers: list[str],
+    validation_scope: str,
+    gates: list[str],
+) -> str:
+    if explicit_priority:
+        return explicit_priority
+    joined = "\n".join([title, excerpt, *gates]).lower()
+    if any(token in joined for token in ("critical", "blocker", "sev0", "severity 0")):
+        return "P1"
+    tier_level = highest_tier_level(highest_tier)
+    high_risk_tags = {"auth", "secrets", "migration", "cross-repo", "needs-deployed-validation"}
+    if tier_level is not None and tier_level <= 1:
+        return "P1"
+    if tier_level is not None and tier_level <= 3:
+        return "P2"
+    if tier_level is not None:
+        return "P3"
+    if set(risk_tags) & high_risk_tags or validation_scope == "deployed":
+        return "P1"
+    if blockers or automation_blockers:
+        return "P2"
+    return "P2"
+
+
 def parse_named_items(pattern: re.Pattern[str], text: str) -> dict[str, str]:
     return {match.group(1): match.group(2).strip() for match in pattern.finditer(text)}
 
@@ -2309,6 +2538,24 @@ def collect_field_values(lines: list[str], *prefixes: str) -> list[str]:
             current_indent = None
 
     return values
+
+
+def field_declared(lines: list[str], *prefixes: str) -> bool:
+    normalized_prefixes = tuple(prefix.strip().lower() for prefix in prefixes if prefix.strip())
+    for line in lines:
+        field_match = re.match(r"^(?P<indent>\s*)-\s+(?P<key>[^:]+):\s*(?P<value>.*)$", line)
+        if not field_match:
+            continue
+        key = field_match.group("key").strip().lower()
+        if any(
+            key == prefix
+            or key.startswith(f"{prefix} ")
+            or key.startswith(f"{prefix}(")
+            or key.startswith(f"{prefix} /")
+            for prefix in normalized_prefixes
+        ):
+            return True
+    return False
 
 
 def extract_review_gates_from_workstream_lines(lines: list[str]) -> list[str]:
@@ -2391,6 +2638,25 @@ def extract_issue_refs(value: str, *, default_repo: str | None = None) -> list[s
     for match in ISSUE_REF_RE.finditer(value or ""):
         refs.append(normalize_issue_ref(match.group("repo") or default_repo, match.group("number")))
     return ordered_unique(refs)
+
+
+def legacy_issue_ref_from_values(
+    values: list[str],
+    *,
+    default_repo: str | None = None,
+) -> tuple[str | None, int | None]:
+    for value in values:
+        refs = extract_issue_refs(value, default_repo=default_repo)
+        if not refs:
+            continue
+        ref = refs[0]
+        if ref.startswith("#"):
+            if default_repo is None:
+                return None, int(ref[1:])
+            return default_repo, int(ref[1:])
+        repo, number = ref.rsplit("#", 1)
+        return repo, int(number)
+    return None, None
 
 
 def extract_non_issue_dependency_tokens(value: str) -> list[str]:
@@ -2629,13 +2895,7 @@ def infer_owner_labels(owner_names: list[str]) -> list[str]:
     labels: list[str] = []
     for owner_name in owner_names:
         token = owner_name.lower().replace("/", "-").replace(" ", "-")
-        label = f"owner:{token}"
-        if len(label) > 50:
-            digest = hashlib.sha1(label.encode("utf-8")).hexdigest()[:8]
-            token_budget = 50 - len("owner:") - len(digest) - 1
-            token = token[:token_budget].rstrip("-")
-            label = f"owner:{token}-{digest}"
-        labels.append(label)
+        labels.append(shorten_label_name(f"owner:{token}"))
     return labels
 
 
@@ -2999,6 +3259,7 @@ def infer_labels(
     highest_tier: str | None = None,
     status_label: str = "status:draft",
     points: int | None = None,
+    priority: str | None = None,
 ) -> list[str]:
     workstream_token = (workstream_label_scope or plan_key).strip()
     labels = [f"type:{kind}", f"workstream:{workstream_label_value(workstream_token)}"]
@@ -3027,7 +3288,11 @@ def infer_labels(
         labels.append(f"tier:{highest_tier.lower()}")
     if points in ALLOWED_POINT_VALUES:
         labels.append(f"points:{points}")
-    return sorted(set(labels))
+    if requires_decomposition(points):
+        labels.extend(["agent:decomposed", "decomposition:required"])
+    if priority:
+        labels.append(f"priority:{priority.lower()}")
+    return normalize_label_names(labels)
 
 
 def workstream_label_value(workstream_token: str) -> str:
@@ -3083,6 +3348,7 @@ def build_epic(
         summary or epic_title,
         "epic",
         plan_key,
+        workstream_label_scope=projection_workstream_label_scope(frontmatter, plan_key),
         repo_targets=repo_targets,
         highest_tier=epic_highest_tier,
     )
@@ -3248,11 +3514,6 @@ def build_children(
             collect_field_values(lines, "azure closeout only", "deployed closeout only", "provider closeout only"),
             default=False,
         )
-        status_label = status_label_for_issue(
-            issue_ready=issue_ready,
-            azure_closeout_only=azure_closeout_only,
-            explicit_blockers=explicit_blockers,
-        )
         highest_tier = normalize_highest_tier(collect_field_values(lines, "highest tier")) or infer_highest_tier(gates)
         if highest_tier is None and source_id.endswith("E"):
             highest_tier = "T5"
@@ -3274,21 +3535,13 @@ def build_children(
         execution_repo, base_branch = resolve_issue_execution_context(
             issue_repo=issue_repo,
             repo_targets=repo_targets,
+            explicit_execution_repo=normalize_branch_field(
+                collect_field_values(lines, "execution repo", "execution repository")
+            ),
             explicit_base_branch=normalize_branch_field(
                 collect_field_values(lines, "base branch", "target base branch")
             ),
             default_base_branch=plan_base_branch or frontmatter.get("tracking.baseBranch"),
-        )
-        risk_tags = infer_risk_tags(
-            title=title,
-            excerpt=excerpt,
-            repo_targets=repo_targets,
-            highest_tier=highest_tier,
-            blockers=blockers,
-            azure_closeout_only=azure_closeout_only,
-            issue_ready=issue_ready,
-            validation_scope=validation_scope,
-            gates=gates,
         )
         automation_blockers = ordered_unique(
             [
@@ -3304,6 +3557,17 @@ def build_children(
         )
         points = points_for_issue(title, repo_targets, gates, lines)
         automation_blockers = ordered_unique([*automation_blockers, *point_dispatch_guardrails(points)])
+        risk_tags = infer_risk_tags(
+            title=title,
+            excerpt=excerpt,
+            repo_targets=repo_targets,
+            highest_tier=highest_tier,
+            blockers=[*blockers, *automation_blockers],
+            azure_closeout_only=azure_closeout_only,
+            issue_ready=issue_ready,
+            validation_scope=validation_scope,
+            gates=gates,
+        )
         dispatch_recommendation = infer_dispatch_recommendation(
             issue_ready=issue_ready,
             azure_closeout_only=azure_closeout_only,
@@ -3313,6 +3577,24 @@ def build_children(
             risk_tags=risk_tags,
             plan_dispatch_blocked=bool(plan_execution["dispatch_blocked"]),
             automation_blockers=automation_blockers,
+        )
+        status_label = runtime_status_label(
+            issue_ready=issue_ready,
+            azure_closeout_only=azure_closeout_only,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            dispatch_recommendation=dispatch_recommendation,
+        )
+        priority = infer_priority_value(
+            explicit_priority=explicit_priority_from_lines(lines),
+            title=title,
+            excerpt=excerpt,
+            highest_tier=highest_tier,
+            risk_tags=risk_tags,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            validation_scope=validation_scope,
+            gates=gates,
         )
         labels = infer_labels(
             title,
@@ -3325,6 +3607,7 @@ def build_children(
             highest_tier=highest_tier,
             status_label=status_label,
             points=points,
+            priority=priority,
         )
         body_lines = [
             "## Source Plan",
@@ -3333,9 +3616,10 @@ def build_children(
             "",
             "## Suggested Draft Metadata",
             f"- Suggested points: `{points}`",
-            f"- Issue ready: `{'true' if issue_ready else 'false'}`",
+            f"- Issue ready: `{'true' if status_label == 'status:ready' else 'false'}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
+            f"- Priority: `{priority}`",
         ]
         if risk_tags:
             body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
@@ -3443,6 +3727,7 @@ def build_children(
                 dependency_issue_refs=dependency_analysis.issue_refs,
                 blocker_issue_refs=blocker_analysis.issue_refs,
                 automation_blockers=automation_blockers,
+                priority=priority,
             )
         )
     return drafts
@@ -3486,6 +3771,7 @@ def build_manifest_leaf_children(
             repo_targets = normalize_repo_target_values(
                 [repo_for_path(item) for item in write_scope if item]
             )
+        dependency_field_present = field_declared(lines, "depends on", "dependencies")
         dependency_analysis = analyze_manifest_dependency_values(
             collect_field_values(lines, "depends on", "dependencies"),
             manifest_source_ids=manifest_source_ids,
@@ -3518,9 +3804,27 @@ def build_manifest_leaf_children(
                 )
             ]
         )
+        blocks = clean_manifest_list_values(collect_field_values(lines, "blocks"))
+        parallel_group = clean_optional_manifest_scalar(
+            collect_field_values(lines, "parallel group")
+        )
+        critical_path_rank = parse_int_value(
+            clean_optional_manifest_scalar(collect_field_values(lines, "critical path rank"))
+        )
+        merge_group = clean_optional_manifest_scalar(collect_field_values(lines, "merge group"))
+        combine_policy = clean_optional_manifest_scalar(
+            collect_field_values(lines, "combine policy")
+        )
+        conflict_class = clean_optional_manifest_scalar(
+            collect_field_values(lines, "conflict class")
+        )
+        validation_tier = clean_optional_manifest_scalar(
+            collect_field_values(lines, "validation tier")
+        )
         requested_dispatch_mode = normalize_dispatch_mode(
             collect_field_values(lines, "dispatch mode", "dispatch")
         )
+        agent_type = normalize_agent_type(collect_field_values(lines, "agent type"))
         issue_ready = parse_bool_field(
             collect_field_values(lines, "issue ready"),
             default=requested_dispatch_mode in {"agent-ready", "manual-review"},
@@ -3537,15 +3841,29 @@ def build_manifest_leaf_children(
         execution_repo, base_branch = resolve_issue_execution_context(
             issue_repo=issue_repo,
             repo_targets=repo_targets,
+            explicit_execution_repo=normalize_branch_field(
+                collect_field_values(lines, "execution repo", "execution repository")
+            ),
             explicit_base_branch=normalize_branch_field(
                 collect_field_values(lines, "base branch", "target base branch")
             ),
             default_base_branch=plan_base_branch or frontmatter.get("tracking.baseBranch"),
         )
+        legacy_issue_repo, legacy_issue_number = legacy_issue_ref_from_values(
+            collect_field_values(lines, "issue ref", "existing issue", "github issue"),
+            default_repo=execution_repo or issue_repo,
+        )
         blockers = explicit_blockers
         points = points_for_issue(title, repo_targets, gates, lines)
         automation_blockers = ordered_unique(
             [
+                *(
+                    [
+                        "Add explicit manifest dependency metadata (`Depends on: none` or concrete leaf ids/issue refs) before auto-dispatch."
+                    ]
+                    if not dependency_field_present
+                    else []
+                ),
                 *(
                     f"Convert dependency token `{token}` into an explicit issue ref or Automation Issue Manifest leaf id before auto-dispatch."
                     for token in dependency_analysis.unsupported_tokens
@@ -3556,14 +3874,6 @@ def build_manifest_leaf_children(
                 ),
             ]
         )
-        if requested_dispatch_mode == "blocked" or blockers or automation_blockers:
-            status_label = "status:blocked"
-        else:
-            status_label = status_label_for_issue(
-                issue_ready=issue_ready,
-                azure_closeout_only=False,
-                explicit_blockers=[],
-            )
         automation_blockers = ordered_unique([*automation_blockers, *point_dispatch_guardrails(points)])
         risk_tags = infer_risk_tags(
             title=title,
@@ -3590,6 +3900,30 @@ def build_manifest_leaf_children(
             requested_dispatch_mode,
             dispatch_recommendation,
         )
+        runtime_dispatch_mode = effective_dispatch_mode(
+            requested_dispatch_mode,
+            issue_ready=issue_ready,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+        )
+        status_label = runtime_status_label(
+            issue_ready=issue_ready,
+            azure_closeout_only=False,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            dispatch_recommendation=dispatch_recommendation,
+        )
+        priority = infer_priority_value(
+            explicit_priority=explicit_priority_from_lines(lines),
+            title=title,
+            excerpt=excerpt,
+            highest_tier=highest_tier,
+            risk_tags=risk_tags,
+            blockers=blockers,
+            automation_blockers=automation_blockers,
+            validation_scope=validation_scope,
+            gates=gates,
+        )
         labels = infer_labels(
             title,
             excerpt,
@@ -3601,6 +3935,7 @@ def build_manifest_leaf_children(
             highest_tier=highest_tier,
             status_label=status_label,
             points=points,
+            priority=priority,
         )
         body_lines = [
             "## Source Plan",
@@ -3609,11 +3944,29 @@ def build_manifest_leaf_children(
             "",
             "## Automation Manifest Metadata",
             f"- Suggested points: `{points}`",
-            f"- Issue ready: `{'true' if issue_ready else 'false'}`",
-            f"- Dispatch mode: `{requested_dispatch_mode}`",
+            f"- Issue ready: `{'true' if status_label == 'status:ready' else 'false'}`",
+            f"- Requested dispatch mode: `{requested_dispatch_mode}`",
+            f"- Dispatch mode: `{runtime_dispatch_mode}`",
             f"- Dispatch recommendation: `{dispatch_recommendation}`",
             f"- Validation scope: `{validation_scope}`",
+            f"- Priority: `{priority}`",
         ]
+        if agent_type:
+            body_lines.append(f"- Agent type: `{agent_type}`")
+        if parallel_group:
+            body_lines.append(f"- Parallel group: `{parallel_group}`")
+        if blocks:
+            body_lines.append(f"- Blocks: `{'; '.join(blocks)}`")
+        if critical_path_rank is not None:
+            body_lines.append(f"- Critical path rank: `{critical_path_rank}`")
+        if merge_group:
+            body_lines.append(f"- Merge group: `{merge_group}`")
+        if combine_policy:
+            body_lines.append(f"- Combine policy: `{combine_policy}`")
+        if conflict_class:
+            body_lines.append(f"- Conflict class: `{conflict_class}`")
+        if validation_tier:
+            body_lines.append(f"- Validation tier: `{validation_tier}`")
         if risk_tags:
             body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
         if repo_targets:
@@ -3690,26 +4043,37 @@ def build_manifest_leaf_children(
                 kind="story",
                 source_id=source_id,
                 execution_repo=execution_repo,
+                legacy_issue_repo=legacy_issue_repo,
+                legacy_issue_number=legacy_issue_number,
                 base_branch=base_branch,
                 suggested_points=points,
                 dependencies=dependencies,
+                blocks=blocks,
                 blockers=blockers,
                 gates=gates,
                 highest_tier=highest_tier,
                 repo_targets=repo_targets,
                 repo_note=repo_note,
                 validation_requirements=validation_requirements,
-                issue_ready=issue_ready,
+                issue_ready=effective_issue_ready(issue_ready, points, automation_blockers),
                 status_label=status_label,
                 dispatch_recommendation=dispatch_recommendation,
-                dispatch_mode=requested_dispatch_mode,
+                dispatch_mode=runtime_dispatch_mode,
+                agent_type=agent_type,
                 write_scope=write_scope,
                 validation_commands=validation_commands,
                 validation_scope=validation_scope,
+                parallel_group=parallel_group,
+                critical_path_rank=critical_path_rank,
+                merge_group=merge_group,
+                combine_policy=combine_policy,
+                conflict_class=conflict_class,
+                validation_tier=validation_tier,
                 risk_tags=risk_tags,
                 dependency_issue_refs=dependency_analysis.issue_refs,
                 blocker_issue_refs=blocker_analysis.issue_refs,
                 automation_blockers=automation_blockers,
+                priority=priority,
             )
         )
     return drafts
@@ -3755,6 +4119,12 @@ FIELD_DATA_TYPES = {
     "ParentEpic": "TEXT",
     "DependsOn": "TEXT",
     "Blocks": "TEXT",
+    "ParallelGroup": "TEXT",
+    "CriticalPathRank": "NUMBER",
+    "MergeGroup": "TEXT",
+    "CombinePolicy": "TEXT",
+    "ConflictClass": "TEXT",
+    "ValidationTier": "TEXT",
     "AutomationBlockers": "TEXT",
     "ReviewGates": "TEXT",
     "GateTier": "SINGLE_SELECT",
@@ -3781,10 +4151,96 @@ FIELD_DATA_TYPES = {
     "ActivePR": "TEXT",
     "Validation": "TEXT",
 }
+PROJECT_FIELD_TYPES = FIELD_DATA_TYPES
 PROJECT_CONFIG_CACHE: dict[tuple[str, int], dict[str, object]] = {}
+PROJECT_ITEM_URL_CACHE: dict[tuple[str, int], dict[str, str]] = {}
+PROJECT_ITEM_RECORD_CACHE: dict[tuple[str, int], dict[str, dict[str, object]]] = {}
+PROJECT_ITEM_ID_RECORD_CACHE: dict[tuple[str, int], dict[str, dict[str, object]]] = {}
+
+
+def parse_project_items(payload: object) -> list[object]:
+    if isinstance(payload, dict):
+        candidate_items = payload.get("items")
+        return candidate_items if isinstance(candidate_items, list) else [payload]
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def gh_project_item_url_map(
+    project_owner: str,
+    project_number: int,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, str]:
+    cache_key = (project_owner, project_number)
+    if not force_refresh and cache_key in PROJECT_ITEM_URL_CACHE:
+        return PROJECT_ITEM_URL_CACHE[cache_key]
+
+    list_cmd = [
+        "gh",
+        "project",
+        "item-list",
+        str(project_number),
+        "--owner",
+        project_owner,
+        "--limit",
+        str(GITHUB_PROJECT_ITEM_LIST_LIMIT),
+        "--format",
+        "json",
+    ]
+    listed = subprocess.run(
+        list_cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    try:
+        payload = json.loads(listed.stdout or "[]")
+    except json.JSONDecodeError:
+        payload = []
+
+    item_by_url: dict[str, str] = {}
+    item_by_url_record: dict[str, dict[str, object]] = {}
+    item_by_id_record: dict[str, dict[str, object]] = {}
+    for current in parse_project_items(payload):
+        if not isinstance(current, dict):
+            continue
+        content = current.get("content")
+        item_id = current.get("id")
+        if isinstance(content, dict) and isinstance(item_id, str):
+            url = content.get("url")
+            if isinstance(url, str) and url:
+                item_by_url[url] = item_id
+                item_by_url_record[url] = current
+                item_by_id_record[item_id] = current
+    PROJECT_ITEM_URL_CACHE[cache_key] = item_by_url
+    PROJECT_ITEM_RECORD_CACHE[cache_key] = item_by_url_record
+    PROJECT_ITEM_ID_RECORD_CACHE[cache_key] = item_by_id_record
+    return item_by_url
+
+
+def gh_project_item_id_record_map(
+    project_owner: str,
+    project_number: int,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, dict[str, object]]:
+    cache_key = (project_owner, project_number)
+    if not force_refresh and cache_key in PROJECT_ITEM_ID_RECORD_CACHE:
+        return PROJECT_ITEM_ID_RECORD_CACHE[cache_key]
+    gh_project_item_url_map(project_owner, project_number, force_refresh=force_refresh)
+    return PROJECT_ITEM_ID_RECORD_CACHE.get(cache_key, {})
 
 
 def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> str | None:
+    existing_items = gh_project_item_url_map(project_owner, project_number)
+    existing_item_id = existing_items.get(issue_url)
+    if existing_item_id:
+        return existing_item_id
+
     cmd = [
         "gh",
         "project",
@@ -3803,49 +4259,25 @@ def gh_project_add(project_owner: str, project_number: int, issue_url: str) -> s
         )
         payload = json.loads(result.stdout or "{}")
         item_id = payload.get("id")
-        return str(item_id) if item_id else None
+        if item_id:
+            item_id = str(item_id)
+            existing_items[issue_url] = item_id
+            PROJECT_ITEM_RECORD_CACHE.setdefault((project_owner, project_number), {})[issue_url] = payload
+            PROJECT_ITEM_ID_RECORD_CACHE.setdefault((project_owner, project_number), {})[item_id] = payload
+            return item_id
+        return None
     except subprocess.CalledProcessError as exc:
-        list_cmd = [
-            "gh",
-            "project",
-            "item-list",
-            str(project_number),
-            "--owner",
-            project_owner,
-            "--limit",
-            "200",
-            "--format",
-            "json",
-        ]
         try:
-            listed = subprocess.run(
-                list_cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=True,
+            refreshed_items = gh_project_item_url_map(
+                project_owner,
+                project_number,
+                force_refresh=True,
             )
-            payload = json.loads(listed.stdout or "[]")
-        except (subprocess.CalledProcessError, json.JSONDecodeError):
-            payload = []
-
-        items: list[object]
-        if isinstance(payload, dict):
-            candidate_items = payload.get("items")
-            items = candidate_items if isinstance(candidate_items, list) else [payload]
-        elif isinstance(payload, list):
-            items = payload
-        else:
-            items = []
-
-        for current in items:
-            if not isinstance(current, dict):
-                continue
-            content = current.get("content")
-            if isinstance(content, dict) and str(content.get("url") or "") == issue_url:
-                item_id = current.get("id")
-                return str(item_id) if item_id else None
+        except subprocess.CalledProcessError:
+            refreshed_items = {}
+        refreshed_item_id = refreshed_items.get(issue_url)
+        if refreshed_item_id:
+            return refreshed_item_id
 
         stderr = (exc.stderr or exc.stdout or "").strip()
         raise RuntimeError(
@@ -3900,7 +4332,9 @@ def first_label_value(labels: list[str], prefix: str) -> str | None:
 
 
 def issue_ready_project_value(draft: IssueDraft) -> str:
-    if draft.status_label == "status:blocked" or draft.blockers or draft.automation_blockers:
+    if requires_decomposition(draft.suggested_points, draft.automation_blockers):
+        return "Draft"
+    if draft.status_label == "status:blocked" or draft.blockers or non_decomposition_automation_blockers(draft.automation_blockers):
         return "Blocked"
     if draft.issue_ready and draft.status_label == "status:ready":
         return "Ready"
@@ -3920,6 +4354,8 @@ def item_type_project_value(draft: IssueDraft) -> str:
 def automation_state_project_value(draft: IssueDraft) -> str:
     if draft.kind == "epic":
         return "Planned"
+    if requires_decomposition(draft.suggested_points, draft.automation_blockers):
+        return "Manual"
     if draft.status_label == "status:blocked" or draft.blockers or draft.automation_blockers:
         return "Blocked"
     if draft.status_label == "status:draft":
@@ -3962,6 +4398,12 @@ def blocker_type_project_value(draft: IssueDraft) -> str | None:
     return None
 
 
+def agent_type_project_value(draft: IssueDraft) -> str | None:
+    if draft.agent_type in ALLOWED_AGENT_TYPES:
+        return draft.agent_type
+    return None
+
+
 def project_field_values(
     draft: IssueDraft,
     *,
@@ -3983,16 +4425,23 @@ def project_field_values(
         "SourceId": draft.source_id,
         "ParentEpic": parent_epic_url,
         "DependsOn": "\n".join(draft.dependencies),
-        "Blocks": "\n".join(draft.blockers),
+        "Blocks": "\n".join(draft.blocks or draft.blockers),
+        "ParallelGroup": draft.parallel_group,
+        "CriticalPathRank": draft.critical_path_rank,
+        "MergeGroup": draft.merge_group,
+        "CombinePolicy": draft.combine_policy,
+        "ConflictClass": draft.conflict_class,
+        "ValidationTier": draft.validation_tier,
         "AutomationBlockers": "\n".join(draft.automation_blockers),
         "ReviewGates": "\n".join(draft.gates),
         "GateTier": draft.highest_tier,
         "MergePoint": "\n".join(draft.merge_points),
         "DispatchMode": draft.dispatch_mode,
         "DispatchRecommendation": draft.dispatch_recommendation,
+        "AgentType": agent_type_project_value(draft),
         "IssueReady": issue_ready_project_value(draft),
         "AutomationState": automation_state_project_value(draft),
-        "Priority": (first_label_value(labels, "priority:") or "").upper() or None,
+        "Priority": draft.priority or (first_label_value(labels, "priority:") or "").upper() or None,
         "Size": draft.suggested_points,
         "Risk": risk_project_value(draft),
         "RiskTags": ", ".join(draft.risk_tags),
@@ -4051,6 +4500,32 @@ def gh_project_item_edit_value(
     subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
 
 
+def project_field_payload_key(field_name: str) -> str:
+    return field_name[:1].lower() + field_name[1:] if field_name else ""
+
+
+def project_field_value_matches(
+    *,
+    field: dict[str, object],
+    desired_value: object,
+    current_item: dict[str, object] | None,
+) -> bool:
+    if not current_item:
+        return False
+    field_name = str(field.get("name") or "")
+    payload_key = project_field_payload_key(field_name)
+    if not payload_key or payload_key not in current_item:
+        return False
+    current_value = current_item.get(payload_key)
+    data_type = FIELD_DATA_TYPES.get(field_name)
+    if data_type == "NUMBER":
+        try:
+            return float(current_value) == float(desired_value)
+        except (TypeError, ValueError):
+            return False
+    return str(current_value) == str(desired_value)
+
+
 def gh_project_sync_issue_fields(
     project_owner: str,
     project_number: int,
@@ -4068,6 +4543,7 @@ def gh_project_sync_issue_fields(
     fields = config["fields"]
     if not isinstance(fields, dict):
         return
+    current_item = gh_project_item_id_record_map(project_owner, project_number).get(item_id)
     for name, value in project_field_values(
         draft,
         issue_repo=issue_repo,
@@ -4076,7 +4552,13 @@ def gh_project_sync_issue_fields(
     ).items():
         field = fields.get(name)
         if isinstance(field, dict):
+            if project_field_value_matches(field=field, desired_value=value, current_item=current_item):
+                continue
             gh_project_item_edit_value(project_id=project_id, item_id=item_id, field=field, value=value)
+            if current_item is not None:
+                current_item[project_field_payload_key(name)] = (
+                    float(value) if FIELD_DATA_TYPES.get(name) == "NUMBER" else str(value)
+                )
 
 
 def label_metadata(name: str) -> tuple[str, str]:
@@ -4199,9 +4681,9 @@ def load_existing_issues(repo: str, existing_issues_file: str | None = None) -> 
         "--state",
         "all",
         "--limit",
-        "200",
+        str(GITHUB_ISSUE_LIST_LIMIT),
         "--json",
-        "number,title,body,labels,url",
+        "number,title,body,labels,url,state",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True)
     return json.loads(result.stdout)
@@ -4311,8 +4793,63 @@ def plan_path_matches(issue_plan_path: str | None, relative_plan_path: str) -> b
     return False
 
 
+def issue_state(issue: dict[str, object]) -> str:
+    return str(issue.get("state") or "").upper()
+
+
+def issue_is_closed(issue: dict[str, object] | None) -> bool:
+    return bool(issue) and issue_state(issue) == "CLOSED"
+
+
+def unique_issue_matches(matches: list[dict[str, object]]) -> list[dict[str, object]]:
+    seen: set[tuple[object, object]] = set()
+    unique: list[dict[str, object]] = []
+    for match in matches:
+        key = (match.get("number"), match.get("url"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(match)
+    return unique
+
+
+def choose_issue_match(
+    matches: list[dict[str, object]],
+    *,
+    source_id: str,
+    match_kind: str,
+) -> dict[str, object] | None:
+    unique = unique_issue_matches(matches)
+    if not unique:
+        return None
+    if len(unique) == 1:
+        return unique[0]
+
+    open_matches = [match for match in unique if issue_state(match) == "OPEN"]
+    if len(open_matches) == 1:
+        return open_matches[0]
+
+    raise SystemExit(
+        f"{match_kind} match for {source_id!r} is ambiguous; projection remains fail-closed"
+    )
+
+
 def managed_label(name: str) -> bool:
-    return name.startswith(("type:", "workstream:", "repo:", "tier:", "status:", "area:", "owner:"))
+    return name.startswith(
+        (
+            "type:",
+            "workstream:",
+            "repo:",
+            "tier:",
+            "status:",
+            "area:",
+            "owner:",
+            "points:",
+            "priority:",
+            "agent:",
+            "decomposition:",
+        )
+    )
 
 
 def merged_labels_for_sync(existing_labels: list[str], desired_labels: list[str]) -> list[str]:
@@ -4325,6 +4862,73 @@ def desired_body_for_sync(draft: IssueDraft, *, parent_epic_url: str | None = No
         return draft.body
     stripped = draft.body.rstrip()
     return "\n".join([stripped, "", "## Parent Epic", parent_epic_url])
+
+
+def projection_preflight_report(drafts: list[IssueDraft]) -> dict[str, object]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    source_ids: dict[str, list[IssueDraft]] = {}
+    invalid_labels: list[dict[str, object]] = []
+    for draft in drafts:
+        source_ids.setdefault(draft.source_id, []).append(draft)
+        for label in draft.labels:
+            if not label or len(label) > GITHUB_LABEL_NAME_MAX_LENGTH:
+                invalid_labels.append(
+                    {
+                        "source_id": draft.source_id,
+                        "label": label,
+                        "length": len(label),
+                        "max_length": GITHUB_LABEL_NAME_MAX_LENGTH,
+                    }
+                )
+        if draft.status_label == "status:ready" and draft.dispatch_recommendation not in {
+            "auto-dispatch",
+            "auto-dispatch-pilot",
+        }:
+            errors.append(
+                f"{draft.source_id}: status:ready requires an auto-dispatch recommendation."
+            )
+        if draft.dispatch_mode == "agent-ready" and (
+            draft.kind == "epic"
+            or requires_decomposition(draft.suggested_points, draft.automation_blockers)
+        ):
+            errors.append(
+                f"{draft.source_id}: agent-ready is unsafe for parent or multi-point rows."
+            )
+        if draft.priority is None and draft.kind != "epic":
+            warnings.append(
+                f"{draft.source_id}: priority is missing; dry-run should infer or require it before apply."
+            )
+    duplicate_source_ids = [
+        {
+            "source_id": source_id,
+            "titles": [draft.title for draft in matches],
+        }
+        for source_id, matches in sorted(source_ids.items())
+        if len(matches) > 1
+    ]
+    for duplicate in duplicate_source_ids:
+        errors.append(
+            f"Duplicate SourceId {duplicate['source_id']!r} appears in the projected rows."
+        )
+    for label in invalid_labels:
+        errors.append(
+            f"{label['source_id']}: label {label['label']!r} is {label['length']} characters; "
+            f"GitHub label names must be <= {label['max_length']} characters."
+        )
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "duplicate_source_ids": duplicate_source_ids,
+        "invalid_labels": invalid_labels,
+    }
+
+
+def enforce_projection_preflight(preflight: dict[str, object]) -> None:
+    errors = preflight.get("errors")
+    if isinstance(errors, list) and errors:
+        raise SystemExit("Projection preflight failed:\n- " + "\n- ".join(str(e) for e in errors))
 
 
 def find_matching_issue(
@@ -4366,7 +4970,6 @@ def find_matching_issue(
         title = str(issue.get("title") or "")
         if title == draft.title:
             exact_title_matches.append(issue)
-            continue
         issue_plan_key = extract_issue_body_value(ISSUE_PLAN_KEY_RE, body)
         issue_source_section = extract_issue_body_value(ISSUE_SOURCE_SECTION_RE, body)
         if draft.kind == "epic" and issue_plan_key == desired_plan_key:
@@ -4374,17 +4977,71 @@ def find_matching_issue(
         elif draft.kind != "epic" and desired_source_section and issue_source_section == desired_source_section:
             metadata_matches.append(issue)
 
-    if len(legacy_number_matches) == 1:
-        return legacy_number_matches[0]
-    if len(legacy_number_matches) > 1:
-        raise SystemExit(
-            f"legacy registry match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+    return (
+        choose_issue_match(
+            legacy_number_matches,
+            source_id=draft.source_id,
+            match_kind="legacy registry",
         )
-    if exact_title_matches:
-        return exact_title_matches[0]
-    if metadata_matches:
-        return metadata_matches[0]
-    return None
+        or choose_issue_match(
+            metadata_matches,
+            source_id=draft.source_id,
+            match_kind="SourceId/source metadata",
+        )
+        or choose_issue_match(
+            exact_title_matches,
+            source_id=draft.source_id,
+            match_kind="title",
+        )
+    )
+
+
+def find_matching_issue_in_repos(
+    draft: IssueDraft,
+    *,
+    preferred_repo: str,
+    issues_by_repo: dict[str, list[dict[str, object]]],
+    relative_plan_path: str,
+    registry_root_relative: str | None = None,
+) -> tuple[str, dict[str, object] | None]:
+    match = find_matching_issue(
+        draft,
+        existing_issues=issues_by_repo.get(preferred_repo, []),
+        relative_plan_path=relative_plan_path,
+        registry_root_relative=registry_root_relative,
+    )
+    if match is not None:
+        return preferred_repo, match
+
+    fallback_matches: list[tuple[str, dict[str, object]]] = []
+    for repo_key, issues in issues_by_repo.items():
+        if repo_key == preferred_repo:
+            continue
+        repo_match = find_matching_issue(
+            draft,
+            existing_issues=issues,
+            relative_plan_path=relative_plan_path,
+            registry_root_relative=registry_root_relative,
+        )
+        if repo_match is not None:
+            fallback_matches.append((repo_key, repo_match))
+
+    if not fallback_matches:
+        return preferred_repo, None
+    if len(fallback_matches) == 1:
+        return fallback_matches[0]
+
+    open_fallbacks = [
+        (repo_key, match)
+        for repo_key, match in fallback_matches
+        if issue_state(match) == "OPEN"
+    ]
+    if len(open_fallbacks) == 1:
+        return open_fallbacks[0]
+
+    raise SystemExit(
+        f"cross-repo match for {draft.source_id!r} is ambiguous; projection remains fail-closed"
+    )
 
 
 def find_matching_epic_tracker_issue(
@@ -4453,9 +5110,16 @@ def build_sync_preview(
         key: set() for key in issues_by_repo
     }
 
+    def match_summary(match: dict[str, object]) -> dict[str, object]:
+        return {
+            "number": match.get("number"),
+            "title": match.get("title"),
+            "url": match.get("url"),
+            "state": match.get("state"),
+        }
+
     for draft in [epic, *children]:
         landing = issue_landing_repo(epic_repo, draft)
-        existing_for_draft = issues_by_repo.get(landing, [])
         if draft.kind == "epic" and not epic_match and tracker_adoption_match:
             existing_labels = issue_label_names(tracker_adoption_match)
             operations.append(
@@ -4466,11 +5130,7 @@ def build_sync_preview(
                     "issue_repo": landing,
                     "action": "use-existing-epic-tracker",
                     "changed_fields": [],
-                    "match": {
-                        "number": tracker_adoption_match.get("number"),
-                        "title": tracker_adoption_match.get("title"),
-                        "url": tracker_adoption_match.get("url"),
-                    },
+                    "match": match_summary(tracker_adoption_match),
                     "labels": {
                         "existing": existing_labels,
                         "desired": existing_labels,
@@ -4487,14 +5147,15 @@ def build_sync_preview(
             if isinstance(tracker_adoption_match.get("number"), int):
                 matched_numbers_by_repo[landing].add(int(tracker_adoption_match["number"]))
             continue
-        match = find_matching_issue(
+        issue_repo, match = find_matching_issue_in_repos(
             draft,
-            existing_issues=existing_for_draft,
+            preferred_repo=landing,
+            issues_by_repo=issues_by_repo,
             relative_plan_path=relative_plan_path,
             registry_root_relative=registry_root_relative,
         )
         if match and isinstance(match.get("number"), int):
-            matched_numbers_by_repo[landing].add(int(match["number"]))
+            matched_numbers_by_repo.setdefault(issue_repo, set()).add(int(match["number"]))
         existing_labels = issue_label_names(match or {})
         desired_labels = merged_labels_for_sync(existing_labels, draft.labels)
         parent_epic_url = (
@@ -4506,13 +5167,20 @@ def build_sync_preview(
         if match and draft.kind == "story" and isinstance(match.get("number"), int):
             desired_body = rebind_body_execution_issue_key(
                 desired_body,
-                issue_repo=landing,
+                issue_repo=issue_repo,
                 issue_number=int(match["number"]),
             )
         changed_fields: list[str] = []
         label_additions = [label for label in desired_labels if label not in existing_labels]
         label_removals = [label for label in existing_labels if label not in desired_labels]
-        if not match:
+        note = None
+        if issue_is_closed(match):
+            changed_fields = []
+            label_additions = []
+            label_removals = []
+            action = "skip-closed"
+            note = "Closed/completed issues are historical records and are never updated by sync-preview/sync-apply."
+        elif not match:
             changed_fields = ["title", "body", "labels"]
             action = "create-missing"
         else:
@@ -4528,16 +5196,14 @@ def build_sync_preview(
                 "source_id": draft.source_id,
                 "kind": draft.kind,
                 "title": draft.title,
-                "issue_repo": landing,
+                "issue_repo": issue_repo,
+                "desired_issue_repo": landing,
+                "matched_outside_landing_repo": bool(match and issue_repo != landing),
                 "action": action,
                 "changed_fields": changed_fields,
                 "match": None
                 if not match
-                else {
-                    "number": match.get("number"),
-                    "title": match.get("title"),
-                    "url": match.get("url"),
-                },
+                else match_summary(match),
                 "labels": {
                     "existing": existing_labels,
                     "desired": desired_labels,
@@ -4548,6 +5214,7 @@ def build_sync_preview(
                 "validation_scope": draft.validation_scope,
                 "risk_tags": draft.risk_tags,
                 "body_changed": "body" in changed_fields,
+                "note": note,
             }
         )
 
@@ -4603,6 +5270,7 @@ def apply_sync_operations(
     created: list[dict[str, object]] = []
     updated: list[dict[str, object]] = []
     unchanged: list[dict[str, object]] = []
+    skipped_closed: list[dict[str, object]] = []
 
     epic_match = find_matching_issue(
         epic,
@@ -4628,7 +5296,19 @@ def apply_sync_operations(
     epic_remove = [label for label in epic_existing_labels if label not in epic_desired_labels]
     epic_add = [label for label in epic_desired_labels if label not in epic_existing_labels]
 
-    if epic_match:
+    if issue_is_closed(epic_match):
+        epic_url = str(epic_match["url"])
+        skipped_closed.append(
+            {
+                "source_id": epic.source_id,
+                "kind": epic.kind,
+                "issue_repo": epic_key,
+                "number": epic_match["number"],
+                "url": epic_url,
+                "reason": "closed/completed issue must not be edited",
+            }
+        )
+    elif epic_match:
         epic_body = desired_body_for_sync(epic)
         epic_changed_fields: list[str] = []
         if str(epic_match.get("title") or "") != epic.title:
@@ -4691,7 +5371,7 @@ def apply_sync_operations(
                     "url": epic_url,
                 }
             )
-    if project_owner and project_number:
+    if project_owner and project_number and not issue_is_closed(epic_match):
         item_id = gh_project_add(project_owner, project_number, epic_url)
         gh_project_sync_issue_fields(
             project_owner,
@@ -4704,10 +5384,10 @@ def apply_sync_operations(
 
     for child in children:
         landing = issue_landing_repo(epic_repo, child)
-        existing_for_child = issues_by_repo.get(landing, [])
-        match = find_matching_issue(
+        issue_repo, match = find_matching_issue_in_repos(
             child,
-            existing_issues=existing_for_child,
+            preferred_repo=landing,
+            issues_by_repo=issues_by_repo,
             relative_plan_path=relative_plan_path,
             registry_root_relative=registry_root_relative,
         )
@@ -4718,11 +5398,25 @@ def apply_sync_operations(
         child_parent_epic_url = None if child.source_id == tracker_adoption_source_id else epic_url
         body = desired_body_for_sync(child, parent_epic_url=child_parent_epic_url)
 
+        if issue_is_closed(match):
+            skipped_closed.append(
+                {
+                    "source_id": child.source_id,
+                    "kind": child.kind,
+                    "issue_repo": issue_repo,
+                    "desired_issue_repo": landing,
+                    "number": match["number"],
+                    "url": str(match["url"]),
+                    "reason": "closed/completed issue must not be edited",
+                }
+            )
+            continue
+
         if match:
             issue_url = str(match["url"])
             body = rebind_body_execution_issue_key(
                 body,
-                issue_repo=landing,
+                issue_repo=issue_repo,
                 issue_number=int(match["number"]),
             )
             changed_fields: list[str] = []
@@ -4734,7 +5428,7 @@ def apply_sync_operations(
                 changed_fields.append("labels")
             if changed_fields:
                 gh_issue_edit(
-                    landing,
+                    issue_repo,
                     int(match["number"]),
                     title=child.title,
                     body=body,
@@ -4745,7 +5439,8 @@ def apply_sync_operations(
                     {
                         "source_id": child.source_id,
                         "kind": child.kind,
-                        "issue_repo": landing,
+                        "issue_repo": issue_repo,
+                        "desired_issue_repo": landing,
                         "number": match["number"],
                         "url": issue_url,
                         "changed_fields": changed_fields,
@@ -4756,7 +5451,8 @@ def apply_sync_operations(
                     {
                         "source_id": child.source_id,
                         "kind": child.kind,
-                        "issue_repo": landing,
+                        "issue_repo": issue_repo,
+                        "desired_issue_repo": landing,
                         "number": match["number"],
                         "url": issue_url,
                     }
@@ -4768,7 +5464,7 @@ def apply_sync_operations(
                     project_number,
                     item_id,
                     child,
-                    issue_repo=landing,
+                    issue_repo=issue_repo,
                     plan_key=epic.source_id,
                     parent_epic_url=child_parent_epic_url,
                 )
@@ -4844,6 +5540,7 @@ def apply_sync_operations(
         "created": created,
         "updated": updated,
         "unchanged": unchanged,
+        "skipped_closed": skipped_closed,
     }
 
 
@@ -4883,14 +5580,13 @@ def run_registry_projection(
 
     epic = build_registry_epic(portfolio, issue_repo=repo, plan_execution=plan_execution)
     stability = build_registry_stability_summary(repo=repo, children=children, plan_execution=plan_execution)
-    epic_status_label = (
-        "status:ready" if stability["plan_status"] == "ready-for-apply" else "status:draft"
-    )
+    epic_status_label = "status:draft"
     epic.labels = sorted(
         set([label for label in epic.labels if not label.startswith("status:")] + [epic_status_label])
     )
     epic.status_label = epic_status_label
     relative_registry_anchor = display_plan_path(registry_root)
+    preflight = projection_preflight_report([epic, *children])
 
     payload: dict[str, object] = {
         "plan": relative_registry_anchor,
@@ -4926,6 +5622,7 @@ def run_registry_projection(
         },
         "plan_execution": plan_execution,
         "stability": stability,
+        "preflight": preflight,
     }
 
     plan_path_anchor = registry_root
@@ -4953,6 +5650,8 @@ def run_registry_projection(
         json.dump(payload, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
+
+    enforce_projection_preflight(preflight)
 
     if args.sync_apply:
         issues_by_repo = load_existing_issues_map(
@@ -5148,13 +5847,12 @@ def main() -> int:
         explicit_blockers=global_blockers,
         plan_execution=plan_execution,
     )
-    epic_status_label = (
-        "status:ready" if stability["plan_status"] == "ready-for-apply" else "status:draft"
-    )
+    epic_status_label = "status:draft"
     epic.labels = sorted(
         set([label for label in epic.labels if not label.startswith("status:")] + [epic_status_label])
     )
     epic.status_label = epic_status_label
+    preflight = projection_preflight_report([epic, *children])
 
     payload = {
         "plan": plan_display_path,
@@ -5170,6 +5868,7 @@ def main() -> int:
         },
         "plan_execution": plan_execution,
         "stability": stability,
+        "preflight": preflight,
     }
 
     if args.dry_run:
@@ -5195,6 +5894,8 @@ def main() -> int:
         json.dump(payload, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
+
+    enforce_projection_preflight(preflight)
 
     if args.sync_apply:
         issues_by_repo = load_existing_issues_map(

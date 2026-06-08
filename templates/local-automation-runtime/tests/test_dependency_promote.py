@@ -137,7 +137,10 @@ class DependencyPromoteTests(unittest.TestCase):
         all_items = all_items or [candidate_item]
         dependency_map = self.promote.build_dependency_map(all_items)
         project = self.promote.ProjectTarget("owner", 1)
-        return self.promote.classify_issue("owner/repo", candidate_issue, candidate_item, project, dependency_map)
+        return self.promote.classify_issue("owner/repo", candidate_issue, dependency_map, candidate_item, project)
+
+    def decide_body_only(self, candidate_issue: dict):
+        return self.promote.classify_issue("owner/repo", candidate_issue, {})
 
     def test_ws_token_closed_upstream_promotes_downstream(self) -> None:
         upstream = item(3, sourceId="WS-3", workstream="WS-3")
@@ -194,7 +197,7 @@ class DependencyPromoteTests(unittest.TestCase):
         decision = self.decide(candidate_issue, candidate_item)
         self.assertEqual(decision.action, "promote")
 
-    def test_project_body_disagreement_is_reconciled_as_promotion(self) -> None:
+    def test_project_depends_on_is_advisory_when_body_is_ready(self) -> None:
         candidate_item = item(4, dependsOn="WS-3", dispatchMode="blocked", issueReady="Blocked")
         candidate_issue = issue(
             4,
@@ -212,6 +215,45 @@ class DependencyPromoteTests(unittest.TestCase):
         self.assertEqual(decision.body_updates, {"Issue ready": "true"})
         self.assertEqual(decision.project_updates["DispatchMode"], "agent-ready")
         self.assertEqual(decision.project_updates["IssueReady"], "Ready")
+        self.assertFalse(any("open dependency" in reason for reason in decision.reasons))
+
+    def test_body_only_promotion_does_not_require_project_item(self) -> None:
+        candidate_issue = issue(4, body(dependencies="owner/repo#3"))
+        self.issue_states[("owner/repo", 3)] = "CLOSED"
+
+        decision = self.decide_body_only(candidate_issue)
+
+        self.assertEqual(decision.action, "promote")
+        self.assertEqual(decision.project_updates, {})
+        self.assertEqual(decision.project_owner, None)
+
+    def test_body_only_scan_does_not_read_projects_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repos = Path(tmp) / "repos.txt"
+            repos.write_text("owner/repo\n", encoding="utf-8")
+            args = self.promote.build_parser().parse_args(["--repos-file", str(repos), "--limit", "10"])
+
+            original_open = self.promote.open_issues
+            original_project_config = self.promote.project_config
+            original_project_items = self.promote.project_items
+            self.promote.open_issues = lambda _repo, _limit: [issue(4, body(dependencies="owner/repo#3"))]
+            self.promote.project_config = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("project config should not be read")
+            )
+            self.promote.project_items = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("project items should not be read")
+            )
+            self.issue_states[("owner/repo", 3)] = "CLOSED"
+            try:
+                decisions, configs, items = self.promote.scan(args)
+            finally:
+                self.promote.open_issues = original_open
+                self.promote.project_config = original_project_config
+                self.promote.project_items = original_project_items
+
+        self.assertEqual([decision.action for decision in decisions], ["promote"])
+        self.assertEqual(configs, {})
+        self.assertEqual(items, {})
 
     def test_epics_and_trackers_are_never_promoted(self) -> None:
         candidate_item = item(4, itemType="Epic", executionState="Epic", onePRContract="N/A")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -55,6 +56,8 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         cls.project_reconcile = load_script("atlas_agent_project_reconcile_test", "atlas-agent-project-reconcile")
         cls.semantic_review = load_script("atlas_agent_semantic_review_test", "atlas-agent-semantic-review")
         cls.pr_repair = load_script("atlas_agent_pr_repair_test", "atlas-agent-pr-repair")
+        cls.issue_decompose = load_script("atlas_agent_issue_decompose_test", "atlas-agent-issue-decompose")
+        cls.workstream_review = load_script("atlas_agent_workstream_review_test", "atlas-agent-workstream-review")
         for module in (cls.triage, cls.orchestrator, cls.reconcile):
             module.common.trusted_authors = lambda: {"trusted-user"}
 
@@ -69,6 +72,28 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertEqual(record["reasons"], ["review_before_dispatch", "needs_human_label"])
         self.assertTrue(self.triage.can_approve_review_before_dispatch(record))
+
+    def test_operator_env_overrides_runtime_state_paths(self) -> None:
+        original_jobs = os.environ.get("AGENT_JOBS")
+        original_logs = os.environ.get("AGENT_LOGS")
+        original_repos = os.environ.get("AGENT_REPOS")
+        os.environ["AGENT_JOBS"] = "/tmp/runtime-jobs-test"
+        os.environ["AGENT_LOGS"] = "/tmp/runtime-logs-test"
+        os.environ["AGENT_REPOS"] = "/tmp/runtime-repos-test"
+        try:
+            self.assertEqual(self.triage.common.jobs_dir(), Path("/tmp/runtime-jobs-test"))
+            self.assertEqual(self.triage.common.logs_dir(), Path("/tmp/runtime-logs-test"))
+            self.assertEqual(self.triage.common.repo_dir("owner/repo"), Path("/tmp/runtime-repos-test/owner__repo"))
+        finally:
+            for key, value in {
+                "AGENT_JOBS": original_jobs,
+                "AGENT_LOGS": original_logs,
+                "AGENT_REPOS": original_repos,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def test_triage_requeues_stale_wait_human_pause_without_hard_blockers(self) -> None:
         record = self.triage.classify_issue(
@@ -167,6 +192,211 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             ],
         )
 
+    def test_common_rejects_shared_codex_home_by_default(self) -> None:
+        common = self.worker.common
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True, mode=0o700)
+            config_path = codex_home / "config.toml"
+            auth_path = codex_home / "auth.json"
+            config_path.write_text('model = "gpt-5"\n', encoding="utf-8")
+            auth_path.write_text("{}\n", encoding="utf-8")
+            os.chmod(config_path, 0o600)
+            os.chmod(auth_path, 0o600)
+            try:
+                os.environ["HOME"] = str(home)
+                os.environ["AGENT_CODEX_HOME"] = str(codex_home)
+                os.environ["AGENT_CODEX_ISOLATION_REQUIRED"] = "true"
+                os.environ["AGENT_ALLOW_SHARED_CODEX_HOME"] = "false"
+
+                validation = common.validate_codex_home()
+
+                os.environ["AGENT_ALLOW_SHARED_CODEX_HOME"] = "true"
+                override_validation = common.validate_codex_home()
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertFalse(validation["ok"])
+        self.assertTrue(validation["codex_home"]["shared_global_home"])
+        self.assertIn("shared/global Codex home", " ".join(validation["errors"]))
+        self.assertTrue(override_validation["ok"])
+        self.assertIn("shared/global Codex home", " ".join(override_validation["warnings"]))
+
+    def test_common_writes_non_secret_provider_metadata_for_codex_copy(self) -> None:
+        common = self.worker.common
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            source = root / "runtime" / "codex-home"
+            job_dir = root / "job"
+            source.mkdir(parents=True, mode=0o700)
+            job_dir.mkdir()
+            home.mkdir()
+            config_path = source / "config.toml"
+            auth_path = source / "auth.json"
+            config_path.write_text('forced_chatgpt_workspace_id = "ws-atlas"\n', encoding="utf-8")
+            auth_path.write_text("{}\n", encoding="utf-8")
+            os.chmod(config_path, 0o600)
+            os.chmod(auth_path, 0o600)
+            try:
+                os.environ["HOME"] = str(home)
+                os.environ["AGENT_REPO"] = "owner/repo"
+                os.environ["AGENT_BASE_BRANCH"] = "main"
+                os.environ["AGENT_CODEX_HOME"] = str(source)
+                os.environ["AGENT_CODEX_ISOLATION_REQUIRED"] = "true"
+                os.environ["AGENT_ALLOW_SHARED_CODEX_HOME"] = "false"
+                os.environ["AGENT_PROVIDER_ACCOUNT_ID"] = "acct-atlas"
+                os.environ["AGENT_PROVIDER_ACCOUNT_LABEL"] = "Atlas"
+                os.environ["AGENT_PROVIDER_SUBSCRIPTION_LABEL"] = "GPT Pro Atlas"
+                os.environ["AGENT_CODEX_WORKSPACE_ID"] = "ws-atlas"
+
+                run_home = common.codex_home_copy(job_dir)
+                run_home_config_exists = (run_home / "config.toml").exists()
+                metadata = json.loads((job_dir / "provider-account.json").read_text(encoding="utf-8"))
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertTrue(run_home_config_exists)
+        self.assertEqual(metadata["runtime"]["repo"], "owner/repo")
+        self.assertEqual(metadata["provider"]["account_id"], "acct-atlas")
+        self.assertEqual(metadata["provider"]["subscription_label"], "GPT Pro Atlas")
+        self.assertEqual(metadata["codex"]["workspace_id"], "ws-atlas")
+        self.assertEqual(metadata["codex"]["auth_indicator"], "auth.json")
+        self.assertTrue(metadata["codex"]["validation"]["ok"])
+        self.assertNotIn(str(source), json.dumps(metadata))
+
+    def test_codex_stages_share_common_home_copy_validation(self) -> None:
+        stages = [
+            self.worker,
+            self.issue_decompose,
+            self.workstream_review,
+            self.semantic_review,
+            self.pr_repair,
+        ]
+
+        for stage in stages:
+            self.assertIs(stage.common, self.worker.common)
+            self.assertIs(stage.common.codex_home_copy, self.worker.common.codex_home_copy)
+
+    def test_worker_disables_repo_hooks_by_default_with_env_override(self) -> None:
+        original_env = os.environ.copy()
+        try:
+            os.environ.pop("AGENT_DISABLE_REPO_HOOKS", None)
+            self.assertTrue(self.worker.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "0"
+            self.assertFalse(self.worker.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "false"
+            self.assertFalse(self.worker.disable_repo_hooks())
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+    def test_worker_configures_worktree_git_identity(self) -> None:
+        original_env = os.environ.copy()
+        original_run = self.worker.run
+        calls: list[tuple[str, Path]] = []
+        worktree = Path("/tmp/worktree")
+
+        def fake_run(command, cwd=None, **_kwargs):
+            calls.append((command, cwd))
+            return ""
+
+        try:
+            os.environ["AGENT_GIT_USER_NAME"] = "Custom Agent"
+            os.environ["AGENT_GIT_USER_EMAIL"] = "custom-agent@example.invalid"
+            self.worker.run = fake_run
+
+            self.worker.configure_worktree_identity(worktree)
+        finally:
+            self.worker.run = original_run
+            os.environ.clear()
+            os.environ.update(original_env)
+
+        self.assertEqual(
+            calls,
+            [
+                ("git config user.name 'Custom Agent'", worktree),
+                ("git config user.email custom-agent@example.invalid", worktree),
+            ],
+        )
+
+    def test_worker_container_volumes_mount_git_cache_and_tools_readonly(self) -> None:
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = root / "AtlasMemory-Tools"
+            tools.mkdir()
+            os.environ["AGENT_TOOLS_MOUNT_PATHS"] = str(tools)
+            try:
+                volumes = self.worker.worker_container_volumes(
+                    root / "job" / "codex-home",
+                    root / "jobs" / "checkouts" / "owner__repo" / "issue-7",
+                    root / "job",
+                    root / "repos" / "owner__repo",
+                )
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertIn(f"-v {root / 'job' / 'codex-home'}:/home/agent/.codex:Z", volumes)
+        self.assertIn(f"-v {root / 'jobs' / 'checkouts' / 'owner__repo' / 'issue-7'}:/work:Z", volumes)
+        self.assertIn(f"-v {root / 'job'}:/job:Z", volumes)
+        self.assertIn(
+            f"-v {root / 'repos' / 'owner__repo'}:{root / 'repos' / 'owner__repo'}:Z",
+            volumes,
+        )
+        self.assertIn(f"-v {tools}:{tools}:ro,Z", volumes)
+
+    def test_pr_repair_disables_repo_hooks_by_default_with_env_override(self) -> None:
+        original_env = os.environ.copy()
+        try:
+            os.environ.pop("AGENT_DISABLE_REPO_HOOKS", None)
+            self.assertTrue(self.pr_repair.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "0"
+            self.assertFalse(self.pr_repair.disable_repo_hooks())
+
+            os.environ["AGENT_DISABLE_REPO_HOOKS"] = "no"
+            self.assertFalse(self.pr_repair.disable_repo_hooks())
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+    def test_pr_repair_container_volumes_mount_git_cache_and_tools_readonly(self) -> None:
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tools = root / "AtlasMemory-Tools"
+            tools.mkdir()
+            os.environ["AGENT_TOOLS_MOUNT_PATHS"] = str(tools)
+            try:
+                volumes = self.pr_repair.repair_container_volumes(
+                    root / "job" / "codex-home",
+                    root / "jobs" / "checkouts" / "owner__repo" / "pr-7-repair",
+                    root / "job",
+                    root / "repos" / "owner__repo",
+                )
+            finally:
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertIn("-v", volumes)
+        self.assertIn(f"{root / 'job' / 'codex-home'}:/home/agent/.codex:Z", volumes)
+        self.assertIn(f"{root / 'jobs' / 'checkouts' / 'owner__repo' / 'pr-7-repair'}:/work:Z", volumes)
+        self.assertIn(f"{root / 'job'}:/job:Z", volumes)
+        self.assertIn(
+            f"{root / 'repos' / 'owner__repo'}:{root / 'repos' / 'owner__repo'}:Z",
+            volumes,
+        )
+        self.assertIn(f"{tools}:{tools}:ro,Z", volumes)
+
     def test_common_classifies_github_commands_for_throttling(self) -> None:
         common = self.orchestrator.common
 
@@ -197,15 +427,71 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         self.assertIn("pause_until", state)
         self.assertEqual(state["last_rate_limit_command"], "gh issue list --json number")
 
-    def test_common_updates_issue_project_automation_state(self) -> None:
+    def test_common_reports_throttle_status_without_github(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            try:
+                state_path, lock_path = common.github_throttle_paths()
+                common.write_json(
+                    state_path,
+                    {
+                        "pause_until": 100.0,
+                        "next_allowed_at": 200.0,
+                        "last_command": "gh issue list",
+                        "last_rate_limit_command": "gh api graphql",
+                    },
+                )
+                common.write_json(lock_path, {"pid": 123})
+                os.utime(lock_path, (1, 1))
+
+                status = common.github_throttle_status(stale_seconds=1)
+            finally:
+                common.jobs_dir = original_jobs_dir
+
+        self.assertEqual(status["last_command"], "gh issue list")
+        self.assertEqual(status["last_rate_limit_command"], "gh api graphql")
+        self.assertTrue(status["stale_lock"]["exists"])
+        self.assertTrue(status["stale_lock"]["stale"])
+
+    def test_common_reports_dead_pid_lock_as_stale(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            try:
+                _state_path, lock_path = common.github_throttle_paths()
+                common.write_json(lock_path, {"pid": 999999999})
+
+                status = common.github_throttle_status(stale_seconds=120.0)
+            finally:
+                common.jobs_dir = original_jobs_dir
+
+        self.assertTrue(status["stale_lock"]["exists"])
+        self.assertTrue(status["stale_lock"]["stale"])
+
+    def test_common_skips_issue_project_automation_state_by_default(self) -> None:
+        common = self.orchestrator.common
+        original_targets = common.project_targets
+        try:
+            common.project_targets = lambda _path=None: [("owner", 2)]
+
+            common.update_issue_automation_state("owner/repo", 9, "Running", status="In Progress")
+        finally:
+            common.project_targets = original_targets
+
+    def test_common_updates_issue_project_automation_state_when_explicit(self) -> None:
         common = self.orchestrator.common
         original_targets = common.project_targets
         original_info = common.project_info
         original_fields = common.project_fields
         original_items = common.project_items
         original_run = common.run
+        original_env = os.environ.copy()
         calls: list[list[str]] = []
         try:
+            os.environ["AGENT_PROJECT_STATE_UPDATE_MODE"] = "direct"
             common.project_targets = lambda _path=None: [("owner", 2)]
             common.project_info = lambda _owner, _number: {"id": "PROJECT"}
             common.project_fields = lambda _owner, _number: [
@@ -217,18 +503,80 @@ class LocalAgentAutonomyTests(unittest.TestCase):
             ]
             common.run = lambda args, **_kwargs: calls.append(args)
 
-            common.update_issue_automation_state("owner/repo", 9, "Running", status="In Progress")
+            common.update_issue_automation_state(
+                "owner/repo",
+                9,
+                "Running",
+                status="In Progress",
+                projects_file="projects.txt",
+            )
         finally:
             common.project_targets = original_targets
             common.project_info = original_info
             common.project_fields = original_fields
             common.project_items = original_items
             common.run = original_run
+            os.environ.clear()
+            os.environ.update(original_env)
 
         self.assertEqual(len(calls), 2)
         self.assertIn("--single-select-option-id", calls[0])
         self.assertIn("RUNNING", calls[0])
         self.assertIn("INPROGRESS", calls[1])
+
+    def test_common_queues_issue_project_automation_state_without_github(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        original_targets = common.project_targets
+        original_info = common.project_info
+        original_env = os.environ.copy()
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            common.project_targets = lambda _path=None: [("owner", 2)]
+            common.project_info = lambda _owner, _number: self.fail("queue mode should not inspect GitHub Projects")
+            os.environ["AGENT_PROJECT_STATE_UPDATES"] = "true"
+            os.environ["AGENT_PROJECT_STATE_UPDATE_MODE"] = "queue"
+            try:
+                common.update_issue_automation_state("owner/repo", 9, "Running", status="In Progress")
+                records = common.iter_project_sync_records()
+            finally:
+                common.jobs_dir = original_jobs_dir
+                common.project_targets = original_targets
+                common.project_info = original_info
+                os.environ.clear()
+                os.environ.update(original_env)
+
+        self.assertEqual(len(records), 1)
+        record = records[0][2]
+        self.assertEqual(record["kind"], "project_field_update")
+        self.assertEqual(record["repo"], "owner/repo")
+        self.assertEqual(record["project_owner"], "owner")
+        self.assertEqual(record["project_number"], 2)
+        self.assertEqual(record["fields"], {"AutomationState": "Running", "Status": "In Progress"})
+
+    def test_common_label_cache_skips_repeated_label_create(self) -> None:
+        common = self.orchestrator.common
+        original_jobs_dir = common.jobs_dir
+        original_run = common.run
+        calls: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, "already exists\n")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            common.jobs_dir = lambda: Path(tmp)
+            common.run = fake_run
+            try:
+                common.ensure_labels_cached("owner/repo", {"agent:ready": "0E8A16", "agent:failed": "B60205"})
+                common.ensure_labels_cached("owner/repo", {"agent:ready": "0E8A16", "agent:failed": "B60205"})
+                cache = json.loads((Path(tmp) / "label-cache" / "owner__repo.json").read_text(encoding="utf-8"))
+            finally:
+                common.jobs_dir = original_jobs_dir
+                common.run = original_run
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(cache["labels"], {"agent:failed": "B60205", "agent:ready": "0E8A16"})
 
     def test_orchestrator_treats_approved_review_wait_as_recoverable(self) -> None:
         reasons = self.orchestrator.hard_non_execution_reasons(
@@ -315,6 +663,36 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         )
 
         self.assertEqual(scopes, ["src/routes/workflow.ts", "tests/workflow.test.ts", "docs/runtime.md"])
+
+    def test_orchestrator_routes_cross_repo_issue_to_execution_repo(self) -> None:
+        item = issue(
+            body="- Execution repo: `owner/ui`\n- Base branch: `main`\n",
+            number=328,
+        )
+
+        self.assertEqual(self.orchestrator.execution_repo_for_issue("owner/planning", item), "owner/ui")
+
+    def test_worker_pr_body_closes_source_issue_for_cross_repo_dispatch(self) -> None:
+        body = self.worker.build_pr_body(
+            issue(number=328, title="Add visualizer"),
+            "job-1",
+            "abc123",
+            "main",
+            "agent/issue-328/job-1",
+            "M src/app.ts\n",
+            "1 file changed\n",
+            "Summary\nTests: passed\n",
+            "owner/planning",
+        )
+
+        self.assertIn("- Issue repo: `owner/planning`", body)
+        self.assertIn("Closes owner/planning#328", body)
+
+    def test_review_and_finalize_parse_cross_repo_linked_issue_ref(self) -> None:
+        pr = {"body": "Closes owner/planning#328\n", "headRefName": "agent/issue-328/job-1"}
+
+        self.assertEqual(self.review.linked_issue_ref("owner/ui", pr), ("owner/planning", 328))
+        self.assertEqual(self.finalize.linked_issue_ref("owner/ui", pr), ("owner/planning", 328))
 
     def test_orchestrator_write_scope_overlap_is_conservative(self) -> None:
         self.assertTrue(self.orchestrator.scopes_overlap("src/routes", "src/routes/workflow.ts"))
@@ -447,6 +825,74 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertEqual(paths, ["run.sh"])
 
+    def test_worker_policy_gate_record_captures_required_labels_and_diff_stats(self) -> None:
+        original_env = os.environ.copy()
+        os.environ.update(
+            {
+                "AGENT_ALLOW_WORKFLOWS_LABEL": "agent:allow-workflows",
+                "AGENT_ALLOW_INFRA_LABEL": "agent:allow-infra",
+            }
+        )
+        try:
+            requirements = self.worker.blocked_policy_requirements(
+                [".github/workflows/ci.yml", "infra/main.tf"],
+                labels=[],
+            )
+
+            with tempfile.TemporaryDirectory() as tmp:
+                job_dir = Path(tmp)
+                policy_errors = [f"{item['path']} requires {item['label']}" for item in requirements]
+                record = self.worker.write_policy_gate_record(
+                    job_dir=job_dir,
+                    issue=issue(number=7, title="[WS] Gate", body="Body"),
+                    repo="owner/repo",
+                    job_id="20260523T000000Z",
+                    base_sha="abc123",
+                    paths=[".github/workflows/ci.yml", "infra/main.tf"],
+                    statuses=["M", "A"],
+                    required_labels=[item["label"] for item in requirements],
+                    diff_stat=" .github/workflows/ci.yml | 4 ++\n infra/main.tf | 8 ++++++\n",
+                    diff_lines=42,
+                    policy_errors=policy_errors,
+                )
+                persisted = json.loads((job_dir / "policy-gate.json").read_text(encoding="utf-8"))
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+        self.assertEqual(record, persisted)
+        self.assertEqual(persisted["issue"]["number"], 7)
+        self.assertEqual(persisted["repo"], "owner/repo")
+        self.assertEqual(persisted["job_id"], "20260523T000000Z")
+        self.assertEqual(persisted["required_labels"], ["agent:allow-infra", "agent:allow-workflows"])
+        self.assertEqual(
+            persisted["changed_files"],
+            [
+                {"path": ".github/workflows/ci.yml", "status": "M"},
+                {"path": "infra/main.tf", "status": "A"},
+            ],
+        )
+        self.assertEqual(persisted["diff_stats"]["file_count"], 2)
+        self.assertEqual(persisted["diff_stats"]["line_count"], 42)
+        self.assertIn("rerun from scratch", persisted["next_action"])
+
+    def test_worker_policy_gate_comment_says_awaiting_human_approval(self) -> None:
+        body = self.worker.build_policy_gate_comment(
+            number=7,
+            job_id="20260523T000000Z",
+            base_sha="abc123",
+            required_labels=["agent:allow-infra"],
+            policy_errors=["infra/main.tf requires agent:allow-infra"],
+            status="A infra/main.tf\n",
+            job_dir=Path("/tmp/job"),
+        )
+
+        self.assertIn("awaiting human policy approval", body)
+        self.assertIn("`agent:allow-infra`", body)
+        self.assertIn("requeue the issue", body)
+        self.assertIn("will not auto-apply this saved diff", body)
+        self.assertIn("/tmp/job/policy-gate.json", body)
+
     def test_repo_env_overlay_copies_secret_files_into_worktree(self) -> None:
         original_env = os.environ.copy()
         with tempfile.TemporaryDirectory() as tmp:
@@ -511,6 +957,117 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         )
 
         self.assertIn("No explicit test command/result section was found", body)
+
+    def test_worker_validation_gate_fails_missing_section_without_waiver(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Implemented the change.\n\nSummary:\n- Updated the route.",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+        self.assertIn("No explicit Tests or Verification section", gate["reason"])
+
+    def test_worker_validation_gate_fails_empty_section(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated the route.\n\nTests:\n\nNext Steps:\n- Review.",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+        self.assertIn("No explicit Tests or Verification section", gate["reason"])
+
+    def test_worker_validation_gate_fails_unreasoned_skip(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated docs.\n\nTests:\n- Not run.",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+        self.assertIn("without a reason", gate["reason"])
+
+    def test_worker_validation_gate_fails_skip_with_none_reason(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Verification: Not run: none",
+        )
+
+        self.assertEqual(gate["status"], "failed")
+        self.assertFalse(gate["publish_allowed"])
+
+    def test_worker_validation_gate_allows_skip_with_reason(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated docs.\n\nVerification: Not run - documentation only change.",
+        )
+
+        self.assertEqual(gate["status"], "passed")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("Not run - documentation only change.", gate["validation"])
+
+    def test_worker_validation_gate_accepts_bold_tests_heading(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7),
+            "Summary:\n- Updated route.\n\n**Tests**\n- `pytest tests/test_routes.py` passed: `4 passed`.",
+        )
+
+        self.assertEqual(gate["status"], "passed")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("pytest tests/test_routes.py", gate["validation"])
+
+    def test_worker_final_response_extracts_bold_tests_heading(self) -> None:
+        final_response = self.worker.extract_codex_final_response(
+            "noise\n"
+            "Summary:\n"
+            "- Updated route.\n\n"
+            "**Tests**\n"
+            "- `pytest tests/test_routes.py` passed: `4 passed`.\n"
+            "tokens used\n"
+            "123"
+        )
+
+        self.assertTrue(final_response.startswith("**Tests**"))
+        self.assertIn("pytest tests/test_routes.py", final_response)
+
+    def test_worker_validation_gate_allows_body_waiver_for_missing_evidence(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7, body="Validation waiver: tracked in external QA run 123"),
+            "Implemented the change without a validation section.",
+        )
+
+        self.assertEqual(gate["status"], "waived")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("external QA", gate["waiver"])
+
+    def test_worker_validation_gate_allows_label_waiver_for_unreasoned_skip(self) -> None:
+        gate = self.worker.classify_validation_gate(
+            issue(number=7, labels=["agent:validation-waived"]),
+            "Verification:\n- Tests skipped.",
+        )
+
+        self.assertEqual(gate["status"], "waived")
+        self.assertTrue(gate["publish_allowed"])
+        self.assertIn("agent:validation-waived", gate["waiver"])
+
+    def test_worker_validation_waiver_rejects_none_values(self) -> None:
+        self.assertEqual(self.worker.validation_waiver(issue(body="ValidationWaiver: none")), "")
+        self.assertEqual(self.worker.validation_waiver(issue(body="Validation waiver: `n/a`")), "")
+
+    def test_worker_pr_body_includes_validation_waiver(self) -> None:
+        body = self.worker.build_pr_body(
+            issue(number=7, title="[WS] Add workflow route", body="Validation waiver: manual run approved by QA"),
+            job_id="20260507T000000Z",
+            base_sha="abc123",
+            base_branch="main",
+            branch="agent/issue-7/20260507T000000Z",
+            status="M src/workflows.py\n",
+            diff_stat=" src/workflows.py | 10 +++++\n",
+            codex_log="Implemented change without a validation section.",
+        )
+
+        self.assertIn("Validation waiver: manual run approved by QA", body)
 
     def test_semantic_review_parses_result_values(self) -> None:
         self.assertEqual(self.semantic_review.parse_result("Result: pass\n"), "passed")
@@ -845,6 +1402,70 @@ class LocalAgentAutonomyTests(unittest.TestCase):
 
         self.assertEqual(processed, 0)
         self.assertEqual(calls, [["gh", "issue", "edit", "9", "--repo", "owner/repo", "--remove-label", "agent:ready"]])
+
+    def test_process_once_writes_dispatch_preview_with_policy_blockers(self) -> None:
+        body_ready = "Open dependencies: none\nManual gates remaining: none\n"
+        calls: list[list[str]] = []
+        originals = {
+            "target_repos": self.orchestrator.target_repos,
+            "ensure_agent_labels": self.orchestrator.ensure_agent_labels,
+            "queue_candidate_issues": self.orchestrator.queue_candidate_issues,
+            "failed_issues": self.orchestrator.failed_issues,
+            "ready_issues": self.orchestrator.ready_issues,
+            "has_open_pr_for_issue": self.orchestrator.has_open_pr_for_issue,
+            "run_worker": self.orchestrator.run_worker,
+            "run": self.orchestrator.common.run,
+            "trusted_authors": self.orchestrator.common.trusted_authors,
+        }
+        self.orchestrator.target_repos = lambda _path: ["owner/repo"]
+        self.orchestrator.ensure_agent_labels = lambda _repo: None
+        self.orchestrator.queue_candidate_issues = lambda _repo, _label, _limit: []
+        self.orchestrator.failed_issues = lambda _repo, _limit: []
+        self.orchestrator.ready_issues = lambda _repo, _limit: [
+            issue(labels=["agent:ready", "points:1"], body=body_ready, number=9, title="Runnable"),
+            issue(labels=["agent:ready", "points:1"], body=body_ready + "Touches infra", number=10, title="Needs allow"),
+        ]
+        self.orchestrator.has_open_pr_for_issue = lambda _repo, _number: False
+        self.orchestrator.run_worker = lambda *_args, **_kwargs: 0
+        self.orchestrator.common.run = lambda args, **_kwargs: calls.append(args)
+        self.orchestrator.common.trusted_authors = lambda: {"trusted-user"}
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "triage.json"
+            args = types.SimpleNamespace(
+                triage_needs_human=False,
+                triage_summary=str(summary),
+                repos_file=None,
+                auto_queue_label=None,
+                auto_queue_max=1,
+                limit=20,
+                inspect_failed=False,
+                auto_queue_skip_open_pr=True,
+                publish=False,
+                dry_run=True,
+                max_items=3,
+                max_per_repo=1,
+                dispatch_deploy_candidates=False,
+                require_one_point=True,
+            )
+            try:
+                processed = self.orchestrator.process_once(args)
+            finally:
+                self.orchestrator.target_repos = originals["target_repos"]
+                self.orchestrator.ensure_agent_labels = originals["ensure_agent_labels"]
+                self.orchestrator.queue_candidate_issues = originals["queue_candidate_issues"]
+                self.orchestrator.failed_issues = originals["failed_issues"]
+                self.orchestrator.ready_issues = originals["ready_issues"]
+                self.orchestrator.has_open_pr_for_issue = originals["has_open_pr_for_issue"]
+                self.orchestrator.run_worker = originals["run_worker"]
+                self.orchestrator.common.run = originals["run"]
+                self.orchestrator.common.trusted_authors = originals["trusted_authors"]
+
+            payload = json.loads(summary.read_text(encoding="utf-8"))
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(payload["dispatch_preview"]["next_runnable"][0]["number"], 9)
+        self.assertEqual(payload["dispatch_preview"]["blocked"][0]["number"], 10)
+        self.assertIn("missing policy allow label", payload["dispatch_preview"]["blocked"][0]["reasons"][0])
 
     def test_common_git_identity_defaults_are_available(self) -> None:
         name, email = self.orchestrator.common.git_identity()

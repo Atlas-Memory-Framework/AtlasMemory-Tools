@@ -13,6 +13,8 @@ This README explains the *human workflow* for using `/plan` day-to-day.
 It uses deterministic “gate” checks to decide what to do next, and it logs decisions in the plan’s **Decision Log**.
 Human Readability is enforced as a gate between Technical and Implementation, even though the persisted
 `CurrentStage` remains one of the plan state stages.
+When available, `skills/plan/scripts/validate_plan.py` provides the mechanical gate check for plan
+structure, automation manifest readiness, false approval states, and stale planning reviews.
 
 Authority model:
 
@@ -114,6 +116,8 @@ Expectation when using `/plan`:
 
 - after material edits, **re-run** the required reviews (zero-context, implementer readiness, security/privacy; expert-tech when required)
 - do not leave `PlanningReviewsComplete: Pass` based on stale review text
+- new review blocks should record `ReviewedPlanHash: sha256:<hash>` or timestamp-level `RefreshedAt`
+  so same-day material edits cannot look fresh
 
 ## What you should provide to get the best results
 

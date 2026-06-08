@@ -26,8 +26,7 @@ COMMENT_MARKER = "<!-- atlas-agent-deployed-validation -->"
 
 
 def ensure_labels(repo: str) -> None:
-    for label, color in LABELS.items():
-        common.run(["gh", "label", "create", label, "--repo", repo, "--color", color], check=False)
+    common.ensure_labels_cached(repo, LABELS)
 
 
 def pr_json(repo: str, number: int) -> dict[str, Any]:

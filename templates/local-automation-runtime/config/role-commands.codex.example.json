@@ -1,0 +1,102 @@
+{
+  "_placeholder_repo": "OWNER/REPO",
+  "agents": {
+    "agent-registry://architecture": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://auth": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://security": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://security-review": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://data-models": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://scaling": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://semantic-review": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://semantic-alignment": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://rollup-editor": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://evidence-rollup": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://review-rollup": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://validation-rollup": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://local-validation": [
+      "./atlas-agent-role-codex"
+    ],
+    "agent-registry://deployed-validation": [
+      "./atlas-agent-role-codex"
+    ]
+  },
+  "roles": {
+    "data-contracts": [
+      "./atlas-agent-role-codex"
+    ],
+    "runtime-operations": [
+      "./atlas-agent-role-codex"
+    ],
+    "validation": [
+      "./atlas-agent-role-codex"
+    ],
+    "implementation": [
+      "./atlas-agent-role-codex"
+    ],
+    "test-runner": [
+      "./atlas-agent-role-codex"
+    ],
+    "code-review": [
+      "./atlas-agent-role-codex"
+    ],
+    "test-planning": [
+      "./atlas-agent-role-codex"
+    ]
+  },
+  "skills": {
+    "handoff": [
+      "./atlas-agent-role-codex"
+    ],
+    "review": [
+      "./atlas-agent-role-codex"
+    ],
+    "plan": [
+      "./atlas-agent-role-codex"
+    ],
+    "technical-planning": [
+      "./atlas-agent-role-codex"
+    ],
+    "critical-ideation": [
+      "./atlas-agent-role-codex"
+    ],
+    "implementation-planning": [
+      "./atlas-agent-role-codex"
+    ],
+    "plan-execution-readiness": [
+      "./atlas-agent-role-codex"
+    ],
+    "local-automation-runtime-operate": [
+      "./atlas-agent-role-codex"
+    ],
+    "build": [
+      "./atlas-agent-role-codex"
+    ]
+  },
+  "default": [
+    "./atlas-agent-role-codex"
+  ]
+}

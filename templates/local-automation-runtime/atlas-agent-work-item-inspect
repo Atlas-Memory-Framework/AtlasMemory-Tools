@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Inspect a local Atlas work-item store through the scheduler projection model."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import sys
+
+
+RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
+if str(RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_DIR))
+
+import atlas_work_items
+
+
+def classify(operation: atlas_work_items.OperationState) -> str:
+    if operation.ready:
+        return "ready"
+    if operation.state in atlas_work_items.ACTIVE_STATES:
+        return "active"
+    if operation.state in atlas_work_items.TERMINAL_STATES:
+        return "terminal"
+    return "blocked"
+
+
+def latest_workflow_run(item: dict) -> dict:
+    runs = item.get("workflow_runs") if isinstance(item.get("workflow_runs"), list) else []
+    for run in reversed(runs):
+        if isinstance(run, dict):
+            return run
+    return {}
+
+
+def workflow_summary(item: dict) -> dict:
+    result = item.get("result") if isinstance(item.get("result"), dict) else {}
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    latest_run = latest_workflow_run(item)
+    team_run = evidence.get("team_run") if isinstance(evidence.get("team_run"), dict) else {}
+    if not team_run and isinstance(latest_run.get("team_run"), dict):
+        team_run = latest_run["team_run"]
+    selection = evidence.get("workflow_selection") if isinstance(evidence.get("workflow_selection"), dict) else {}
+    if not selection and isinstance(latest_run.get("workflow_selection"), dict):
+        selection = latest_run["workflow_selection"]
+    if not team_run and not selection:
+        return {}
+    return {
+        "template_id": team_run.get("template_id") or evidence.get("team_template"),
+        "workflow_kind": team_run.get("workflow_kind") or evidence.get("workflow_kind"),
+        "run_id": team_run.get("run_id"),
+        "status": team_run.get("status") or latest_run.get("status"),
+        "missing_outputs": team_run.get("missing_outputs") or evidence.get("missing_outputs") or {},
+        "completed_roles": evidence.get("completed_roles") or [],
+        "attempted_roles": evidence.get("attempted_roles") or [],
+        "continuation": evidence.get("workflow_continuation") if isinstance(evidence.get("workflow_continuation"), dict) else {},
+        "resumed": bool(evidence.get("workflow_resumed")),
+        "selected_template": selection.get("selected_template"),
+        "artifact_paths": latest_run.get("artifacts") if isinstance(latest_run.get("artifacts"), dict) else {},
+    }
+
+
+def inspect_store(path: str | pathlib.Path, *, limit: int | None = None) -> dict:
+    store = atlas_work_items.AtlasWorkItemStore(path)
+    provider = atlas_work_items.AtlasWorkItemOperationProvider(store)
+    payload = store.load()
+    by_id = {atlas_work_items.item_id(item): item for item in payload.get("work_items", [])}
+    operations = provider.operation_states(limit=limit)
+    items = []
+    counts = {"ready": 0, "blocked": 0, "active": 0, "terminal": 0}
+    for operation in operations:
+        status = classify(operation)
+        counts[status] += 1
+        source_item = by_id.get(operation.source_id, {})
+        result = source_item.get("result") if isinstance(source_item.get("result"), dict) else {}
+        item_summary = {
+            "status": status,
+            **operation.to_dict(),
+            "lifecycle": source_item.get("lifecycle") if isinstance(source_item.get("lifecycle"), dict) else {},
+            "claim": source_item.get("claim") if isinstance(source_item.get("claim"), dict) else {},
+            "result": {
+                "status": result.get("status"),
+                "returncode": result.get("returncode"),
+                "summary": result.get("summary"),
+            }
+            if result
+            else {},
+            "workflow": workflow_summary(source_item),
+        }
+        items.append(item_summary)
+    return {"counts": counts, "items": items}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("store", help="Path to a local Atlas work-item JSON store.")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    summary = inspect_store(args.store, limit=args.limit)
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return 0
+    counts = summary["counts"]
+    print(
+        "Atlas work items: "
+        f"{counts['ready']} ready, {counts['blocked']} blocked, "
+        f"{counts['active']} active, {counts['terminal']} terminal."
+    )
+    for item in summary["items"]:
+        blockers = item.get("blockers") or []
+        suffix = f" blockers={'; '.join(blockers)}" if blockers else ""
+        workflow = item.get("workflow") or {}
+        if workflow:
+            missing = workflow.get("missing_outputs") or {}
+            missing_count = sum(len(names) for names in missing.values()) if isinstance(missing, dict) else 0
+            workflow_text = (
+                f" workflow={workflow.get('template_id') or workflow.get('selected_template')}"
+                f"/{workflow.get('status') or 'unknown'} missing={missing_count}"
+            )
+            if workflow.get("continuation"):
+                workflow_text += " continuation"
+            if workflow.get("resumed"):
+                workflow_text += " resumed"
+        else:
+            workflow_text = ""
+        print(f"- {item['status']} {item['source_id']}: {item['title']}{suffix}{workflow_text}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

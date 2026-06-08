@@ -1,0 +1,103 @@
+{
+  "id": "planning-design-doc",
+  "name": "Planning Design Doc",
+  "purpose": "Coordinate specialist agent roles into one plan and evidence document.",
+  "workflow_kind": "planning",
+  "roles": [
+    {
+      "id": "architecture",
+      "label": "Architecture",
+      "agent_ref": "agent-registry://architecture",
+      "skills": ["technical-planning"],
+      "must_produce": ["architecture_decisions", "integration_risks", "recommended_shape"],
+      "acceptance_criteria": ["Identifies ownership boundaries and hard-to-reverse technical choices."]
+    },
+    {
+      "id": "auth",
+      "label": "Auth",
+      "agent_ref": "agent-registry://auth",
+      "skills": ["technical-planning"],
+      "must_produce": ["identity_flows", "authorization_boundaries", "auth_open_questions"],
+      "acceptance_criteria": ["Names principals, permissions, trust boundaries, and unresolved identity decisions."]
+    },
+    {
+      "id": "security",
+      "label": "Security",
+      "agent_ref": "agent-registry://security",
+      "skills": ["critical-ideation", "planning-reviews"],
+      "must_produce": ["threat_model", "security_gates", "abuse_cases"],
+      "acceptance_criteria": ["Turns security claims into executable gates or explicit human decisions."]
+    },
+    {
+      "id": "data-models",
+      "label": "Data Models",
+      "agent_ref": "agent-registry://data-models",
+      "skills": ["technical-planning"],
+      "must_produce": ["entities", "state_transitions", "migration_risks"],
+      "acceptance_criteria": ["Defines durable state ownership and lifecycle transitions."]
+    },
+    {
+      "id": "data-contracts",
+      "label": "Data Contracts",
+      "agent_ref": "agents/data-contracts.md",
+      "skills": ["technical-planning"],
+      "must_produce": ["api_contracts", "event_contracts", "compatibility_gates"],
+      "acceptance_criteria": ["Names producer/consumer expectations and compatibility checks."]
+    },
+    {
+      "id": "scaling",
+      "label": "Scaling",
+      "agent_ref": "agent-registry://scaling",
+      "skills": ["critical-ideation"],
+      "must_produce": ["capacity_assumptions", "bottlenecks", "degradation_plan"],
+      "acceptance_criteria": ["Separates current MVP limits from later scale requirements."]
+    },
+    {
+      "id": "runtime-operations",
+      "label": "Runtime Operations",
+      "agent_ref": "agents/infra-engineer.md",
+      "skills": ["local-automation-runtime-operate"],
+      "must_produce": ["operational_runbook", "observability_evidence", "rollback_plan"],
+      "acceptance_criteria": ["Explains how the system is run, observed, paused, resumed, and recovered."]
+    },
+    {
+      "id": "validation",
+      "label": "Validation",
+      "agent_ref": "agents/test-engineer.md",
+      "skills": ["implementation-planning"],
+      "must_produce": ["test_strategy", "validation_commands", "manual_gates"],
+      "acceptance_criteria": ["Maps plan claims to concrete automated or manual validation evidence."]
+    },
+    {
+      "id": "product-semantics",
+      "label": "Product Semantics",
+      "agent_ref": "agent-registry://product-semantics",
+      "skills": ["plan-execution-readiness"],
+      "must_produce": ["user_workflows", "semantic_risks", "success_criteria_alignment"],
+      "acceptance_criteria": ["Checks that implementation behavior still matches the intended product outcome."]
+    },
+    {
+      "id": "rollup-editor",
+      "label": "Rollup Editor",
+      "agent_ref": "agent-registry://rollup-editor",
+      "skills": ["plan"],
+      "consumes": [
+        "architecture",
+        "auth",
+        "security",
+        "data-models",
+        "data-contracts",
+        "scaling",
+        "runtime-operations",
+        "validation",
+        "product-semantics"
+      ],
+      "must_produce": ["plan_patch", "evidence_rollup", "open_decisions"],
+      "acceptance_criteria": ["Rolls specialist outputs into one coherent plan/evidence document without inventing user intent."]
+    }
+  ],
+  "rollup": {
+    "document": "planning-design-doc-evidence.md",
+    "missing_outputs_block_completion": true
+  }
+}

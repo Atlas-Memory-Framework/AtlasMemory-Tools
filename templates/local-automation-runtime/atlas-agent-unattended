@@ -22,9 +22,7 @@ MANUAL_VALIDATION_REQUIRED_LABEL = "agent:manual-validation-required"
 SEMANTIC_REVIEW_REQUIRED_LABEL = "agent:semantic-review-required"
 DEFAULT_STAGES = (
     "reconcile",
-    "project-reconcile",
     "decompose",
-    "project-reconcile",
     "workstream-review",
     "dependency-promote",
     "dispatch",
@@ -44,7 +42,6 @@ DEFAULT_STAGES = (
     "semantic-review",
     "review",
     "finalize",
-    "project-reconcile",
     "summary",
 )
 WARNING_PATTERNS = (
@@ -71,6 +68,9 @@ class StageResult:
     status: str
     returncode: int
     log_file: str
+    started_at: str
+    completed_at: str
+    duration_ms: int
 
 
 def target_repos(path: str | None) -> list[str]:
@@ -220,8 +220,16 @@ def project_reconcile_apply_enabled(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "apply", False) or getattr(args, "review_apply", False))
 
 
-def build_project_reconcile_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
-    summary_file = chain_dir / f"project-reconcile-cycle-{cycle}.json"
+def build_project_reconcile_command(
+    args: argparse.Namespace,
+    chain_dir: Path,
+    chain_id: str,
+    cycle: int,
+    *,
+    checkpoint: bool = False,
+) -> CommandSpec:
+    name = "project-reconcile-checkpoint" if checkpoint else "project-reconcile"
+    summary_file = chain_dir / f"{name}-cycle-{cycle}.json"
     cmd = [
         str(common.RUNTIME_DIR / "atlas-agent-project-reconcile"),
         "--limit",
@@ -233,12 +241,14 @@ def build_project_reconcile_command(args: argparse.Namespace, chain_dir: Path, c
         cmd.extend(["--projects-file", str(args.projects_file)])
     else:
         cmd.extend(["--owner", str(args.project_owner), "--project-number", str(args.project_number)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     if project_reconcile_apply_enabled(args):
         cmd.append("--apply")
     return CommandSpec(
-        name="project-reconcile",
+        name=name,
         args=cmd,
-        log_file=common.logs_dir() / f"unattended-{chain_id}-project-reconcile-cycle-{cycle}.log",
+        log_file=common.logs_dir() / f"unattended-{chain_id}-{name}-cycle-{cycle}.log",
         summary_file=summary_file,
     )
 
@@ -275,6 +285,8 @@ def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id:
     candidate_labels = list(dict.fromkeys([args.auto_queue_label, *args.decompose_candidate_label]))
     for label in candidate_labels:
         cmd.extend(["--candidate-label", label])
+    for issue in getattr(args, "decompose_issue", []) or []:
+        cmd.extend(["--issue", str(issue)])
     if decompose_apply_enabled(args):
         cmd.append("--apply")
     else:
@@ -283,6 +295,12 @@ def build_decompose_command(args: argparse.Namespace, chain_dir: Path, chain_id:
         cmd.append("--create-subissues")
     if args.projects_file:
         cmd.extend(["--projects-file", str(args.projects_file)])
+    elif args.project_owner and args.project_number:
+        projects_file = chain_dir / f"decompose-projects-cycle-{cycle}.txt"
+        projects_file.write_text(f"{args.project_owner}/{args.project_number}\n", encoding="utf-8")
+        cmd.extend(["--projects-file", str(projects_file)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     return CommandSpec(
         name="decompose",
         args=cmd,
@@ -338,22 +356,17 @@ def dependency_promote_apply_enabled(args: argparse.Namespace) -> bool:
 
 def build_dependency_promote_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
     summary_file = chain_dir / f"dependency-promote-cycle-{cycle}.json"
-    if args.projects_file:
-        projects_file = Path(args.projects_file)
-    else:
-        projects_file = chain_dir / f"dependency-promote-projects-cycle-{cycle}.txt"
-        projects_file.write_text(f"{args.project_owner}/{args.project_number}\n", encoding="utf-8")
     cmd = [
         str(common.RUNTIME_DIR / "atlas-agent-dependency-promote"),
         "--repos-file",
         str(args.repos_file),
-        "--projects-file",
-        str(projects_file),
         "--limit",
         str(args.project_item_limit),
         "--summary",
         str(summary_file),
     ]
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
     if dependency_promote_apply_enabled(args):
         cmd.append("--apply")
     else:
@@ -381,6 +394,10 @@ def build_review_command(args: argparse.Namespace, chain_dir: Path, chain_id: st
         cmd.append("--apply")
     if args.allow_no_checks:
         cmd.append("--allow-no-checks")
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     return CommandSpec(
         name=f"review-{pass_name}",
         args=cmd,
@@ -408,6 +425,10 @@ def build_finalize_command(args: argparse.Namespace, chain_dir: Path, chain_id: 
         cmd.append("--close-issues")
     if args.allow_no_checks:
         cmd.append("--allow-no-checks")
+    if args.projects_file:
+        cmd.extend(["--projects-file", str(args.projects_file)])
+    if getattr(args, "project_snapshot", None):
+        cmd.extend(["--project-snapshot", str(args.project_snapshot)])
     if args.require_review_approval:
         cmd.extend(["--require-review-label", args.review_label])
     return CommandSpec(
@@ -662,8 +683,26 @@ def stage_status(returncode: int, log_file: Path) -> str:
     return "ok"
 
 
+def append_timeline_event(chain_dir: Path, event: dict[str, Any]) -> None:
+    payload = {"timestamp": common.now_rfc3339(), **event}
+    with (chain_dir / "timeline.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def overall_stage_status(results: list[StageResult]) -> str:
+    if not results:
+        return "none"
+    if any(result.returncode != 0 for result in results):
+        return "failed"
+    if any(result.status != "ok" for result in results):
+        return "warning"
+    return "ok"
+
+
 def run_command(command: CommandSpec) -> StageResult:
     command.log_file.parent.mkdir(parents=True, exist_ok=True)
+    started_at = common.now_rfc3339()
+    start_time = time.monotonic()
     with command.log_file.open("w", encoding="utf-8") as handle:
         write_command_header(handle, command)
         proc = subprocess.run(
@@ -673,12 +712,16 @@ def run_command(command: CommandSpec) -> StageResult:
             stdout=handle,
             stderr=subprocess.STDOUT,
         )
+    completed_at = common.now_rfc3339()
     return StageResult(
         stage=command.name.split("-", 1)[0],
         name=command.name,
         status=stage_status(proc.returncode, command.log_file),
         returncode=proc.returncode,
         log_file=str(command.log_file),
+        started_at=started_at,
+        completed_at=completed_at,
+        duration_ms=common.duration_ms(start_time),
     )
 
 
@@ -687,11 +730,13 @@ def run_parallel(stage: str, commands: list[CommandSpec], concurrency: int | Non
         return []
     limit = len(commands) if concurrency is None else max(1, min(int(concurrency), len(commands)))
     pending = list(commands)
-    processes: list[tuple[CommandSpec, Any, subprocess.Popen[str]]] = []
+    processes: list[tuple[CommandSpec, Any, subprocess.Popen[str], str, float]] = []
     results: list[StageResult] = []
 
     def start(command: CommandSpec) -> None:
         command.log_file.parent.mkdir(parents=True, exist_ok=True)
+        started_at = common.now_rfc3339()
+        start_time = time.monotonic()
         handle = command.log_file.open("w", encoding="utf-8")
         write_command_header(handle, command)
         proc = subprocess.Popen(
@@ -701,10 +746,10 @@ def run_parallel(stage: str, commands: list[CommandSpec], concurrency: int | Non
             stdout=handle,
             stderr=subprocess.STDOUT,
         )
-        processes.append((command, handle, proc))
+        processes.append((command, handle, proc, started_at, start_time))
 
     def collect(index: int) -> None:
-        command, handle, proc = processes.pop(index)
+        command, handle, proc, started_at, start_time = processes.pop(index)
         returncode = proc.wait()
         handle.close()
         results.append(
@@ -714,13 +759,16 @@ def run_parallel(stage: str, commands: list[CommandSpec], concurrency: int | Non
                 status=stage_status(returncode, command.log_file),
                 returncode=returncode,
                 log_file=str(command.log_file),
+                started_at=started_at,
+                completed_at=common.now_rfc3339(),
+                duration_ms=common.duration_ms(start_time),
             )
         )
 
     while pending or processes:
         while pending and len(processes) < limit:
             start(pending.pop(0))
-        completed = next((idx for idx, (_command, _handle, proc) in enumerate(processes) if proc.poll() is not None), None)
+        completed = next((idx for idx, (_command, _handle, proc, _started_at, _start_time) in enumerate(processes) if proc.poll() is not None), None)
         if completed is None:
             time.sleep(0.2)
             continue
@@ -1011,6 +1059,18 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
     latest_review_summary: Path | None = None
     review_pass = 1
     for stage in stages:
+        stage_started_at = common.now_rfc3339()
+        stage_start_time = time.monotonic()
+        append_timeline_event(
+            chain_dir,
+            {
+                "event": "stage_started",
+                "chain_id": chain_id,
+                "cycle": cycle,
+                "stage": stage,
+                "started_at": stage_started_at,
+            },
+        )
         if stage == "reconcile":
             print(f"=== unattended cycle {cycle}/{args.cycles}: reconcile ===", flush=True)
             command = build_reconcile_command(args, chain_dir, chain_id, cycle)
@@ -1117,24 +1177,51 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
         else:
             raise AssertionError(stage)
         write_stage_results(chain_dir, cycle, stage, results)
+        stage_completed_at = common.now_rfc3339()
+        append_timeline_event(
+            chain_dir,
+            {
+                "event": "stage_completed",
+                "chain_id": chain_id,
+                "cycle": cycle,
+                "stage": stage,
+                "started_at": stage_started_at,
+                "completed_at": stage_completed_at,
+                "duration_ms": common.duration_ms(stage_start_time),
+                "status": overall_stage_status(results),
+                "counts": stage_counts(results),
+                "result_count": len(results),
+            },
+        )
         all_results.extend(results)
         if args.stop_on_error and any_failed(results):
             break
     return all_results
 
 
-def write_chain_summary(chain_dir: Path, chain_id: str, results: list[StageResult]) -> None:
-    common.write_json(
-        chain_dir / "unattended-summary.json",
-        {
-            "chain_id": chain_id,
-            "results": [result.__dict__ for result in results],
-            "counts": {
-                "ok": sum(1 for result in results if result.status == "ok"),
-                "failed": sum(1 for result in results if result.status != "ok"),
-            },
+def write_chain_summary(
+    chain_dir: Path,
+    chain_id: str,
+    results: list[StageResult],
+    *,
+    started_at: str | None = None,
+    start_time: float | None = None,
+) -> None:
+    completed_at = common.now_rfc3339()
+    payload: dict[str, Any] = {
+        "chain_id": chain_id,
+        "completed_at": completed_at,
+        "results": [result.__dict__ for result in results],
+        "counts": {
+            "ok": sum(1 for result in results if result.status == "ok"),
+            "failed": sum(1 for result in results if result.status != "ok"),
         },
-    )
+    }
+    if started_at is not None:
+        payload["started_at"] = started_at
+    if start_time is not None:
+        payload["duration_ms"] = common.duration_ms(start_time)
+    common.write_json(chain_dir / "unattended-summary.json", payload)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1155,8 +1242,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--decompose-candidate-label",
         action="append",
-        default=["status:draft", "agent:decomposition-required"],
+        default=["status:draft", "agent:decomposition-required", "decomposition:required"],
         help="Additional label to scan for oversized decomposition candidates. Repeatable.",
+    )
+    parser.add_argument(
+        "--decompose-issue",
+        action="append",
+        default=[],
+        help="Explicit issue reference to pass to the decompose stage. Repeatable; bypasses broad label scanning in atlas-agent-issue-decompose.",
     )
     parser.add_argument(
         "--decompose-apply",
@@ -1242,7 +1335,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--stages",
-        help="Comma-separated stages. Default includes review, semantic-review, validation, repair, finalizer, and summary gates.",
+        help=(
+            "Comma-separated stages. The default hot path is local-first and omits project-reconcile; "
+            "add project-reconcile explicitly for an inline GitHub Project sync."
+        ),
     )
     parser.add_argument(
         "--reconcile-apply",
@@ -1256,10 +1352,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Apply GitHub Project status reconciliation. Defaults to enabled when --review-apply or --apply is used.",
     )
+    parser.add_argument(
+        "--project-reconcile-every",
+        type=int,
+        default=common.config_int("AGENT_PROJECT_RECONCILE_EVERY", 0),
+        help=(
+            "Run atlas-agent-project-reconcile as an end-of-cycle checkpoint every N cycles. "
+            "Default 0 disables checkpoint Project sync."
+        ),
+    )
     cfg = common.read_config()
     parser.add_argument("--project-owner", default=cfg.get("AGENT_PROJECT_OWNER", "OWNER"))
     parser.add_argument("--project-number", type=int, default=int(cfg.get("AGENT_PROJECT_NUMBER", "1")))
     parser.add_argument("--projects-file", help="Optional file of GitHub Project targets for project-reconcile.")
+    parser.add_argument(
+        "--project-snapshot",
+        help="Optional saved gh project item-list JSON snapshot to reuse for project-reconcile and decompose reads.",
+    )
     parser.add_argument(
         "--project-item-limit",
         type=int,
@@ -1295,6 +1404,8 @@ def main() -> None:
         raise SystemExit("--max-per-repo must be >= 1")
     if args.dispatch_max_per_repo is not None and args.dispatch_max_per_repo < 1:
         raise SystemExit("--dispatch-max-per-repo must be >= 1")
+    if args.project_reconcile_every < 0:
+        raise SystemExit("--project-reconcile-every must be >= 0")
     if args.decompose_max < 0:
         raise SystemExit("--decompose-max must be >= 0")
     if args.repair_max < 0:
@@ -1312,10 +1423,38 @@ def main() -> None:
     chain_id = common.now_id()
     chain_dir = common.jobs_dir() / f"unattended-{chain_id}"
     chain_dir.mkdir(parents=True, exist_ok=True)
+    chain_started_at = common.now_rfc3339()
+    chain_start_time = time.monotonic()
+    append_timeline_event(
+        chain_dir,
+        {"event": "chain_started", "chain_id": chain_id, "started_at": chain_started_at},
+    )
     all_results: list[StageResult] = []
     for cycle in range(1, args.cycles + 1):
         all_results.extend(run_cycle(args, chain_dir, chain_id, cycle))
-    write_chain_summary(chain_dir, chain_id, all_results)
+        if args.project_reconcile_every and cycle % args.project_reconcile_every == 0:
+            print(f"=== unattended cycle {cycle}/{args.cycles}: project reconcile checkpoint ===", flush=True)
+            command = build_project_reconcile_command(args, chain_dir, chain_id, cycle, checkpoint=True)
+            results = [run_command(command)]
+            print_stage_report("project-reconcile-checkpoint", results)
+            print_decision_counts("project-reconcile-checkpoint", command.summary_file, "action")
+            write_stage_results(chain_dir, cycle, "project-reconcile-checkpoint", results)
+            all_results.extend(results)
+    write_chain_summary(chain_dir, chain_id, all_results, started_at=chain_started_at, start_time=chain_start_time)
+    append_timeline_event(
+        chain_dir,
+        {
+            "event": "chain_completed",
+            "chain_id": chain_id,
+            "started_at": chain_started_at,
+            "completed_at": common.now_rfc3339(),
+            "duration_ms": common.duration_ms(chain_start_time),
+            "counts": {
+                "ok": sum(1 for result in all_results if result.status == "ok"),
+                "failed": sum(1 for result in all_results if result.status != "ok"),
+            },
+        },
+    )
     print(f"Unattended chain complete. Chain state is {chain_dir}", flush=True)
 
 

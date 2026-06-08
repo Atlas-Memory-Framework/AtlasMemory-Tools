@@ -7,7 +7,7 @@ AtlasMemory Tools is the canonical planning, issue projection, GitHub Project, a
 It owns four surfaces:
 
 - `skills/`: workflow contracts for planning, review, implementation, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
-- `agents/`: reusable role rubrics for implementation, code review, docs review, data contracts, infra, processing, and testing
+- `agents/`: reusable specialist role rubrics for planning, implementation, review, validation, data, infra, processing, and testing
 - `templates/local-automation-runtime/`: reusable local automation host for GitHub issue-to-PR execution
 - `manifests/atlas-tools.v1.json`: supported harness adapters, canonical skills, agents, templates, and generated-copy inventory
 
@@ -82,12 +82,53 @@ The verifier also checks committed harness freshness, adapter CLI generation, ex
 
 For full planning details, see `skills/plan/README.md`.
 
+## Planning with Agentic Review Mode
+
+Use `$plan` with agentic review mode.
+
+That phrase is the preferred Codex-facing wrapper for the planning system. `$plan` remains the public workflow and the only authority that writes the selected plan artifact, updates decision logs, and changes gate or approval state. Agentic review mode is an optional review layer inside `$plan`: it snapshots the selected markdown plan, runs independent reviewer personas against the snapshot, collects structured findings or patch proposals, reconciles conflicts, asks the user for intent decisions, and routes accepted edits back through `$plan`.
+
+Use it for all planning entrypoints:
+
+- New work: `Use $plan with agentic review mode to plan <feature/goal>.`
+- Old or messy plans: `Use $plan with agentic review mode to review @path/to/old.plan.md before trusting any existing pass/approval claims.`
+- Previously planned plans: `Use $plan with agentic review mode to re-enter @path/to/plan.md, audit stale assumptions, and refresh the plan before projection or build.`
+- Focused hardening: `Use $plan with agentic review mode to check CLI/UI separation, contract boundaries, integrity, evidence policy, and automation readiness in @path/to/plan.md.`
+
+For Codex, the intended shape is:
+
+```text
+$plan
+  -> selects or creates exactly one AuthoringArtifact
+  -> runs normal planning gates and user Q/A
+  -> optionally invokes agentic review mode
+      -> local-plan-agent-runtime snapshots the plan
+      -> independent personas review the snapshot
+      -> proposals are validated and reconciled
+      -> human-agency decisions are returned to the user
+  -> $plan applies accepted edits
+  -> $plan reruns affected gates/reviews
+```
+
+This works for new plans, old plans that are not in the current shape, and previously approved or reviewed plans. For old plans, `$plan` should not trust existing `Pass`, `Approved`, projection, or dispatch claims. It should perform a re-entry audit, identify which sections are missing or stale, and either repair the plan or keep the relevant gates failing.
+
+Agentic review mode should interrogate the user when the plan is missing implementation-critical intent. It should ask targeted questions about the current workflow, desired workflow, scope, anti-scope, repo facts, file ownership, validation evidence, rollback, trust boundaries, and dispatch/projection policy. If the user does not answer a decision-bearing question, the plan should remain blocked instead of letting agents invent the answer.
+
+The simplified skill hierarchy is:
+
+- `$plan`: the single user-facing planning command and canonical writer.
+- `local-plan-agent-runtime`: the internal agentic review mode used by `$plan` when parallel/local-file review is requested.
+- `plan-execution-readiness`: the critical review checklist/persona used standalone or inside the runtime.
+- `plan-stress-review`: legacy phrase/alias for `plan-execution-readiness`; do not add a separate workflow around it.
+
+Keep these systems repo-first. Source skills, scripts, references, and runtime protocol files belong under this repo's `skills/` tree. Local Codex copies are install artifacts used for execution. Update the repo-native source first, then install or sync into the local Codex skill directory.
+
 ## Local Automation Runtime
 
 The runtime template now supports the full unattended loop:
 
 ```text
-reconcile -> project-reconcile -> decompose -> workstream-review -> dependency-promote ->
+reconcile -> decompose -> workstream-review -> dependency-promote ->
 dispatch -> review -> semantic-review -> local/deployed validation -> repair -> finalize -> summary
 ```
 
@@ -95,10 +136,16 @@ Current runtime behavior includes:
 
 - per-stage concurrency controls such as `--dispatch-max-per-repo`, `--semantic-review-concurrency`, `--local-validate-concurrency`, `--repair-concurrency`, and `--deployed-validate-concurrency`
 - repo/base/write-scope locks so disjoint one-point issues can run in parallel while overlapping scopes wait
+- pre-PR validation evidence gating so worker-published PRs include exact test/verification commands or an explicit validation waiver
+- scheduler-facing decomposition metadata for dependencies, parallel groups, conflict classes, merge groups, combine policy, validation tier, and critical path ordering
 - shared GitHub CLI throttling under `jobs/github-api-throttle/` to avoid GraphQL and secondary rate limits
+- local-first unattended defaults, with GitHub Project sync moved to explicit `project-reconcile` stages or `--project-reconcile-every N` checkpoints
 - Project item scans controlled by `AGENT_PROJECT_ITEM_LIMIT`, default `500`
 - direct Project `AutomationState` updates for `Queued`, `Running`, `PR Open`, `Failed`, and `Done`
 - decomposition metadata inheritance so child issues retain plan key, parent epic, gates, risk, validation scope, and priority context
+- mandatory workstream completion bundles covering semantic review, garbage collection, docs updates or docs-not-needed rationale, validation evidence, and downstream readiness
+- local Atlas work-item bootstrap dispatch via `--atlas-work-items`, which records claim/result evidence in a JSON work-item lifecycle without GitHub issue or PR mutation
+- structured agent-role workflow templates via `TeamTemplate`/`TeamRun`, including dependency-aware role packets, consumed role outputs, and rollup evidence back onto the work-item lifecycle
 
 See `templates/local-automation-runtime/README.md` and `templates/local-automation-runtime/SETUP.md`.
 
@@ -106,6 +153,7 @@ See `templates/local-automation-runtime/README.md` and `templates/local-automati
 
 - `docs/source-of-truth.md`: canonical source and generated-copy workflow
 - `docs/automation-runtime-operational-layer.md`: operational model for runtime hosts and GitHub state
+- `docs/atlas-workflow-templates.md`: TeamTemplate/TeamRun model for structured agent-role workflows and rollup evidence
 - `docs/github-project-template-views.md`: standard Project fields and view expectations
 - `skills/plan/README.md`: human-facing `/plan` workflow
 - `skills/plan-to-issues/README.md`: issue and Project projection workflow

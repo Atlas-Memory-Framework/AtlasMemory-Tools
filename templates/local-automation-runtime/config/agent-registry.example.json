@@ -1,0 +1,150 @@
+{
+  "_placeholder_repo": "OWNER/REPO",
+  "agents": {
+    "architecture": {
+      "ref": "agent-registry://architecture",
+      "description": "Architecture planning role for ownership boundaries, integration risks, and hard-to-reverse decisions.",
+      "skills": [
+        "technical-planning"
+      ],
+      "source": "agents/architecture.md",
+      "execution_profile": "planning"
+    },
+    "auth": {
+      "ref": "agent-registry://auth",
+      "description": "Identity and authorization planning role for principals, permissions, and trust boundaries.",
+      "skills": [
+        "technical-planning"
+      ],
+      "source": "agents/auth.md",
+      "execution_profile": "planning"
+    },
+    "security": {
+      "ref": "agent-registry://security",
+      "description": "Security planning role for threat models, abuse cases, and required gates.",
+      "skills": [
+        "critical-ideation",
+        "planning-reviews"
+      ],
+      "source": "agents/security.md",
+      "execution_profile": "planning"
+    },
+    "data-models": {
+      "ref": "agent-registry://data-models",
+      "description": "Data modeling role for entities, state transitions, and migration risks.",
+      "skills": [
+        "technical-planning"
+      ],
+      "source": "agents/data-models.md",
+      "execution_profile": "planning"
+    },
+    "scaling": {
+      "ref": "agent-registry://scaling",
+      "description": "Scaling role for capacity assumptions, bottlenecks, and degradation plans.",
+      "skills": [
+        "critical-ideation"
+      ],
+      "source": "agents/scaling.md",
+      "execution_profile": "planning"
+    },
+    "product-semantics": {
+      "ref": "agent-registry://product-semantics",
+      "description": "Product semantics role for workflow fit, success criteria, and scope drift.",
+      "skills": [
+        "plan-execution-readiness"
+      ],
+      "source": "agents/product-semantics.md",
+      "execution_profile": "planning"
+    },
+    "rollup-editor": {
+      "ref": "agent-registry://rollup-editor",
+      "description": "Planning rollup role that merges specialist outputs into one plan and evidence document.",
+      "skills": [
+        "plan"
+      ],
+      "source": "agents/rollup-editor.md",
+      "execution_profile": "rollup"
+    },
+    "implementation": {
+      "ref": "agent-registry://implementation",
+      "description": "Work-item implementation role for scoped code, docs, or config changes.",
+      "skills": [
+        "build"
+      ],
+      "source": "agents/implementation.md",
+      "execution_profile": "implementation"
+    },
+    "semantic-alignment": {
+      "ref": "agent-registry://semantic-alignment",
+      "description": "Work-item semantic alignment role for plan fit and product intent.",
+      "skills": [
+        "plan-execution-readiness"
+      ],
+      "source": "agents/semantic-alignment.md",
+      "execution_profile": "review"
+    },
+    "evidence-rollup": {
+      "ref": "agent-registry://evidence-rollup",
+      "description": "Work-item rollup role that combines implementation, test, review, and semantic evidence.",
+      "skills": [
+        "handoff"
+      ],
+      "source": "agents/evidence-rollup.md",
+      "execution_profile": "rollup"
+    },
+    "security-review": {
+      "ref": "agent-registry://security-review",
+      "description": "Review gate role for trust boundaries, abuse cases, and security gate status.",
+      "skills": [
+        "critical-ideation"
+      ],
+      "source": "agents/security-review.md",
+      "execution_profile": "review"
+    },
+    "semantic-review": {
+      "ref": "agent-registry://semantic-review",
+      "description": "Review gate role for plan alignment, scope drift, and user intent questions.",
+      "skills": [
+        "plan-execution-readiness"
+      ],
+      "source": "agents/semantic-review.md",
+      "execution_profile": "review"
+    },
+    "review-rollup": {
+      "ref": "agent-registry://review-rollup",
+      "description": "Review rollup role that turns code, security, and semantic review outputs into a decision.",
+      "skills": [
+        "handoff"
+      ],
+      "source": "agents/review-rollup.md",
+      "execution_profile": "rollup"
+    },
+    "local-validation": {
+      "ref": "agent-registry://local-validation",
+      "description": "Validation role for local commands, results, and artifacts.",
+      "skills": [
+        "local-automation-runtime-operate"
+      ],
+      "source": "agents/local-validation.md",
+      "execution_profile": "validation"
+    },
+    "deployed-validation": {
+      "ref": "agent-registry://deployed-validation",
+      "description": "Validation role for deployed checks, manual gates, and environment limits.",
+      "skills": [
+        "local-automation-runtime-operate"
+      ],
+      "source": "agents/deployed-validation.md",
+      "execution_profile": "validation"
+    },
+    "validation-rollup": {
+      "ref": "agent-registry://validation-rollup",
+      "description": "Validation rollup role that summarizes proven, waived, and remaining verification gaps.",
+      "skills": [
+        "handoff"
+      ],
+      "source": "agents/validation-rollup.md",
+      "execution_profile": "rollup"
+    }
+  }
+}

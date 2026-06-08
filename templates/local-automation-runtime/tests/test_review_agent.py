@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import argparse
 import json
 import sys
 import tempfile
@@ -83,6 +84,53 @@ class ReviewAgentTests(unittest.TestCase):
         self.assertEqual(decision.label, "agent:needs-repair")
         self.assertIn("review changes requested", decision.reasons)
 
+    def test_scan_can_filter_to_project_issues(self) -> None:
+        originals = {
+            "target_repos": self.review.target_repos,
+            "open_prs": self.review.open_prs,
+            "pr_view": self.review.pr_view,
+            "pr_files": self.review.pr_files,
+            "issue_view": self.review.issue_view,
+            "project_targets": self.review.common.project_targets,
+            "project_items": self.review.common.project_items,
+        }
+        self.review.target_repos = lambda _path: ["owner/repo"]
+        self.review.open_prs = lambda _repo, _limit: [
+            {"number": 7, "title": "agent: address issue #7", "headRefName": "agent/issue-7/job"},
+            {"number": 8, "title": "agent: address issue #8", "headRefName": "agent/issue-8/job"},
+        ]
+        self.review.pr_view = lambda _repo, number: pr(number=number, body=f"Closes #{number}", headRefName=f"agent/issue-{number}/job")
+        self.review.pr_files = lambda _repo, _number: []
+        self.review.issue_view = lambda _repo, number: issue(number=number)
+        self.review.common.project_targets = lambda _path: [("owner", 1)]
+        self.review.common.project_items = lambda _owner, _number: [
+            {"content": {"repository": "owner/repo", "number": 7}}
+        ]
+        try:
+            decisions = self.review.scan(
+                argparse.Namespace(
+                    repos_file=None,
+                    limit=50,
+                    detect_overlap=False,
+                    projects_file="projects.txt",
+                    review_failed_workflows=False,
+                    apply=False,
+                    comment=False,
+                    required_checks_file=None,
+                    check_dependencies=False,
+                    allow_no_checks=True,
+                    require_semantic_review=False,
+                )
+            )
+        finally:
+            for name, value in originals.items():
+                if name in {"project_targets", "project_items"}:
+                    setattr(self.review.common, name, value)
+                else:
+                    setattr(self.review, name, value)
+
+        self.assertEqual([decision.number for decision in decisions], [7])
+
     def test_review_requires_current_semantic_review_when_enabled(self) -> None:
         decision = self.review.classify(
             "owner/repo",
@@ -114,6 +162,22 @@ class ReviewAgentTests(unittest.TestCase):
 
         self.assertEqual(decision.label, "agent:review-approved")
         self.assertIn("semantic review passed for current head", decision.reasons)
+
+    def test_review_allows_no_check_path_policy_with_required_label(self) -> None:
+        decision = self.review.classify(
+            "OWNER/REPO",
+            pr(
+                labels=[{"name": "agent:no-checks-expected"}],
+                statusCheckRollup=[],
+            ),
+            issue=issue(),
+            files=["docs/readme.md"],
+            required_checks=["unit-tests"],
+            required_checks_file=str(ROOT / "config" / "required-checks.example.json"),
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+        self.assertIn("no checks expected by path policy", decision.reasons)
 
     def test_review_blocks_current_semantic_review_failure(self) -> None:
         decision = self.review.classify(
@@ -382,6 +446,28 @@ class ReviewAgentTests(unittest.TestCase):
             issue=issue(),
             files=["src/app.py"],
             duplicate_issue=True,
+        )
+
+        self.assertEqual(decision.label, "agent:superseded")
+
+    def test_review_ignores_superseded_terms_in_code_pr_body(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(body="Adds SemanticRelationship.SUPERSEDES and SemanticRelationship.SUPERSEDED support."),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
+        )
+
+        self.assertEqual(decision.label, "agent:review-approved")
+
+    def test_review_honors_explicit_superseded_body_marker(self) -> None:
+        decision = self.review.classify(
+            "owner/repo",
+            pr(body="Superseded by #42"),
+            issue=issue(),
+            files=["src/app.py"],
+            required_checks=["unit-tests"],
         )
 
         self.assertEqual(decision.label, "agent:superseded")

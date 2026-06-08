@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""Run local commands for Atlas workflow role task packets."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import shlex
+import subprocess
+import sys
+from typing import Any
+
+
+RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
+if str(RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_DIR))
+
+import atlas_workflows
+
+
+def read_json(path: str | pathlib.Path) -> Any:
+    return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+
+
+def write_json(path: str | pathlib.Path, payload: Any) -> None:
+    pathlib.Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def load_tasks(path: str | pathlib.Path) -> list[dict[str, Any]]:
+    payload = read_json(path)
+    tasks = payload.get("tasks") if isinstance(payload, dict) else payload
+    if not isinstance(tasks, list):
+        raise ValueError("role tasks must be a list or object with tasks")
+    return [task for task in tasks if isinstance(task, dict)]
+
+
+def task_contract_issues(task: dict[str, Any]) -> list[str]:
+    return [str(issue) for issue in task.get("contract_issues") or []]
+
+
+def task_dependency_blockers(task: dict[str, Any]) -> list[str]:
+    return [str(blocker) for blocker in task.get("dependency_blockers") or []]
+
+
+def task_is_complete(task: dict[str, Any]) -> bool:
+    return (
+        task.get("status") == "complete"
+        and not any(task.get("missing_outputs") or [])
+        and not task_contract_issues(task)
+        and not task_dependency_blockers(task)
+    )
+
+
+def completed_roles(tasks: list[dict[str, Any]]) -> set[str]:
+    return {str(task.get("role_id")) for task in tasks if task_is_complete(task)}
+
+
+def runnable_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    complete = completed_roles(tasks)
+    runnable: list[dict[str, Any]] = []
+    for task in tasks:
+        if task.get("status") in {"complete", "failed", "blocked", "dry-run", "incomplete"}:
+            continue
+        if any(task.get("missing_outputs") or []):
+            dependencies = {str(item) for item in task.get("consumes") or []}
+            if dependencies.issubset(complete):
+                runnable.append(task)
+    return runnable
+
+
+def apply_result_to_tasks(tasks: list[dict[str, Any]], result: dict[str, Any]) -> None:
+    role_id = str(result.get("role_id") or "")
+    for task in tasks:
+        if str(task.get("role_id") or "") != role_id:
+            continue
+        task["status"] = str(result.get("status") or "pending")
+        outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
+        missing = [output for output in task.get("must_produce") or [] if not outputs.get(output)]
+        task["contract_issues"] = [str(issue) for issue in result.get("contract_issues") or []]
+        task["dependency_blockers"] = [
+            str(blocker)
+            for blocker in result.get("dependency_blockers") or []
+        ]
+        if task["status"] == "complete" and (missing or task["contract_issues"] or task["dependency_blockers"]):
+            task["status"] = "incomplete"
+        task["missing_outputs"] = missing
+        task["result"] = result
+        return
+
+
+def incomplete_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        task
+        for task in tasks
+        if not task_is_complete(task)
+    ]
+
+
+def task_blockers(task: dict[str, Any], tasks: list[dict[str, Any]]) -> list[str]:
+    blockers: list[str] = []
+    complete = completed_roles(tasks)
+    blockers.extend(task_dependency_blockers(task))
+    waiting = [str(role_id) for role_id in task.get("consumes") or [] if str(role_id) not in complete]
+    if waiting:
+        blockers.append("waiting for role(s): " + ", ".join(waiting))
+    missing = [str(output) for output in task.get("missing_outputs") or []]
+    if task.get("status") == "complete" and missing:
+        blockers.append("missing output(s): " + ", ".join(missing))
+    elif task.get("status") != "complete" and missing:
+        blockers.append("incomplete output(s): " + ", ".join(missing))
+    blockers.extend("contract issue: " + issue for issue in task_contract_issues(task))
+    if task.get("status") in {"failed", "blocked", "incomplete"}:
+        blockers.append(f"status: {task.get('status')}")
+    return blockers
+
+
+def incomplete_task_summary(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "role_id": task.get("role_id"),
+            "phase_index": task.get("phase_index"),
+            "status": task.get("status"),
+            "missing_outputs": task.get("missing_outputs") or [],
+            "contract_issues": task_contract_issues(task),
+            "dependency_blockers": task_dependency_blockers(task),
+            "blockers": task_blockers(task, tasks),
+        }
+        for task in incomplete_tasks(tasks)
+    ]
+
+
+def results_by_role_from_file(path: str | pathlib.Path) -> dict[str, dict[str, Any]]:
+    source = pathlib.Path(path)
+    if not source.exists():
+        return {}
+    payload = read_json(source)
+    if isinstance(payload, dict) and isinstance(payload.get("role_results"), list):
+        raw_results = payload["role_results"]
+    elif isinstance(payload, list):
+        raw_results = payload
+    else:
+        return {}
+    return {
+        str(result.get("role_id")): result
+        for result in raw_results
+        if isinstance(result, dict) and result.get("role_id")
+    }
+
+
+def attach_consumed_role_results(task: dict[str, Any], results_by_role: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    hydrated = dict(task)
+    consumed = {
+        str(role_id): results_by_role[str(role_id)]
+        for role_id in hydrated.get("consumes") or []
+        if str(role_id) in results_by_role
+    }
+    hydrated["consumed_role_results"] = consumed
+    return hydrated
+
+
+def task_agent_definition(task: dict[str, Any]) -> dict[str, Any]:
+    definition = task.get("agent_definition")
+    return definition if isinstance(definition, dict) else {}
+
+
+def task_agent_id(task: dict[str, Any]) -> str:
+    definition = task_agent_definition(task)
+    if definition.get("id"):
+        return str(definition["id"])
+    agent_ref = str(task.get("agent_ref") or "")
+    if agent_ref.startswith("agent-registry://"):
+        return agent_ref.removeprefix("agent-registry://")
+    return ""
+
+
+def task_execution_profile(task: dict[str, Any]) -> str:
+    definition = task_agent_definition(task)
+    return str(definition.get("execution_profile") or definition.get("profile") or "")
+
+
+def command_from_config(task: dict[str, Any], config: dict[str, Any]) -> list[str] | None:
+    role_id = str(task.get("role_id") or "")
+    agent_ref = str(task.get("agent_ref") or "")
+    roles = config.get("roles") if isinstance(config.get("roles"), dict) else {}
+    agent_ids = config.get("agent_ids") if isinstance(config.get("agent_ids"), dict) else {}
+    agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
+    profiles = config.get("profiles") if isinstance(config.get("profiles"), dict) else {}
+    skills = config.get("skills") if isinstance(config.get("skills"), dict) else {}
+    command = roles.get(role_id)
+    if command is None:
+        agent_id = task_agent_id(task)
+        command = agent_ids.get(agent_id) if agent_id else None
+    if command is None:
+        command = agents.get(agent_ref)
+    if command is None:
+        execution_profile = task_execution_profile(task)
+        command = profiles.get(execution_profile) if execution_profile else None
+    if command is None:
+        for skill in task.get("skills") or []:
+            command = skills.get(str(skill))
+            if command is not None:
+                break
+    if command is None:
+        command = config.get("default")
+    if command is None:
+        return None
+    if isinstance(command, list):
+        return [str(part) for part in command]
+    if isinstance(command, str):
+        return shlex.split(command)
+    raise ValueError(f"Invalid command for role {role_id}")
+
+
+def resolve_command(command: list[str]) -> list[str]:
+    if not command:
+        return command
+    executable = command[0]
+    if executable.startswith("./"):
+        return [str(RUNTIME_DIR / executable[2:]), *command[1:]]
+    return command
+
+
+def role_result_path(results_dir: pathlib.Path, task: dict[str, Any]) -> pathlib.Path:
+    role_id = str(task.get("role_id") or "role")
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in role_id).strip("-")
+    return results_dir / f"{safe or 'role'}.json"
+
+
+def run_role_task(
+    task: dict[str, Any],
+    command: list[str],
+    *,
+    results_dir: pathlib.Path,
+    base_env: dict[str, str],
+) -> dict[str, Any]:
+    task_path = results_dir / f"{task.get('role_id')}.task.json"
+    task_path.write_text(json.dumps(task, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    result_path = role_result_path(results_dir, task)
+    env = os.environ.copy()
+    env.update(base_env)
+    env.update(
+        {
+            "ATLAS_ROLE_ID": str(task.get("role_id") or ""),
+            "ATLAS_AGENT_REF": str(task.get("agent_ref") or ""),
+            "ATLAS_AGENT_ID": task_agent_id(task),
+            "ATLAS_AGENT_SOURCE": str(task_agent_definition(task).get("source") or ""),
+            "ATLAS_AGENT_EXECUTION_PROFILE": task_execution_profile(task),
+            "ATLAS_ROLE_TASK_FILE": str(task_path),
+            "ATLAS_ROLE_RESULT_FILE": str(result_path),
+        }
+    )
+    proc = subprocess.run(
+        resolve_command(command),
+        cwd=str(results_dir),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    output_path = result_path.with_suffix(".out.txt")
+    output_path.write_text(proc.stdout or "", encoding="utf-8")
+    if not result_path.exists():
+        return {
+            "role_id": str(task.get("role_id") or ""),
+            "status": "failed",
+            "outputs": {},
+            "evidence": [str(output_path)],
+            "notes": f"role command exited {proc.returncode} without writing ATLAS_ROLE_RESULT_FILE",
+        }
+    result = read_json(result_path)
+    if not isinstance(result, dict):
+        raise ValueError(f"Role result must be an object: {result_path}")
+    result.setdefault("role_id", str(task.get("role_id") or ""))
+    result.setdefault("status", "complete" if proc.returncode == 0 else "failed")
+    result.setdefault("outputs", {})
+    evidence = result.get("evidence")
+    if isinstance(evidence, list):
+        if str(output_path) not in evidence:
+            evidence.append(str(output_path))
+    else:
+        result["evidence"] = [str(output_path)]
+    write_json(result_path, result)
+    return result
+
+
+def append_results(path: str | pathlib.Path, results: list[dict[str, Any]]) -> None:
+    target = pathlib.Path(path)
+    existing: list[dict[str, Any]] = []
+    if target.exists():
+        payload = read_json(target)
+        if isinstance(payload, list):
+            existing = [item for item in payload if isinstance(item, dict)]
+        elif isinstance(payload, dict) and isinstance(payload.get("role_results"), list):
+            existing = [item for item in payload["role_results"] if isinstance(item, dict)]
+    by_role = {str(item.get("role_id")): item for item in existing}
+    for result in results:
+        by_role[str(result.get("role_id"))] = result
+    write_json(target, list(by_role.values()))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tasks", default=os.environ.get("ATLAS_TEAM_ROLE_TASKS_FILE"))
+    parser.add_argument("--results", default=os.environ.get("ATLAS_TEAM_ROLE_RESULTS_FILE"))
+    parser.add_argument("--command-config", required=True)
+    parser.add_argument("--results-dir")
+    parser.add_argument("--max-roles", type=int, default=100)
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if not args.tasks:
+        raise SystemExit("--tasks or ATLAS_TEAM_ROLE_TASKS_FILE is required")
+    if not args.results:
+        raise SystemExit("--results or ATLAS_TEAM_ROLE_RESULTS_FILE is required")
+    tasks = load_tasks(args.tasks)
+    config = read_json(args.command_config)
+    if not isinstance(config, dict):
+        raise SystemExit("command config must be a JSON object")
+    results_dir = pathlib.Path(args.results_dir) if args.results_dir else pathlib.Path(args.results).with_suffix("")
+    results_dir.mkdir(parents=True, exist_ok=True)
+    base_env = {
+        "ATLAS_TEAM_ROLE_TASKS_FILE": str(args.tasks),
+        "ATLAS_TEAM_ROLE_RESULTS_FILE": str(args.results),
+    }
+    results_by_role = results_by_role_from_file(args.results)
+    for existing in results_by_role.values():
+        apply_result_to_tasks(tasks, existing)
+    produced: list[dict[str, Any]] = []
+    summary: list[dict[str, Any]] = []
+    max_roles = max(1, args.max_roles)
+    while len(produced) < max_roles:
+        runnable = runnable_tasks(tasks)
+        if not runnable:
+            break
+        task = runnable[0]
+        command = command_from_config(task, config)
+        if command is None:
+            summary.append(
+                {
+                    "role_id": task.get("role_id"),
+                    "phase_index": task.get("phase_index"),
+                    "status": "skipped",
+                    "reason": "no command mapping",
+                }
+            )
+            task["status"] = "blocked"
+            continue
+        summary.append(
+            {
+                "role_id": task.get("role_id"),
+                "phase_index": task.get("phase_index"),
+                "status": "dry-run" if args.dry_run else "running",
+                "command": command,
+            }
+        )
+        if args.dry_run:
+            task["status"] = "dry-run"
+            continue
+        result = run_role_task(
+            attach_consumed_role_results(task, results_by_role),
+            command,
+            results_dir=results_dir,
+            base_env=base_env,
+        )
+        produced.append(result)
+        results_by_role[str(result.get("role_id") or "")] = result
+        apply_result_to_tasks(tasks, result)
+    if produced:
+        append_results(args.results, produced)
+    write_json(args.tasks, {"tasks": tasks})
+    write_json(
+        results_dir / "role-runner-summary.json",
+        {
+            "tasks": summary,
+            "result_count": len(produced),
+            "incomplete_tasks": incomplete_task_summary(tasks),
+        },
+    )
+    if args.dry_run:
+        return 0
+    if not produced and incomplete_tasks(tasks):
+        return 2
+    return 0 if not incomplete_tasks(tasks) else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
