@@ -688,6 +688,30 @@ def gh_json_or_none(args: list[str], retries: int = 3) -> Any | None:
         return None
 
 
+def commit_check_runs(repo: str, head_sha: str) -> list[dict[str, Any]]:
+    if not head_sha:
+        return []
+    payload = gh_json_or_none(
+        [
+            "api",
+            f"repos/{repo}/commits/{head_sha}/check-runs",
+            "--method",
+            "GET",
+            "-f",
+            "per_page=100",
+            "-f",
+            "filter=latest",
+        ],
+        retries=2,
+    )
+    if not isinstance(payload, dict):
+        return []
+    check_runs = payload.get("check_runs") or []
+    if not isinstance(check_runs, list):
+        return []
+    return [run for run in check_runs if isinstance(run, dict)]
+
+
 def read_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():

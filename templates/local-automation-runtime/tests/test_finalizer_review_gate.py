@@ -52,6 +52,13 @@ class FinalizerReviewGateTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.finalize = load_script("atlas_agent_finalize_review_gate_test", "atlas-agent-finalize")
 
+    def setUp(self) -> None:
+        self._original_commit_check_runs = self.finalize.common.commit_check_runs
+        self.finalize.common.commit_check_runs = lambda _repo, _head_sha: []
+
+    def tearDown(self) -> None:
+        self.finalize.common.commit_check_runs = self._original_commit_check_runs
+
     def test_green_pr_without_required_review_label_is_blocked(self) -> None:
         decision = self.finalize.decide(
             "owner/repo",
@@ -204,6 +211,27 @@ class FinalizerReviewGateTests(unittest.TestCase):
 
         self.assertEqual(decision.action, "blocked")
         self.assertIn("no checks reported", decision.reasons)
+
+    def test_empty_rollup_uses_commit_check_runs_for_required_checks(self) -> None:
+        original = self.finalize.common.commit_check_runs
+        self.finalize.common.commit_check_runs = lambda _repo, _head_sha: [
+            {"name": "ci", "status": "completed", "conclusion": "success"}
+        ]
+        try:
+            decision = self.finalize.decide(
+                "owner/repo",
+                green_pr(labels=["reviewed"], statusCheckRollup=[]),
+                allow_no_checks=False,
+                merge=True,
+                required_check_names=["ci"],
+                check_dependencies=False,
+                require_review_label="reviewed",
+            )
+        finally:
+            self.finalize.common.commit_check_runs = original
+
+        self.assertEqual(decision.action, "merge")
+        self.assertEqual(decision.reasons, [])
 
     def test_no_checks_path_policy_can_merge_docs_only_pr(self) -> None:
         decision = self.finalize.decide(
