@@ -696,6 +696,7 @@ def process_issue(issue, publish):
             release_file_lock(cache_lock)
 
         base_sha = run("git rev-parse HEAD", cwd=worktree_dir).strip()
+        (job_dir / "worktree.txt").write_text(str(worktree_dir) + "\n", encoding="utf-8")
         run(f"git checkout -B {shlex.quote(branch)}", cwd=worktree_dir)
         configure_worktree_identity(worktree_dir)
         overlay_paths = common.apply_repo_env_overlay(repo, worktree_dir)

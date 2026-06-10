@@ -1,0 +1,4 @@
+interface:
+  display_name: "Draft Copy-Paste Prompt"
+  short_description: "Create concise prompts for handoff, review, build, plan, or automation"
+  default_prompt: "Use $draft-copy-paste-prompt to turn this context into a short, scenario-appropriate prompt I can paste into a fresh Codex session. If helpful, consult the skill's examples file for wording patterns."

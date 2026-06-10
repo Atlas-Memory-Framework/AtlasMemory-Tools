@@ -13,11 +13,11 @@
 
 The local plan-agent runtime dry-run was started for:
 
-`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
+`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
 
 Run directory:
 
-`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plan-runs/m15-post-projection-semantic-runtime-2026-06-03T033943Z`
+`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plan-runs/m15-post-projection-semantic-runtime-2026-06-03T033943Z`
 
 Snapshot SHA:
 
@@ -25,7 +25,7 @@ Snapshot SHA:
 
 Manager report:
 
-`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plan-runs/m15-post-projection-semantic-runtime-2026-06-03T033943Z/run-report.md`
+`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plan-runs/m15-post-projection-semantic-runtime-2026-06-03T033943Z/run-report.md`
 
 The semantic dispatch decision is stable: **none** of the named candidates is dispatchable next. `PLANNING-BOOTSTRAP-IMPORT-001` is first in semantic sequence, but it is still a blocked, 5-point, manual-review/decomposition-required item.
 
@@ -47,7 +47,7 @@ Live issue mapping verified:
 
 - `/run/host/var/home/mat/Desktop/Atlas-Automation-Runtime/atlas-agent-plan-queue`: updated from the repaired Tools template to include live issue state queue blockers.
 - `/tmp/atlas-agent-plan-queue.before-m15-live-state-repair`: backup of the previous installed runtime bridge.
-- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plan-runs/m15-post-projection-semantic-runtime-2026-06-03T033943Z/run-report.md`: manager reconciliation report.
+- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plan-runs/m15-post-projection-semantic-runtime-2026-06-03T033943Z/run-report.md`: manager reconciliation report.
 - `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/templates/local-automation-runtime/atlas-agent-plan-queue`: source template used for runtime repair; already had the repaired live-state logic before this session.
 
 ## Verification
@@ -74,7 +74,7 @@ Live issue mapping verified:
    - clarify that the canonical markdown plan is read-only baseline evidence for bootstrap import.
 2. Rerun read-only queue preview after any plan wording reconciliation:
    - `cd /run/host/var/home/mat/Desktop/Atlas-Automation-Runtime`
-   - `./atlas-agent-plan-queue --plan /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md --repo Atlas-Memory-Framework/atlas-memory --dry-run`
+   - `./atlas-agent-plan-queue --plan /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md --repo Atlas-Memory-Framework/atlas-memory --dry-run`
 3. Do not run `--apply`, `--queue`, `--publish`, `atlas-agent-shift --apply`, `atlas-agent-shift --publish`, or worker PR creation for #751-#754.
 4. If the user approves future decomposition, create/review a one-point `BaselineEvidencePackage v0 contract/fixture` child before any importer persistence or native replan work.
 

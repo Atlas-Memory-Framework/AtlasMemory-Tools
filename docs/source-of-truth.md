@@ -20,8 +20,6 @@ Do not edit generated downstream copies as the normal workflow:
 
 - `.codex/skills/**`
 - `.codex/agents/**`
-- `.cursor/skills/**`
-- `.cursor/agents/**`
 - `.gemini/skills/**`
 - `.gemini/agents/**`
 - `.claude/skills/**`

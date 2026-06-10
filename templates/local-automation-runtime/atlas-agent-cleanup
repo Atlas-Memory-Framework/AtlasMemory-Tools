@@ -1,0 +1,557 @@
+#!/usr/bin/env python3
+"""Clean stale local automation runtime artifacts.
+
+The command is safe to run while the runtime is operating: it takes a cleanup
+lock, protects recent artifacts, skips worktrees with active git locks, and
+defaults to dry-run reporting unless --apply is supplied.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass
+from typing import Any
+
+import atlas_agent_common as common
+
+
+STATE_JOB_DIR_NAMES = {
+    "checkouts",
+    "github-api-throttle",
+    "label-cache",
+    "leases",
+    "project-sync",
+    "repo-cache-locks",
+    "workflow-artifacts",
+    "write-scope-locks",
+}
+JOB_DIR_PREFIXES = (
+    "admin-",
+    "e2e-chain-",
+    "issue-",
+    "pr-",
+    "teams-preview-",
+    "unattended-",
+    "workflow-",
+    "workstream-",
+)
+
+
+@dataclass
+class CleanupItem:
+    category: str
+    path: pathlib.Path
+    reason: str
+    age_hours: float
+    repo: str | None = None
+    size_bytes: int | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "category": self.category,
+            "path": str(self.path),
+            "repo": self.repo,
+            "reason": self.reason,
+            "age_hours": round(self.age_hours, 3),
+            "size_bytes": self.size_bytes,
+        }
+
+
+def repos_dir() -> pathlib.Path:
+    cfg = common.read_config()
+    raw = os.environ.get("AGENT_REPOS") or cfg.get("AGENT_REPOS", str(common.RUNTIME_DIR / "repos"))
+    return pathlib.Path(os.path.expandvars(raw)).expanduser()
+
+
+def age_hours(path: pathlib.Path, now: float | None = None) -> float:
+    return max(0.0, ((time.time() if now is None else now) - path.stat().st_mtime) / 3600.0)
+
+
+def path_size_bytes(path: pathlib.Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file() or path.is_symlink():
+        return path.lstat().st_size
+    total = 0
+    for root, dirs, files in os.walk(path):
+        root_path = pathlib.Path(root)
+        for name in files:
+            candidate = root_path / name
+            try:
+                total += candidate.lstat().st_size
+            except OSError:
+                continue
+        for name in dirs:
+            candidate = root_path / name
+            if candidate.is_symlink():
+                try:
+                    total += candidate.lstat().st_size
+                except OSError:
+                    pass
+    return total
+
+
+def safe_relative_child(path: pathlib.Path, root: pathlib.Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def git_dir_for_worktree(worktree: pathlib.Path) -> pathlib.Path | None:
+    dotgit = worktree / ".git"
+    try:
+        if dotgit.is_dir():
+            return dotgit
+        if dotgit.is_file():
+            raw = dotgit.read_text(encoding="utf-8", errors="replace").strip()
+            if raw.startswith("gitdir:"):
+                value = raw.split(":", 1)[1].strip()
+                gitdir = pathlib.Path(value)
+                if not gitdir.is_absolute():
+                    gitdir = (worktree / gitdir).resolve()
+                return gitdir
+    except OSError:
+        return None
+    return None
+
+
+def git_locks_present(worktree: pathlib.Path) -> bool:
+    gitdir = git_dir_for_worktree(worktree)
+    if gitdir is None or not gitdir.exists():
+        return False
+    lock_names = ("index.lock", "HEAD.lock", "config.lock", "packed-refs.lock")
+    if any((gitdir / name).exists() for name in lock_names):
+        return True
+    return any(gitdir.glob("*.lock"))
+
+
+def read_worktree_marker(path: pathlib.Path) -> pathlib.Path | None:
+    marker = path / "worktree.txt"
+    if not marker.exists():
+        return None
+    try:
+        raw = marker.read_text(encoding="utf-8").strip().splitlines()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    return pathlib.Path(raw[0]).expanduser()
+
+
+def protected_worktree_paths(jobs: pathlib.Path, active_job_hours: float, now: float) -> set[pathlib.Path]:
+    protected: set[pathlib.Path] = set()
+    if active_job_hours < 0 or not jobs.exists():
+        return protected
+    cutoff = now - (active_job_hours * 3600.0)
+    for job_dir in jobs.iterdir():
+        if not job_dir.is_dir() or job_dir.name in STATE_JOB_DIR_NAMES:
+            continue
+        try:
+            if job_dir.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        worktree = read_worktree_marker(job_dir)
+        if worktree is not None:
+            protected.add(worktree.resolve(strict=False))
+    return protected
+
+
+def registered_worktrees(repo_cache: pathlib.Path) -> set[pathlib.Path]:
+    if not repo_cache.exists():
+        return set()
+    proc = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=str(repo_cache),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if proc.returncode != 0:
+        return set()
+    paths: set[pathlib.Path] = set()
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree "):
+            paths.add(pathlib.Path(line.split(" ", 1)[1]).resolve(strict=False))
+    return paths
+
+
+def checkout_candidates(args: argparse.Namespace, now: float) -> list[CleanupItem]:
+    jobs = common.jobs_dir()
+    root = jobs / "checkouts"
+    if not root.exists():
+        return []
+    protected = protected_worktree_paths(jobs, args.active_job_hours, now)
+    items: list[CleanupItem] = []
+    for repo_root in sorted(root.iterdir()):
+        if not repo_root.is_dir() or repo_root.is_symlink():
+            continue
+        repo = repo_root.name
+        children = [child for child in repo_root.iterdir() if child.is_dir() and not child.is_symlink()]
+        children.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        kept = set(children[: max(args.keep_checkouts_per_repo, 0)])
+        for child in children:
+            try:
+                child_age = age_hours(child, now)
+            except OSError:
+                continue
+            resolved = child.resolve(strict=False)
+            if resolved in protected:
+                continue
+            if child_age < args.protect_recent_hours:
+                continue
+            if git_locks_present(child):
+                continue
+            old_enough = args.checkout_max_age_hours >= 0 and child_age >= args.checkout_max_age_hours
+            over_keep = args.keep_checkouts_per_repo >= 0 and child not in kept
+            if old_enough or over_keep:
+                reason = "older than checkout retention"
+                if over_keep and not old_enough:
+                    reason = "exceeds per-repo checkout keep count"
+                items.append(CleanupItem("checkout", child, reason, child_age, repo=repo))
+    return items
+
+
+def job_dir_candidates(args: argparse.Namespace, now: float) -> list[CleanupItem]:
+    jobs = common.jobs_dir()
+    if not jobs.exists():
+        return []
+    children = [
+        child
+        for child in jobs.iterdir()
+        if child.is_dir()
+        and not child.is_symlink()
+        and child.name not in STATE_JOB_DIR_NAMES
+        and child.name.startswith(JOB_DIR_PREFIXES)
+    ]
+    children.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    kept = set(children[: max(args.keep_jobs, 0)])
+    items: list[CleanupItem] = []
+    for child in children:
+        try:
+            child_age = age_hours(child, now)
+        except OSError:
+            continue
+        if child_age < args.protect_recent_hours:
+            continue
+        old_enough = args.job_max_age_hours >= 0 and child_age >= args.job_max_age_hours
+        over_keep = args.keep_jobs >= 0 and child not in kept
+        if old_enough or over_keep:
+            reason = "older than job artifact retention"
+            if over_keep and not old_enough:
+                reason = "exceeds job artifact keep count"
+            items.append(CleanupItem("job", child, reason, child_age))
+    return items
+
+
+def codex_home_candidates(args: argparse.Namespace, now: float) -> list[CleanupItem]:
+    jobs = common.jobs_dir()
+    if not jobs.exists():
+        return []
+    items: list[CleanupItem] = []
+    for job_dir in jobs.iterdir():
+        if not job_dir.is_dir() or job_dir.name in STATE_JOB_DIR_NAMES:
+            continue
+        for child in job_dir.iterdir():
+            if not child.is_dir() or child.is_symlink() or not child.name.startswith("codex-home-"):
+                continue
+            try:
+                child_age = age_hours(child, now)
+            except OSError:
+                continue
+            if child_age >= args.codex_home_max_age_hours and child_age >= args.protect_recent_hours:
+                items.append(CleanupItem("codex-home", child, "stale copied Codex home", child_age))
+    return items
+
+
+def log_candidates(args: argparse.Namespace, now: float) -> list[CleanupItem]:
+    logs = common.logs_dir()
+    if not logs.exists():
+        return []
+    items: list[CleanupItem] = []
+    for child in logs.iterdir():
+        if child.is_symlink():
+            continue
+        try:
+            child_age = age_hours(child, now)
+        except OSError:
+            continue
+        if child_age >= args.log_max_age_hours and child_age >= args.protect_recent_hours:
+            items.append(CleanupItem("log", child, "older than log retention", child_age))
+    return items
+
+
+def imported_backup_candidates(args: argparse.Namespace, now: float) -> list[CleanupItem]:
+    items: list[CleanupItem] = []
+    for child in common.RUNTIME_DIR.glob("imported-from-template-*"):
+        if not child.is_dir() or child.is_symlink():
+            continue
+        try:
+            child_age = age_hours(child, now)
+        except OSError:
+            continue
+        if child_age >= args.imported_template_max_age_hours and child_age >= args.protect_recent_hours:
+            items.append(CleanupItem("imported-template", child, "older than imported template backup retention", child_age))
+    return items
+
+
+def collect_candidates(args: argparse.Namespace) -> list[CleanupItem]:
+    now = time.time()
+    selected = set(args.target)
+    items: list[CleanupItem] = []
+    if "checkouts" in selected:
+        items.extend(checkout_candidates(args, now))
+    if "codex-homes" in selected:
+        items.extend(codex_home_candidates(args, now))
+    if "jobs" in selected:
+        items.extend(job_dir_candidates(args, now))
+    if "logs" in selected:
+        items.extend(log_candidates(args, now))
+    if "imported-backups" in selected:
+        items.extend(imported_backup_candidates(args, now))
+    items.sort(key=lambda item: item.path.stat().st_mtime if item.path.exists() else 0)
+    if args.measure_size:
+        for item in items:
+            item.size_bytes = path_size_bytes(item.path)
+    return items
+
+
+def remove_checkout(item: CleanupItem, errors: list[dict[str, str]]) -> bool:
+    repo_cache = repos_dir() / str(item.repo)
+    registered = registered_worktrees(repo_cache)
+    resolved = item.path.resolve(strict=False)
+    if resolved in registered and repo_cache.exists():
+        proc = subprocess.run(
+            ["git", "worktree", "remove", "--force", str(item.path)],
+            cwd=str(repo_cache),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.returncode == 0:
+            return True
+        errors.append({"path": str(item.path), "error": proc.stdout.strip()})
+        return False
+    shutil.rmtree(item.path)
+    return True
+
+
+def remove_item(item: CleanupItem, errors: list[dict[str, str]]) -> bool:
+    try:
+        if item.category == "checkout":
+            return remove_checkout(item, errors)
+        if item.path.is_dir() and not item.path.is_symlink():
+            shutil.rmtree(item.path)
+        else:
+            item.path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        errors.append({"path": str(item.path), "error": str(exc)})
+        return False
+
+
+def prune_worktree_registrations(apply: bool) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for repo_cache in sorted(repos_dir().glob("*")):
+        if not repo_cache.is_dir() or not (repo_cache / ".git").exists():
+            continue
+        cmd = ["git", "worktree", "prune"]
+        if not apply:
+            cmd.append("--dry-run")
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_cache),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if proc.stdout.strip() or proc.returncode != 0:
+            results.append(
+                {
+                    "repo_cache": str(repo_cache),
+                    "apply": apply,
+                    "returncode": proc.returncode,
+                    "output": proc.stdout.strip(),
+                }
+            )
+    return results
+
+
+def apply_cleanup(args: argparse.Namespace, items: list[CleanupItem]) -> tuple[list[CleanupItem], list[dict[str, str]]]:
+    errors: list[dict[str, str]] = []
+    deleted: list[CleanupItem] = []
+    limit = args.max_delete if args.max_delete > 0 else None
+    for item in items:
+        if limit is not None and len(deleted) >= limit:
+            break
+        if remove_item(item, errors):
+            deleted.append(item)
+    return deleted, errors
+
+
+def build_summary(
+    *,
+    args: argparse.Namespace,
+    items: list[CleanupItem],
+    deleted: list[CleanupItem],
+    errors: list[dict[str, str]],
+    prune_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    pending = [item for item in items if item not in deleted]
+    categories: dict[str, int] = {}
+    for item in items:
+        categories[item.category] = categories.get(item.category, 0) + 1
+    return {
+        "generated_at": common.now_rfc3339(),
+        "runtime_dir": str(common.RUNTIME_DIR),
+        "apply": bool(args.apply),
+        "measure_size": bool(args.measure_size),
+        "counts": {
+            "candidates": len(items),
+            "deleted": len(deleted),
+            "remaining_candidates": len(pending),
+            "errors": len(errors),
+        },
+        "candidate_categories": categories,
+        "estimated_candidate_bytes": (
+            sum(item.size_bytes or 0 for item in items) if args.measure_size else None
+        ),
+        "deleted": [item.to_json() for item in deleted],
+        "candidates": [item.to_json() for item in pending],
+        "errors": errors,
+        "worktree_prune": prune_results,
+    }
+
+
+def print_summary(summary: dict[str, Any]) -> None:
+    counts = summary["counts"]
+    print(
+        "CLEANUP "
+        f"candidates={counts['candidates']} "
+        f"deleted={counts['deleted']} "
+        f"errors={counts['errors']} "
+        f"apply={str(summary['apply']).lower()}",
+        flush=True,
+    )
+    if summary.get("estimated_candidate_bytes") is not None:
+        print(f"CLEANUP estimated_candidate_bytes={summary['estimated_candidate_bytes']}", flush=True)
+    for category, count in sorted(summary.get("candidate_categories", {}).items()):
+        print(f"CLEANUP category {category}={count}", flush=True)
+    for item in summary["candidates"][:20]:
+        print(f"CLEANUP candidate {item['category']} {item['path']} :: {item['reason']}", flush=True)
+    remaining = max(0, len(summary["candidates"]) - 20)
+    if remaining:
+        print(f"CLEANUP candidate list truncated, {remaining} more in summary JSON", flush=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true", help="Delete cleanup candidates. Default is dry-run.")
+    parser.add_argument(
+        "--target",
+        action="append",
+        choices=["checkouts", "codex-homes", "jobs", "logs", "imported-backups"],
+        default=[],
+        help="Cleanup target. Repeatable. Defaults to all targets.",
+    )
+    parser.add_argument("--summary", help="Write machine-readable cleanup summary JSON.")
+    parser.add_argument("--measure-size", action="store_true", help="Measure candidate sizes. Slower on large trees.")
+    parser.add_argument("--max-delete", type=int, default=common.config_int("AGENT_CLEANUP_MAX_DELETE", 0))
+    parser.add_argument(
+        "--checkout-max-age-hours",
+        type=float,
+        default=common.config_float("AGENT_CLEANUP_CHECKOUT_MAX_AGE_HOURS", 24.0),
+    )
+    parser.add_argument(
+        "--keep-checkouts-per-repo",
+        type=int,
+        default=common.config_int("AGENT_CLEANUP_KEEP_CHECKOUTS_PER_REPO", 8),
+    )
+    parser.add_argument(
+        "--job-max-age-hours",
+        type=float,
+        default=common.config_float("AGENT_CLEANUP_JOB_MAX_AGE_HOURS", 168.0),
+    )
+    parser.add_argument("--keep-jobs", type=int, default=common.config_int("AGENT_CLEANUP_KEEP_JOBS", 200))
+    parser.add_argument(
+        "--codex-home-max-age-hours",
+        type=float,
+        default=common.config_float("AGENT_CLEANUP_CODEX_HOME_MAX_AGE_HOURS", 24.0),
+    )
+    parser.add_argument(
+        "--log-max-age-hours",
+        type=float,
+        default=common.config_float("AGENT_CLEANUP_LOG_MAX_AGE_HOURS", 336.0),
+    )
+    parser.add_argument(
+        "--imported-template-max-age-hours",
+        type=float,
+        default=common.config_float("AGENT_CLEANUP_IMPORTED_TEMPLATE_MAX_AGE_HOURS", 168.0),
+    )
+    parser.add_argument(
+        "--protect-recent-hours",
+        type=float,
+        default=common.config_float("AGENT_CLEANUP_PROTECT_RECENT_HOURS", 2.0),
+        help="Never delete artifacts newer than this, even if over keep count.",
+    )
+    parser.add_argument(
+        "--active-job-hours",
+        type=float,
+        default=common.config_float("AGENT_CLEANUP_ACTIVE_JOB_HOURS", 12.0),
+        help="Protect worktrees referenced by job worktree.txt markers this recent.",
+    )
+    parser.add_argument("--lock-wait-seconds", type=float, default=5.0)
+    parser.add_argument("--lock-stale-seconds", type=float, default=6 * 60 * 60)
+    parser.add_argument(
+        "--no-prune-worktree-registrations",
+        action="store_true",
+        help="Skip git worktree prune over cached repos.",
+    )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if not args.target:
+        args.target = ["checkouts", "codex-homes", "jobs", "logs", "imported-backups"]
+    if args.max_delete < 0:
+        raise SystemExit("--max-delete must be >= 0")
+    if args.keep_checkouts_per_repo < 0:
+        raise SystemExit("--keep-checkouts-per-repo must be >= 0")
+    if args.keep_jobs < 0:
+        raise SystemExit("--keep-jobs must be >= 0")
+
+    lock = common.acquire_json_lock(
+        common.jobs_dir() / "atlas-agent-cleanup.lock",
+        stale_seconds=args.lock_stale_seconds,
+        wait_seconds=args.lock_wait_seconds,
+    )
+    try:
+        items = collect_candidates(args)
+        deleted: list[CleanupItem] = []
+        errors: list[dict[str, str]] = []
+        prune_results = []
+        if not args.no_prune_worktree_registrations:
+            prune_results = prune_worktree_registrations(args.apply)
+        if args.apply:
+            deleted, errors = apply_cleanup(args, items)
+        summary = build_summary(args=args, items=items, deleted=deleted, errors=errors, prune_results=prune_results)
+        if args.summary:
+            common.write_json(pathlib.Path(args.summary), summary)
+        print_summary(summary)
+        return 1 if errors else 0
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

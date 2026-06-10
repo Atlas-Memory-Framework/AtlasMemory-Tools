@@ -13,7 +13,7 @@
 
 The canonical authoring artifact is:
 
-`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
+`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
 
 Projection readiness review has been completed and apply-mode projection has already run. Do not treat the predecessor handoff as current operating state; it is stale on projection/apply status.
 
@@ -54,11 +54,11 @@ Pushed commits:
 
 ## Changed or Important Files
 
-- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: canonical post-projection plan state and M1.5 semantic requirements.
+- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: canonical post-projection plan state and M1.5 semantic requirements.
 - `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/skills/plan-to-issues/scripts/plan_to_issues.py`: projection sync now skips single closed issue matches instead of updating them.
 - `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/skills/plan-to-issues/scripts/test_plan_to_issues.py`: tests for closed-match skip behavior.
-- `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/.cursor/skills/plan-to-issues/scripts/plan_to_issues.py`: generated Cursor adapter copy matching the canonical script.
-- `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/.cursor/skills/plan-to-issues/scripts/test_plan_to_issues.py`: generated Cursor adapter copy matching the canonical tests.
+- `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/.codex/skills/plan-to-issues/scripts/plan_to_issues.py`: generated Codex adapter copy matching the canonical script.
+- `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/.codex/skills/plan-to-issues/scripts/test_plan_to_issues.py`: generated Codex adapter copy matching the canonical tests.
 - `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/.codex/handoffs/2026-06-03-0120-m15-plan-projection-readiness.md`: predecessor handoff; useful for why the projection-readiness changes were made, but stale for current status.
 
 ## Verification
@@ -86,8 +86,8 @@ Pushed commits:
    - `cd /run/host/var/home/mat/Desktop/AtlasMemory-Tools && git status --short --branch && git log -1 --oneline`
    - `cd /run/host/var/home/mat/Desktop/Atlas-Automation-Runtime && pwd && ls atlas-agent-plan-queue atlas-agent-shift repos.txt projects.txt`
 2. Run the local plan-agent runtime over the canonical plan before any issue dispatch:
-   - `AuthoringArtifact = /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
-   - Create a fresh snapshot under `.cursor/plan-runs/m15-post-projection-semantic-runtime-2026-06-03/`.
+   - `AuthoringArtifact = /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
+   - Create a fresh snapshot under `.codex/plan-runs/m15-post-projection-semantic-runtime-2026-06-03/`.
    - Use independent personas focused on product spine, architecture sequencing, CLI/TUI layering, contract/API boundary, data integrity/concurrency, evidence/trust policy, automation readiness, and human readability.
    - Workers propose only. They must not edit the canonical plan, flip gates, change projection/dispatch state, or hide user decisions.
 3. Reconcile worker outputs into a semantic fulfillment report:
@@ -95,7 +95,7 @@ Pushed commits:
    - Explicitly answer whether the next work should be `PLANNING-BOOTSTRAP-IMPORT-001`, `PLANNING-REPLAN-WORKFLOW-001`, `PLANNING-REPLAN-TUI-001`, `WORKBENCH-FIVE-VIEW-READMODELS-001`, or no dispatch.
 4. Run a read-only queue preview from the installed runtime:
    - `cd /run/host/var/home/mat/Desktop/Atlas-Automation-Runtime`
-   - `./atlas-agent-plan-queue --plan /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md --repo Atlas-Memory-Framework/atlas-memory --dry-run`
+   - `./atlas-agent-plan-queue --plan /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md --repo Atlas-Memory-Framework/atlas-memory --dry-run`
    - Expected safe result before promotion: `queueable_count=0`.
 5. Do not run these without explicit fresh approval or a separately documented queue-audit promotion:
    - `./atlas-agent-plan-queue --apply`

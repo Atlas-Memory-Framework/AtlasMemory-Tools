@@ -1,0 +1,6 @@
+<!-- atlas-tools-generated: source=skills/draft-copy-paste-prompt/agents/openai.yaml manifest=atlas-tools.v1 checksum=sha256:4be0657750cd69e1ed430d0e8fd7b6bab19f3d0d0741b6a11061fb43f40aab4c -->
+<!-- atlas-tools-generated-end -->
+interface:
+  display_name: "Draft Copy-Paste Prompt"
+  short_description: "Create concise prompts for handoff, review, build, plan, or automation"
+  default_prompt: "Use $draft-copy-paste-prompt to turn this context into a short, scenario-appropriate prompt I can paste into a fresh Codex session. If helpful, consult the skill's examples file for wording patterns."

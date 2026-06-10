@@ -1,5 +1,0 @@
-<!-- atlas-tools-generated: source=skills/plan-execution-readiness/agents/openai.yaml manifest=atlas-tools.v1 checksum=sha256:52c2fc53f08729b706cc42adec39268b939a439298d5534ab2723aa1357be34f -->
-<!-- atlas-tools-generated-end -->
-display_name: Plan Execution Readiness
-short_description: Critically review plans before execution.
-default_prompt: Review the selected markdown plan for execution readiness: contradictions, missing decisions, weak gates, hidden coupling, validation gaps, and places where agents would invent behavior.

@@ -24,6 +24,10 @@
       "path": "skills/human-qa-loop"
     },
     {
+      "name": "draft-copy-paste-prompt",
+      "path": "skills/draft-copy-paste-prompt"
+    },
+    {
       "name": "implement",
       "path": "skills/implement"
     },
@@ -152,6 +156,10 @@
     "local-automation-runtime-upgrade": [
       "runtime-upgrade"
     ],
+    "draft-copy-paste-prompt": [
+      "draft-copy-paste-prompt",
+      "copy-paste-prompt"
+    ],
     "local-plan-agent-runtime": [
       "agentic-plan-review",
       "agentic-review-mode",
@@ -164,10 +172,6 @@
     ]
   },
   "adapters": {
-    "cursor": {
-      "skills_path": ".cursor/skills",
-      "agents_path": ".cursor/agents"
-    },
     "codex": {
       "skills_path": ".codex/skills",
       "agents_path": ".codex/agents"

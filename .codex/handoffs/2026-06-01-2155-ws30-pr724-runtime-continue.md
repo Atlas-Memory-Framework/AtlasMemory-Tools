@@ -52,7 +52,7 @@ A broad `atlas-agent-dependency-promote --project-mode --dry-run` was started to
 
 - `/home/mat/distrobox-homes/atlas-agent/agent-runtime/jobs/checkouts/Atlas-Memory-Framework__atlas-memory/issue-719-20260601T204303Z/2 - implementations/2.1 - local/atlas_memory_local/__main__.py`: repaired `_atlas_proxy_attach_impl` to reject unsupported target refs; updated attach command docstrings to workflow/run refs.
 - `/home/mat/distrobox-homes/atlas-agent/agent-runtime/jobs/checkouts/Atlas-Memory-Framework__atlas-memory/issue-719-20260601T204303Z/2 - implementations/2.1 - local/tests/test_atlas_proxy_tui.py`: added regression coverage for `session-1` and `work-item-1` attach rejection with no workflow client call.
-- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: canonical WS30 plan.
+- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: canonical WS30 plan.
 
 ## Verification
 

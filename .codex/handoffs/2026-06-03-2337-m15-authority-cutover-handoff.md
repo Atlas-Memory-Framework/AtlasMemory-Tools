@@ -84,7 +84,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=".:../../3 - interfaces/core" /tmp/m15-755-
 ```
 
 ```bash
-python3 /run/host/var/home/mat/Desktop/AtlasMemory-Tools/skills/plan-to-issues/scripts/plan_to_issues.py --plan "atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md" --repo "Atlas-Memory-Framework/atlas-memory" --strategy leaf-issues --dry-run
+python3 /run/host/var/home/mat/Desktop/AtlasMemory-Tools/skills/plan-to-issues/scripts/plan_to_issues.py --plan "atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md" --repo "Atlas-Memory-Framework/atlas-memory" --strategy leaf-issues --dry-run
 ```
 
 Temporary deployed validation config can be recreated as:

@@ -1,12 +1,12 @@
 ---
 name: plan
-description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by Cursor) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
+description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by the planning workflow) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
 ---
 
 # /plan Orchestrator
 
 ## Purpose
-Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface; in `registry-first`, a successful compile later hands planning authority to compiled registry YAML. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
+Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface. Compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it does not replace the selected markdown plan as authoring authority. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
 
 ## Agentic review mode
 When the user says `Use $plan with agentic review mode`, asks for parallel plan review, asks to review an old plan before trusting it, or asks to run the local agentic planning workflow on a markdown plan, `$plan` remains the public workflow and canonical writer. Invoke `/local-plan-agent-runtime` as an internal review layer after the authoring artifact is selected and before preserving approval/readiness state.
@@ -20,9 +20,10 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 - **Substance before mechanics**: Product/system sections (`Problem Definition`, `Challenge Artifacts`, `Technical Plan`) must describe the real workflow failure/opportunity, desired behavior, and engineering approach. Planning machinery, authority contracts, projection, and dispatch policy belong in `Plan State`, `Implementation Plan`, `Automation Issue Manifest`, and `Execution Mechanics / Automation Appendix`.
 - **Zero-interaction implementer standard**: assume future build agents cannot ask the user questions and have no prior knowledge. If an implementation-critical fact is missing, ask now, record a decision boundary, or keep the gate failing. Do not fill gaps with vague defaults.
 - **Interrogate before advancing**: for Problem, Technical, and Implementation stages, ask targeted questions until the plan names the current workflow, desired workflow, why the gap matters now, concrete repo/user facts, owners, file boundaries, verification entrypoints, rollout, and rollback. It is better to block than to pass a lazy plan.
+- **Many atomic plans, one campaign**: when a large effort is intentionally split across multiple plan artifacts, each plan still owns exactly one selected authoring artifact. Use optional metadata such as `PlanGroup`, `ParentPlan`, `DependsOnPlans`, `BlocksPlans`, and `AtomicScope` only as descriptive links. These fields do not replace `@path` selection, do not create registry authority, and do not let one `/plan` invocation edit multiple plans.
 - **Artifact authority contract (required)**:
   - the selected harness-local plan artifact is authoritative for authoring intent, rationale, and amendments.
-  - compiled registry YAML is authoritative for local planning structure, joins, validator inputs, and projection metadata after successful compile in `registry-first`.
+  - compiled registry YAML is derived from the selected plan and may be used as a machine-readable package for local planning structure, joins, validator inputs, and projection metadata after successful compile. If it conflicts with the selected plan, patch the plan and recompile; do not treat the registry as independent intent authority.
   - GitHub issues and PRs are authoritative for execution state and mutation authority.
   - GitHub Projects v2 is downstream execution UI/signal only.
   - rendered overlays and runtime-mirror outputs are derived surfaces, never authoring input.
@@ -66,6 +67,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 6) If the plan is in Reviews/Approved re-entry state, run `/review mode=zero-context` as a fresh re-entry audit before trusting existing `Pass` or approval values. Treat all existing pass claims as stale until the audit answers the seven required questions above with concrete, plan-cited answers. If the audit is weak, route remediation to the owner skill for the weak section(s), set affected gates to `Fail`, and do not preserve or set approval state.
 7) Run validators in stage order up to the current stage.
    - When available, run `python3 skills/plan/scripts/validate_plan.py <authoring-artifact>` as the deterministic mechanical check for `ProblemDefinitionComplete`, `PlanReadiness`, `AutomationReadiness`, `PlanningReviewsComplete`, and `PlanStateSanity`. Use the script output as blocking evidence, not as a substitute for human-agency decisions.
+   - If the plan is part of an atomic-plan campaign, verify that its descriptive metadata is coherent enough for human navigation (`PlanGroup`, `AtomicScope`, and known dependencies), but do not fail the gate solely because optional cross-plan metadata is absent unless the plan itself depends on it.
 8) Route to the first failing gate and call the owner skill as a sub-agent to produce a draft section. Provide any known agent roster or `## Context Snapshot` so ownership can be assigned correctly.
 9) Run the human Q/A loop inline with the user using the gate's mode (see map below) when:
    - the validator fails, OR
@@ -142,11 +144,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
     - no placeholder language in gates (e.g., “run smoke tests”) without naming the gate(s) and where/how they run
     - no task requires future user interaction unless it is explicitly a manual blocker with owner, trigger, and dispatch effect
     - every future agent-owned task has enough local context, file scope, acceptance criteria, and validation evidence to execute without asking the user what was intended
-    - the following “hard questions” MUST be decided or DR-deferred with trigger (PlanTier: Full):
-      - migration tooling (Alembic vs raw SQL)
-      - cutover criteria (when fallback is removed)
-      - cache staleness policy (TTL default/max; invalidation yes/no)
-      - Tier C onboarding readiness (provisioning/active status & 503 behavior)
+    - domain-specific hard questions that materially affect implementation MUST be decided or DR-deferred with trigger. Examples include migration tooling when schemas change, cutover/fallback criteria when replacing behavior, cache staleness when caches are introduced, provisioning/readiness semantics when activation state exists, provider/IAM/network boundaries when cloud infrastructure is in scope, and external-effect rollback/compensation when work can affect real systems.
 - AutomationReadiness (required when `AutomationTarget != none`; otherwise N/A):
   - `AutomationTarget` is one of:
     - `none`: no automation manifest required.
@@ -173,7 +171,8 @@ Use this mode for new plans, old plans that are not in current shape, and previo
     - `Open questions` contains any item with `Status: Open` (or missing Status), OR
     - ambiguity markers remain in critical areas (Problem/Technical/Implementation/Decision Log), including: `TBD`, `to be decided`, `choose later`, `or decide later`
       - unless the ambiguity is explicitly captured as a Decision boundary (A/B/C) or a DR-backed Defer with a trigger.
-- PlanningReviewsComplete: required reviews done with dispositions logged; required blocks include zero-context, implementer readiness, security/privacy, human readability, expert-tech findings or N/A rationale, and automation readiness when `AutomationTarget != none`; Human Readability is Pass.
+- PlanningReviewsComplete: required reviews done with dispositions logged; required blocks include zero-context, implementer readiness, security/privacy, human readability, expert-tech findings or N/A rationale, dynamic specialist review roster, and automation readiness when `AutomationTarget != none`; Human Readability is Pass.
+  - Specialist reviews are selected from plan content, not hard-coded provider assumptions. Trigger dedicated review passes for domains such as cloud/provider infrastructure, database/migrations, data integrity/concurrency, API contracts, external effects/governance, cost/operations, UI/operator workflow, or domain expertise when the plan touches those boundaries. Record why each triggered review was selected and why obvious-but-untriggered reviews were skipped.
   - **Stale review detection (mechanical)**:
     - Each required review block MUST include one of these canonical freshness markers:
       - `ReviewedPlanHash: sha256:<64 hex chars>` matching the current plan content excluding `## Planning Reviews`, OR

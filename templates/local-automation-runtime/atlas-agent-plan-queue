@@ -27,15 +27,11 @@ def find_tools_root() -> Path:
     for candidate in candidates:
         if (candidate / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py").exists():
             return candidate
-        if (candidate / ".cursor" / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py").exists():
-            return candidate
     raise SystemExit("Could not find AtlasMemory-Tools root; set ATLAS_TOOLS_ROOT in config.env.")
 
 
 TOOLS_ROOT = find_tools_root()
 PLAN_TO_ISSUES = TOOLS_ROOT / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
-if not PLAN_TO_ISSUES.exists():
-    PLAN_TO_ISSUES = TOOLS_ROOT / ".cursor" / "skills" / "plan-to-issues" / "scripts" / "plan_to_issues.py"
 
 
 def run_json(args: list[str]) -> dict:

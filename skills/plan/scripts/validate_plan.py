@@ -49,6 +49,7 @@ REQUIRED_REVIEW_BLOCKS = (
     "Zero-Context Review",
     "Implementer Readiness Review",
     "Security/Privacy Review",
+    "Dynamic Specialist Review Roster",
     "Human Readability Review",
 )
 
@@ -377,11 +378,15 @@ def check_automation_readiness(markdown: str, state: dict[str, str]) -> GateResu
     return GateResult("AutomationReadiness", "Fail" if messages else "Pass", messages)
 
 
+def normalize_review_title(title: str) -> str:
+    return re.sub(r"\s+\((?:required|conditional|required when .*?)\)\s*$", "", title, flags=re.IGNORECASE).strip()
+
+
 def review_blocks(planning_reviews: str) -> dict[str, str]:
     matches = list(SUBSECTION_RE.finditer(planning_reviews))
     blocks: dict[str, str] = {}
     for index, match in enumerate(matches):
-        title = match.group(1).strip()
+        title = normalize_review_title(match.group(1).strip())
         end = matches[index + 1].start() if index + 1 < len(matches) else len(planning_reviews)
         blocks[title] = planning_reviews[match.end() : end].strip()
     return blocks

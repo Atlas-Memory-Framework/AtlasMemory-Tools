@@ -10,6 +10,44 @@ from pathlib import Path
 
 HEADER_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 SLUG_RE = re.compile(r"[^a-z0-9]+")
+PLAN_STATE_RE = re.compile(r"^##\s+Plan State\s*$", re.MULTILINE)
+TOP_LEVEL_RE = re.compile(r"^##\s+.+?\s*$", re.MULTILINE)
+KEY_VALUE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_ /-]*):\s*(.*?)\s*$")
+PERSONA_RE = re.compile(r"^##\s+([a-z0-9-]+)\s*$", re.MULTILINE)
+
+ALLOWED_PLAN_STATE_KEYS = {
+    "PlanFormatVersion",
+    "PlanId",
+    "PlanGroup",
+    "PlanKind",
+    "ParentPlan",
+    "DependsOnPlans",
+    "BlocksPlans",
+    "AtomicScope",
+    "CampaignMetadataAuthority",
+    "Status",
+    "StructuralStatus",
+    "SubstanceStatus",
+    "ProjectionApproval",
+    "DispatchApproval",
+    "CurrentStage",
+    "PlanTier",
+    "AutomationTarget",
+    "DeliveryMode",
+    "ContextMode",
+    "LastUpdated",
+    "PrimaryOwner",
+    "BaseBranch",
+    "BaseCommit",
+    "TargetBranch",
+    "Related",
+    "NextRequiredUserAction",
+    "BlockingDecision",
+    "UnresolvedBlockers",
+    "RubberStampSignals",
+    "LastGateRun",
+    "ArtifactAuthorityMode",
+}
 
 
 def sha256_text(text: str) -> str:
@@ -58,6 +96,59 @@ def build_sections(text: str):
     return sections
 
 
+def parse_plan_state(text: str):
+    match = PLAN_STATE_RE.search(text)
+    if not match:
+        return {}
+    next_match = TOP_LEVEL_RE.search(text, match.end())
+    end = next_match.start() if next_match else len(text)
+    state_text = text[match.end():end]
+    state = {}
+    in_fence = False
+    for raw in state_text.splitlines():
+        line = raw.rstrip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        kv = KEY_VALUE_RE.match(line)
+        if kv:
+            key = kv.group(1).strip()
+            if key not in ALLOWED_PLAN_STATE_KEYS:
+                continue
+            if key in state:
+                raise SystemExit(f"duplicate Plan State key: {key}")
+            state[key] = kv.group(2).strip()
+    return state
+
+
+def available_personas() -> set[str]:
+    personas_path = Path(__file__).resolve().parents[1] / "references" / "personas.md"
+    text = personas_path.read_text(encoding="utf-8")
+    return set(PERSONA_RE.findall(text))
+
+
+def build_persona_records(personas: list[str], triggers: list[str], scopes: list[str]):
+    allowed = available_personas()
+    unknown = [persona for persona in personas if persona not in allowed]
+    if unknown:
+        valid = ", ".join(sorted(allowed))
+        raise SystemExit(f"unknown persona(s): {', '.join(unknown)}. Expected one of: {valid}")
+    if triggers and len(triggers) != len(personas):
+        raise SystemExit("--persona-trigger must be repeated exactly once per --persona when supplied")
+    if scopes and len(scopes) != len(personas):
+        raise SystemExit("--persona-scope must be repeated exactly once per --persona when supplied")
+    return [
+        {
+            "id": persona,
+            "trigger": triggers[index] if triggers else "",
+            "scope": scopes[index] if scopes else "",
+        }
+        for index, persona in enumerate(personas)
+    ]
+
+
 def ensure_fresh_run_dir(run_dir: Path) -> None:
     if run_dir.exists() and any(run_dir.iterdir()):
         raise SystemExit(f"run directory already exists and is not empty: {run_dir}")
@@ -70,6 +161,8 @@ def main() -> int:
     parser.add_argument("--run-dir", required=True, help="Fresh directory for run artifacts")
     parser.add_argument("--mode", default="dry-run", choices=["dry-run", "patch-through-plan"])
     parser.add_argument("--persona", action="append", default=[], help="Authorized worker persona; repeatable")
+    parser.add_argument("--persona-trigger", action="append", default=[], help="Reason the corresponding persona was selected; repeat in --persona order")
+    parser.add_argument("--persona-scope", action="append", default=[], help="Bounded scope for the corresponding persona; repeat in --persona order")
     parser.add_argument("--decision-policy", default="decision-firewall-required")
     parser.add_argument("--user-approved-patch-through-plan", action="store_true", help="Required with --mode patch-through-plan")
     args = parser.parse_args()
@@ -85,6 +178,8 @@ def main() -> int:
 
     text = plan.read_text(encoding="utf-8")
     plan_hash = sha256_text(text)
+    plan_state = parse_plan_state(text)
+    persona_records = build_persona_records(args.persona, args.persona_trigger, args.persona_scope)
     run_dir = Path(args.run_dir).resolve()
     ensure_fresh_run_dir(run_dir)
     for name in ["tasks", "proposals"]:
@@ -109,7 +204,14 @@ def main() -> int:
         "canonical_plan_path": str(plan),
         "snapshot_path": str(snapshot),
         "plan_sha256": plan_hash,
+        "plan_state": plan_state,
+        "plan_id": plan_state.get("PlanId", ""),
+        "plan_group": plan_state.get("PlanGroup", ""),
+        "parent_plan": plan_state.get("ParentPlan", ""),
+        "depends_on_plans": plan_state.get("DependsOnPlans", ""),
+        "atomic_scope": plan_state.get("AtomicScope", ""),
         "worker_personas": args.persona,
+        "worker_persona_records": persona_records,
         "decision_policy": args.decision_policy,
         "forbidden_actions": [
             "edit_canonical_plan",

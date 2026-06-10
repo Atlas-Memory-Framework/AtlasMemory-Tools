@@ -35,3 +35,31 @@ Review automation manifest safety, issue projection readiness, dispatch blockers
 ## human-readability-reviewer
 
 Check whether a new engineer can explain what is being built, why now, what changes first, and what remains blocked.
+
+## security-privacy-reviewer
+
+Review authentication boundaries, authorization behavior, secrets handling, sensitive data flows, privacy/compliance implications, redaction, logging, and regression gates that keep security assertions true.
+
+## cloud-provider-infra-reviewer
+
+Review hosting, IAM, networking, deployment, environment configuration, provider-specific bypass paths, managed-service assumptions, and deployed validation gates. Use only when cloud/provider infrastructure is actually in scope.
+
+## database-migration-reviewer
+
+Review schema migrations, data backfills, rollback/restore behavior, transactional boundaries, compatibility windows, idempotency, and cutover/fallback plans.
+
+## external-effects-governance-reviewer
+
+Review commands or workflows that can affect real systems: deployments, payments, customer messages, issue tracker writes, production jobs, data deletion, and self-modification. Check approval, outbox/effect-result records, compensation, auditability, and blast-radius controls.
+
+## cost-ops-reviewer
+
+Review cost-bearing infrastructure, operational burden, monitoring, alerts, quotas, rate limits, runbooks, ownership, and ongoing maintenance expectations.
+
+## ux-operator-workflow-reviewer
+
+Review whether the plan improves the operator workflow, routes the right decisions to humans, avoids dashboard noise, and keeps UI/TUI work dependent on stable backend contracts.
+
+## domain-expert-reviewer
+
+Review domain-specific correctness, terminology, acceptance evidence, fixtures, and risks for the plan's stated domain. The orchestrator must name the domain and provide the domain-specific scope.

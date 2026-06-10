@@ -20,7 +20,7 @@ Issue #110 is the only chosen first-run candidate. It is a meta/runtime-plan sha
 - **GitHub is projection only:** Atlas local runtime/state remains the intended authority; GitHub Project fields are operator metadata and must match issue body runtime fields before dispatch.
 
 ## Changed or Important Files
-- `/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: updated and pushed with the latest Project metadata/rate-limit/auth state.
+- `/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: updated and pushed with the latest Project metadata/rate-limit/auth state.
 - `/var/home/mat/Desktop/AtlasMemory-Tools/templates/local-automation-runtime/atlas-agent-issue-decompose`: runtime template supports exact `--issue` decomposition targeting.
 - `/var/home/mat/Desktop/AtlasMemory-Tools/templates/local-automation-runtime/atlas-agent-unattended`: runtime template supports `--decompose-issue` pass-through.
 - `/var/home/mat/Desktop/AtlasMemory-Tools/templates/local-automation-runtime/atlas_agent_common.py`: runtime template has RFC3339/duration helpers and Project update support.

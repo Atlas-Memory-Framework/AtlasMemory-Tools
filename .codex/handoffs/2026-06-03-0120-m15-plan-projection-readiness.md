@@ -12,7 +12,7 @@
 
 The selected authoring artifact is:
 
-`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
+`/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`
 
 It has uncommitted local edits. These edits were made after the user clarified that M1.5 cannot be satisfied by importing the old markdown plan. Atlas must build a native planning workflow/team that consumes a baseline evidence package, replans inside Atlas, exposes Workflow State, and produces a human-promoted candidate planning revision.
 
@@ -43,12 +43,12 @@ Fresh parser dry-run after the review-fix amendment:
 
 ## Changed or Important Files
 
-- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: amended M1.5 plan.
+- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: amended M1.5 plan.
 - `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/.codex/handoffs/2026-06-02-2348-runtime-recovery-export-proof-271.md`: older runtime-recovery handoff for #271; keep separate from plan projection work.
 
 ## Verification
 
-- `git diff --check -- .cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: pass.
+- `git diff --check -- .codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: pass.
 - `python3 skills/plan-to-issues/scripts/plan_to_issues.py --plan ... --repo Atlas-Memory-Framework/atlas-memory --strategy leaf-issues --dry-run`: pass, 123 children / 500 suggested points, dispatch blocked.
 - Product tests were not run.
 - No projection apply, issue mutation, Project mutation, queue apply, branch creation, PR creation, or dispatch was run.

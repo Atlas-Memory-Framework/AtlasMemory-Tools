@@ -5,7 +5,7 @@
 Create a fresh run directory such as:
 
 ```text
-.cursor/plan-runs/<run-id>/
+.codex/plan-runs/<run-id>/
 ├── manifest.json
 ├── plan.snapshot.md
 ├── section-index.json

@@ -19,7 +19,7 @@ structure, automation manifest readiness, false approval states, and stale plann
 Authority model:
 
 - the markdown plan is the authoring write surface
-- in `registry-first`, successful compile hands local planning authority to compiled registry YAML
+- compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it is not independent authoring authority
 - GitHub issues and PRs remain the execution truth
 - rendered overlays and project boards are derived views, not authoring inputs
 
@@ -39,6 +39,20 @@ In chat, reference the plan file:
 ```text
 @project/plans/my-plan.plan.md /plan continue
 ```
+
+## Many atomic plans in one campaign
+
+Large efforts should be split into multiple small plan artifacts, but `/plan` still operates on exactly one selected authoring artifact per invocation.
+
+Recommended pattern:
+
+- one plan owns one primary outcome
+- give each plan a stable `PlanId`
+- group related plans with optional `PlanGroup`
+- connect shards with optional `ParentPlan`, `DependsOnPlans`, `BlocksPlans`, and `AtomicScope`
+- keep cross-plan metadata descriptive; it is not a registry and does not replace explicit `@path` selection
+- use `/local-plan-agent-runtime` for agentic review of one selected plan at a time
+- project issues only after that plan's implementation and automation sections are explicit enough for zero-interaction agents
 
 ## Typical ways to use `/plan`
 
@@ -85,7 +99,7 @@ This is the most common “mid-plan” workflow: you learn something real (e.g.,
 ```text
 @.../my-plan.plan.md /plan
 New info: our authoritative deployment workflow is .github/workflows/deploy-dev.yml and it works today.
-Update the implementation plan to align to that and include tenant onboarding/provisioning steps.
+Update the implementation plan to align to that and include any required provisioning, activation, rollout, or rollback steps.
 ```
 
 ## How `/plan` progresses stages (gates)
@@ -134,8 +148,9 @@ Expectation when using `/plan`:
 - **Decision Log** entries (`DR-xxx`) whenever there is a decision boundary
 - **Workstreams** with explicit owners and merge points
 - **Named gates** (CI vs deployed) with clear “green means” definitions
-- **Runbooks** for onboarding/migrations/rollback
+- **Runbooks** for migrations, provisioning, rollout, rollback, or external effects when those domains are in scope
 - **Planning Reviews** with findings + dispositions (Accept/Reject/Defer)
+- **Dynamic specialist review roster** when the plan touches high-risk or domain-specific boundaries
 
 ## Related files
 
@@ -148,7 +163,17 @@ Expectation when using `/plan`:
 
 ## Optional external tracking
 
-Plans can carry optional tracking metadata for GitHub issues or projects, but that metadata does not replace the markdown plan as the authoring surface or the compiled registry as local planning authority after compile.
+Plans can carry optional tracking metadata for GitHub issues or projects, but that metadata does not replace the markdown plan as the authoring surface. Compiled registries and tracking systems are derived packages or downstream execution surfaces, not independent authoring authority.
+
+Plans can also carry optional campaign metadata for multi-plan efforts:
+
+- `PlanGroup`: campaign or roadmap grouping
+- `ParentPlan`: parent/index plan id or path
+- `DependsOnPlans`: upstream plan ids or paths
+- `BlocksPlans`: downstream plan ids or paths
+- `AtomicScope`: the single outcome this plan owns
+
+This metadata is for navigation, review, and later issue projection. It is not a source of truth for selecting the authoring artifact.
 
 Recommended pattern:
 

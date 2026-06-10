@@ -11,24 +11,23 @@ It owns four surfaces:
 - `templates/local-automation-runtime/`: reusable local automation host for GitHub issue-to-PR execution
 - `manifests/atlas-tools.v1.json`: supported harness adapters, canonical skills, agents, templates, and generated-copy inventory
 
-The repo also carries shared `scripts/`, `docs/`, `tests/`, `examples/`, and committed generated `.cursor/` compatibility files.
+The repo also carries shared `scripts/`, `docs/`, `tests/`, `examples/`, and committed generated `.codex/` adapter files.
 
 ## Mental Model
 
 - This repo is the source of truth for shared instructions, scripts, Project schema helpers, and runtime templates.
-- Generated harness files in downstream repos are install artifacts. Do not edit downstream `.codex/**`, `.cursor/**`, `.claude/**`, `.gemini/**`, or generated `AGENTS.md` copies as policy.
+- Generated harness files in downstream repos are install artifacts. Do not edit downstream `.codex/**`, `.claude/**`, `.gemini/**`, or generated `AGENTS.md` copies as policy.
 - An installed local automation runtime is operational state: local config, auth, logs, jobs, checkouts, locks, and validation artifacts.
 - GitHub issues and PRs are execution truth. GitHub Projects are the portfolio/automation signal layer. Markdown plans remain the authoring surface until projection.
 - Adding a target product repo usually means adding one line to a runtime `repos.txt`, not creating another runtime.
 
-The checked-in `.cursor/` directory is retained as a generated compatibility copy. Update `skills/` or `agents/`, then regenerate and verify.
+The checked-in `.codex/skills` and `.codex/agents` directories are retained as generated adapter copies. Update `skills/` or `agents/`, then regenerate and verify.
 
 ## Install
 
 Generate harness files into a target repository:
 
 ```bash
-python3 scripts/install_harness.py --harness cursor --target /path/to/project
 python3 scripts/install_harness.py --harness codex --target /path/to/project
 python3 scripts/install_harness.py --harness gemini --target /path/to/project
 python3 scripts/install_harness.py --harness claude --target /path/to/project
@@ -66,7 +65,7 @@ python3 scripts/verify_repo.py --skip-tests --strict-copy
 ```
 
 Runtime template tests live under `templates/local-automation-runtime/tests` and are included in `scripts/verify_repo.py`.
-The verifier also checks committed harness freshness, adapter CLI generation, executable bits, JSON and Python syntax, placeholder leaks, and trailing whitespace.
+The verifier also checks committed Codex harness freshness, adapter CLI generation, executable bits, JSON and Python syntax, placeholder leaks, and trailing whitespace.
 `--strict-copy` is intentionally noisy in a dirty local tree; runtime-local files such as `config.env`, `repos.txt`, `projects.txt`, validation JSON, `.venv/`, caches, and generated job state must be excluded from raw copies.
 
 ## Quick Start

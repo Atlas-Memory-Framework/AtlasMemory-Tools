@@ -1,6 +1,6 @@
 # Plan Authoring Template (Slim)
 
-Use this file to create a new plan doc when missing. Cursor will autoname it.
+Use this file to create a new plan doc when missing. The planning workflow will autoname it.
 Keep sections but let owners fill only their sections.
 
 Optional external tracking metadata can be added without changing plan semantics.
@@ -22,6 +22,13 @@ tracking:
 ## Plan State
 PlanFormatVersion: 2
 PlanId: <auto or short unique id>
+PlanGroup: <campaign/group id or none>
+PlanKind: feature | architecture | policy | spike | validation | roadmap | meta
+ParentPlan: <plan id/path or none>
+DependsOnPlans: <comma-separated plan ids/paths or none>
+BlocksPlans: <comma-separated plan ids/paths or none>
+AtomicScope: <one primary outcome this plan owns>
+CampaignMetadataAuthority: descriptive-only; explicit @path authoring artifact selection wins
 Status: Draft | ProblemDefined | FeatureChallenged | TechnicalChallenged | Planned | StructurallyComplete | SubstantivelyReviewed | Approved | InBuild | Shipped
 StructuralStatus: Draft | StructurallyComplete
 SubstanceStatus: NotReviewed | NeedsWork | SubstantivelyReviewed
@@ -145,22 +152,19 @@ Recommended default: <A/B/C> (why)
 ### Questions to Proceed (ranked)
 1) ...
 
-### Repo Security Reality Check (optional but recommended)
+### Dynamic Review Roster
 <!-- owner: planning-reviews -->
-<!-- Keep this short and evidence-driven. Do not include secrets. -->
+<!-- Required before Planning Reviews. Keep this short, evidence-driven, and plan-specific. Do not include secrets. -->
 - Refreshed: <YYYY-MM-DD>
-- Backend JWT proof:
-  - Observed default behavior:
-  - Deployed env fail-closed mechanism:
-  - Evidence hook (named gate):
-- Internal endpoints:
-  - Observed auth enforcement points:
-  - Observed sensitive logging risks (if any):
-  - Evidence hook (named gate):
-- APIM header projection / bypass paths:
-  - Observed projection/overrides:
-  - Bypass risk summary:
-  - Evidence hook (named gate):
+- Triggered specialist reviews:
+  - Review: <security/privacy | cloud/provider-infra | database/migrations | data-integrity/concurrency | api-contracts | external-effects/governance | cost/ops | ui/operator-workflow | domain-expert | automation-runtime | other>
+    - Why triggered:
+    - Specialist/persona:
+    - Evidence hooks (named gates or source checks):
+    - Status: Required | Optional | Complete | Deferred (DR-xxx)
+- Reviews considered but not triggered:
+  - Review:
+    - Why not triggered:
 
 ## Challenge Artifacts
 <!-- owner: critical-ideation -->
@@ -346,7 +350,7 @@ Applies when `AutomationTarget` is not `none`.
 
 ## Planning Reviews
 <!-- owner: planning-reviews -->
-### Zero-Context Review (required)
+### Zero-Context Review
 - Reviewer: doc-reviewer-zero-context
 - Refreshed: <YYYY-MM-DD>
 - RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
@@ -370,7 +374,7 @@ Applies when `AutomationTarget` is not `none`.
   - Reject: <finding-id> -> rationale
   - Defer: <finding-id> -> DR-xxx + trigger
 
-### Expert Technical Review (conditional)
+### Expert Technical Review
 - Trigger:
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
@@ -386,7 +390,7 @@ Applies when `AutomationTarget` is not `none`.
   - Reject: <finding-id> -> rationale
   - Defer: <finding-id> -> DR-xxx + trigger
 
-### Security/Privacy Review (required)
+### Security/Privacy Review
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
 - RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
@@ -400,7 +404,49 @@ Applies when `AutomationTarget` is not `none`.
   - Reject: <finding-id> -> rationale
   - Defer: <finding-id> -> DR-xxx + trigger
 
-### Human Readability Review (required)
+### Dynamic Specialist Review Roster
+- Reviewer: planning-reviews-orchestrator
+- Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
+- Findings (schema):
+  - Triggered specialist review rationale:
+    - F-001:
+  - Skipped specialist review rationale:
+    - F-002:
+  - Missing or deferred specialist coverage:
+    - F-003:
+- Triggered specialist reviews:
+  - Review: <name>
+    - Why triggered:
+    - Persona/sub-agent:
+    - Required evidence hooks:
+    - Status: Complete | Deferred (DR-xxx)
+- Reviews considered but not triggered:
+  - Review: <name>
+    - Why not triggered:
+- Disposition:
+  - Accept: F-001 -> DR-xxx
+  - Reject: F-002 -> rationale
+  - Defer: F-003 -> DR-xxx + trigger
+
+### Specialist Review: <name>
+- Trigger:
+- Reviewer:
+- Refreshed: <YYYY-MM-DD>
+- RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
+- ReviewedPlanHash: sha256:<hash of current plan excluding Planning Reviews>
+- Findings (schema):
+  - Domain risks and integration gaps:
+  - Missing validations or operational steps:
+  - Contradictions with stated invariants or authority boundaries:
+  - Patch suggestions (point to sections):
+- Disposition:
+  - Accept: <finding-id> -> DR-xxx
+  - Reject: <finding-id> -> rationale
+  - Defer: <finding-id> -> DR-xxx + trigger
+
+### Human Readability Review
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
 - RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
@@ -416,7 +462,7 @@ Applies when `AutomationTarget` is not `none`.
   - Reject: <finding-id> -> rationale
   - Defer: <finding-id> -> DR-xxx + trigger
 
-### Implementer Readiness Review (required)
+### Implementer Readiness Review
 - Reviewer:
 - Refreshed: <YYYY-MM-DD>
 - RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
@@ -430,7 +476,7 @@ Applies when `AutomationTarget` is not `none`.
   - Reject: <finding-id> -> rationale
   - Defer: <finding-id> -> DR-xxx + trigger
 
-### Automation Readiness Review (required when AutomationTarget != none)
+### Automation Readiness Review
 - Reviewer: automation-readiness
 - Refreshed: <YYYY-MM-DD>
 - RefreshedAt: <YYYY-MM-DDTHH:MM:SS>
@@ -448,7 +494,7 @@ Applies when `AutomationTarget` is not `none`.
 ## Execution Mechanics / Automation Appendix
 ### Authority / source-of-truth contract
 - Authoring write surface: selected harness-local plan artifact
-- Local planning authority after compile: selected harness-local planning registry
+- Local planning package after compile: selected harness-local planning registry, derived from the authoring plan and not independent intent authority
 - Execution truth: GitHub issues / PRs / checks
 - Execution UI / signal layer: GitHub Projects v2
 - Derived read models / views: runtime mirror, rendered overlays, forecasts

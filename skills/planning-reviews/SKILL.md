@@ -10,7 +10,7 @@ Run planning-phase review passes and update the Planning Reviews section with fi
 
 ## Authority contract lens
 - Markdown plan artifacts are the authoring write surface.
-- Compiled registry YAML is the local planning authority after compile in `registry-first`.
+- Compiled registry YAML, when used, is a derived machine-readable package for validator inputs and projection metadata; it is not independent authoring authority.
 - GitHub issues, PRs, and checks are the execution truth.
 - GitHub Projects v2, rendered overlays, and runtime-mirror outputs are downstream or derived evidence surfaces only.
 - Review packaging must preserve these boundaries; no review may treat markdown as execution-authoritative once `registry-first` is active.
@@ -26,36 +26,38 @@ Run planning-phase review passes and update the Planning Reviews section with fi
 ## Q/A loop (inline)
 - The orchestrator runs the Q/A loop inline with the user only for findings that still require human agency after auto-remediation.
 
-## Repo Security Reality Check (pre-security-review) (required)
-Planning security reviewers are plan-only by default, so they can miss repo facts unless the plan records them. Before running the Security/Privacy review, perform a lightweight repo-anchored spot-check and write a short summary into the plan (recommended location: `## Context Snapshot`).
+## Evidence and specialist review routing (pre-review) (required)
+Planning reviewers are plan-only by default, so they can miss repo facts unless the plan records them. Before running the review set, perform a lightweight repo-anchored spot-check and write a short summary into the plan (recommended location: `## Context Snapshot` -> `### Dynamic Review Roster`).
 
 ### Scope (keep it fast + deterministic)
-- Read the plan's declared auth, secrets, public route, webhook, data deletion, deployment, and infrastructure files from `## Context Snapshot`, `## Technical Plan`, and `## Implementation Plan`.
-- If the plan leaves infrastructure or hosting undecided, record that explicitly and do not require provider-specific gates such as Azure/APIM/Bicep validation.
-- Optional follow-ons only if the first pass finds risk: auth providers, error handling/logging, secret loading, webhook handlers, migration/delete paths, and deployment workflow files named by the repo.
+- Read the files and components named by `## Context Snapshot`, `## Technical Plan`, and `## Implementation Plan`.
+- Identify which review domains are actually in scope: security/privacy, cloud/provider infrastructure, database/migrations, data integrity/concurrency, API/contracts, external effects/governance, cost/operations, UI/operator workflow, domain expertise, and automation/runtime dispatch.
+- If infrastructure, hosting, auth, data deletion, external effects, or provider trust boundaries are undecided, record that explicitly and do not require provider-specific gates.
+- Optional follow-ons only if the first pass finds risk: auth providers, error handling/logging, secret loading, webhook handlers, migration/delete paths, deployment workflow files, API clients, data models, operator UI flows, and external-effect commands named by the repo.
 
 ### Output shape (must be copy/pasteable into the plan)
 Return a block like this (do not include secrets):
 
 ```md
-### Repo Security Reality Check (Refreshed: YYYY-MM-DD)
-- Backend JWT proof:
-  - Observed default behavior:
-  - Deployed env fail-closed mechanism:
-  - Evidence hook (named gate):
-- Internal endpoints:
-  - Observed auth enforcement points:
-  - Observed sensitive logging risks (if any):
-  - Evidence hook (named gate):
-- Public/deployed route boundary:
-  - Observed provider or hosting decision:
-  - Observed projection/overrides/bypass paths:
-  - Provider-specific validation needed (yes/no, why):
-  - Evidence hook (named gate):
+### Dynamic Review Roster (Refreshed: YYYY-MM-DD)
+- Triggered specialist reviews:
+  - Review: security/privacy
+    - Why triggered:
+    - Specialist/persona:
+    - Evidence hooks (named gates or source checks):
+    - Status:
+  - Review: <domain>
+    - Why triggered:
+    - Specialist/persona:
+    - Evidence hooks (named gates or source checks):
+    - Status:
+- Reviews considered but not triggered:
+  - Review: <domain>
+    - Why not triggered:
 ```
 
 ### Evidence hooks (required)
-For any trust-boundary assertion (APIM-only, private networking, “headers are trusted”, “fail-closed”), provide at least one **named gate** that makes the claim executable:
+For any safety, trust-boundary, data-handling, migration, external-effect, or provider-specific assertion, provide at least one **named gate** or source check that makes the claim executable:
 - Gate name (`G-SEC-...`)
 - Where it runs (CI | Local | Deployed)
 - Entrypoint/command or concrete check (not “run smoke tests”)
@@ -178,8 +180,25 @@ When used for Reviews/Approved re-entry, include this block before findings:
   - F-003: ...
 - Strongest remaining ambiguity:
   - F-004: ...
-- Pass/fail readability statement:
-  - F-005: ...
+- Pass/fail readability statement: Pass | Fail
+
+### Dynamic specialist review roster schema
+- Triggered specialist review rationale:
+  - F-001: ...
+- Skipped specialist review rationale:
+  - F-002: ...
+- Missing or deferred specialist coverage:
+  - F-003: ...
+
+### Specialist review schema
+- Domain risks and integration gaps:
+  - F-001: ...
+- Missing validations or operational steps:
+  - F-002: ...
+- Contradictions with stated invariants or authority boundaries:
+  - F-003: ...
+- Patch suggestions (point to plan sections):
+  - F-004: ...
 
 ### Automation readiness review schema
 - Manifest gaps:
@@ -202,6 +221,8 @@ When used for Reviews/Approved re-entry, include this block before findings:
 - Implementer readiness review (doc-reviewer-implementer)
 - Expert technical review if triggered (doc-reviewer-expert-tech) or mark N/A with rationale
 - Security/privacy review (required)
+- Dynamic specialist review roster (required)
+- Specialist reviews selected from plan content (conditional)
 - Human readability review (required)
 - Automation readiness review when `AutomationTarget != none`
 
@@ -215,6 +236,8 @@ Unless the user explicitly requests otherwise, run **one sub-agent per review ty
 - Implementer readiness review: run a reviewer using `/review mode=implementer-readiness`
 - Expert technical review: run a reviewer using `/review mode=expert-tech` when triggered; otherwise record `N/A` with rationale
 - Security/privacy review: run as a dedicated pass (security/privacy rubric below). If using a reviewer agent, treat it as expert-tech strictness but security/privacy scope.
+- Dynamic specialist review roster: run a planning-review orchestrator pass that names triggered and skipped specialist reviews with rationale.
+- Specialist reviews: run separate passes for triggered domains such as cloud/provider infrastructure, database/migrations, data-integrity/concurrency, API/contracts, external-effects/governance, cost/operations, UI/operator workflow, domain expertise, or automation/runtime dispatch.
 - Human readability review: run `/review mode=human-readability`
 - Automation readiness review: run `/review mode=automation-readiness` when `AutomationTarget != none`.
 
@@ -239,11 +262,11 @@ Then merge outputs into the plan’s `## Planning Reviews` section, preserving s
 
 ### Security/privacy review (required)
 - Focus on auth boundaries, data handling, privacy/compliance, and sensitive data paths.
-- You MUST ground findings in the latest plan state (and the Repo Security Reality Check block, if present).
+- You MUST ground findings in the latest plan state and the Dynamic Review Roster if present.
 - Force evidence-driven answers for:
   - Trust boundary enforcement (where enforced; how it fails closed in deployed envs)
   - Bypass paths (direct-to-backend routes; proof they’re blocked)
-  - Secret logging risks (API keys, tokens, SAS URLs, auth headers)
+  - Secret logging risks (API keys, tokens, signed URLs, auth headers)
   - Regression gates/tests that keep security assertions true (CI vs deployed)
 - If the plan asserts a security posture without an evidence hook (named gate/test + where it runs + command/entrypoint + green means), emit a finding:
   - `Remediation target: Implementation`

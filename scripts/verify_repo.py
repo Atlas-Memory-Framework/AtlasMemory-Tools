@@ -26,8 +26,8 @@ ALLOWED_CANONICAL_TEMPLATE_REFERENCES = {
     "Atlas-" + "Memory-Framework": {
         "skills/github-project/SKILL.md",
         "skills/github-project/scripts/create_project.py",
-        ".cursor/skills/github-project/SKILL.md",
-        ".cursor/skills/github-project/scripts/create_project.py",
+        ".codex/skills/github-project/SKILL.md",
+        ".codex/skills/github-project/scripts/create_project.py",
         "docs/github-project-template-views.md",
         "tests/test_github_project_skill.py",
     },
@@ -49,7 +49,8 @@ SCAN_PATHS = (
     "tests",
     "manifests",
     ".github",
-    ".cursor",
+    ".codex/skills",
+    ".codex/agents",
 )
 
 LOCAL_ARTIFACT_DIR_NAMES = {
@@ -92,9 +93,9 @@ REQUIRED_COPY_PATHS = (
     "scripts/verify_repo.py",
     "tests/test_manifest_and_harness.py",
     ".github/workflows/verify.yml",
-    ".cursor/skills/local-automation-runtime-setup/SKILL.md",
-    ".cursor/skills/local-automation-runtime-operate/SKILL.md",
-    ".cursor/skills/local-automation-runtime-upgrade/SKILL.md",
+    ".codex/skills/local-automation-runtime-setup/SKILL.md",
+    ".codex/skills/local-automation-runtime-operate/SKILL.md",
+    ".codex/skills/local-automation-runtime-upgrade/SKILL.md",
 )
 
 JSON_FILES = (
@@ -418,8 +419,8 @@ def main() -> int:
         if not args.skip_tests:
             print("== test suite", flush=True)
             run_test_suite()
-        print("== committed cursor adapter", flush=True)
-        run([sys.executable, "scripts/install_harness.py", "--harness", "cursor", "--target", ".", "--check"])
+        print("== committed codex adapter", flush=True)
+        run([sys.executable, "scripts/install_harness.py", "--harness", "codex", "--target", ".", "--check"])
         run([sys.executable, "scripts/verify_harness.py", "--target", "."])
         print("== generated adapter CLIs", flush=True)
         check_temp_harness_cli()

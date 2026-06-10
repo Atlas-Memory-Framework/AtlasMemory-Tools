@@ -350,6 +350,7 @@ def repair(args: argparse.Namespace) -> None:
     repair_path = common.jobs_dir() / "checkouts" / common.safe_repo_name(repo) / f"pr-{number}-repair-{common.now_id()}"
     repair_path.parent.mkdir(parents=True, exist_ok=True)
     common.run(["git", "worktree", "add", "--detach", str(repair_path), f"origin/{head}"], cwd=repo_path)
+    (job_dir / "worktree.txt").write_text(str(repair_path) + "\n", encoding="utf-8")
     checked_out = common.run(["git", "rev-parse", "HEAD"], cwd=repair_path).stdout.strip()
     expected = str(pr.get("headRefOid") or "").strip()
     if expected and checked_out != expected:

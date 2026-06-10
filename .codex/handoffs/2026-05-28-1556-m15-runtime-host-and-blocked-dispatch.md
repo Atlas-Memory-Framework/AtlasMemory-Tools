@@ -42,7 +42,7 @@ Verified current queue labels after dry-run work:
 - `./atlas-agent-reconcile --repos-file repos.txt --limit 700`: read-only run completed.
 - `./atlas-agent-project-reconcile --projects-file projects.txt --limit 700 --hydrate-metadata --dry-run --no-pr-lookup`: completed and found only stale metadata / duplicate SourceId / Project-body disagreements already known from the previous handoff.
 - `./atlas-agent-triage --repos-file repos.txt`: no dispatchable issues; older open issues remain blocked by review/human/untrusted-author gates.
-- `./atlas-agent-plan-queue --plan /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md --repo Atlas-Memory-Framework/atlas-memory --dry-run`: `queueable_count=0`, `blocked_count=104`.
+- `./atlas-agent-plan-queue --plan /run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md --repo Atlas-Memory-Framework/atlas-memory --dry-run`: `queueable_count=0`, `blocked_count=104`.
 - `./atlas-agent-issue-decompose --issue #145 --issue #158 --issue #148 --issue #149 --dry-run --no-create-subissues`: all four M1.5 roots are already decomposed and `dispatchable_after_decomposition=false`.
 
 ## M1.5 Root Audit

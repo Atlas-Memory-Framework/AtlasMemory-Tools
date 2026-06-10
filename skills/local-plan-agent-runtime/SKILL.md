@@ -57,7 +57,7 @@ These scripts do not launch Codex by themselves. They provide guardrails for an 
 
 1. Select exactly one authoring artifact.
 2. Print `AuthoringArtifact = <path>`.
-3. Create a fresh run directory such as `.cursor/plan-runs/<run-id>/`.
+3. Create a fresh run directory such as `.codex/plan-runs/<run-id>/`.
 4. Snapshot the plan and record plan hash and section hashes.
 5. Create bounded worker tasks using personas from `references/personas.md`.
 6. Launch independent workers against the immutable snapshot.
@@ -102,6 +102,12 @@ Use a minimal set unless the user asks for exhaustive review:
 - `evidence-trust-policy-reviewer`
 - `automation-readiness-reviewer`
 - `human-readability-reviewer`
+
+## Dynamic specialist fanout
+
+For high-risk, cross-domain, or explicitly exhaustive planning, select additional personas from `references/personas.md` based on the plan surface. Prefer one narrow specialist per triggered domain over broad general review. Examples include security/privacy, cloud/provider infrastructure, database/migrations, external effects/governance, cost/operations, UI/operator workflow, and domain expertise.
+
+Specialists still follow the same authority rules: they review the immutable snapshot, return validated proposal JSON, do not edit the canonical plan, do not flip gates or approvals, and do not encode human-agency decisions.
 
 ## Output
 

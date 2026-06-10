@@ -272,6 +272,31 @@ def base_plan(review_hash: str = "0" * 64) -> str:
         - Disposition:
           - Reject: F-001 -> no issue
 
+        ### Dynamic Specialist Review Roster
+        - Reviewer: planning-reviews-orchestrator
+        - RefreshedAt: 2026-05-29T08:30:00
+        - ReviewedPlanHash: sha256:{review_hash}
+        - Findings (schema):
+          - Triggered specialist review rationale:
+            - F-001: security/privacy is required for every plan
+          - Skipped specialist review rationale:
+            - F-002: no additional specialist reviews triggered
+          - Missing or deferred specialist coverage:
+            - F-003: none
+        - Triggered specialist reviews:
+          - Review: security/privacy
+            - Why triggered: required baseline review
+            - Persona/sub-agent: security-privacy-reviewer
+            - Required evidence hooks: none for local validator fixture
+            - Status: Complete
+        - Reviews considered but not triggered:
+          - Review: cloud/provider-infra
+            - Why not triggered: no provider infrastructure in scope
+        - Disposition:
+          - Accept: F-001 -> DR-001
+          - Reject: F-002 -> no issue
+          - Reject: F-003 -> no issue
+
         ### Human Readability Review
         - Reviewer: doc-reviewer-human
         - RefreshedAt: 2026-05-29T08:30:00
@@ -343,6 +368,28 @@ class PlanValidatorTests(unittest.TestCase):
 
         self.assertEqual(result.status, "Fail")
         self.assertTrue(any("Legacy Refreshed date is not enough" in message for message in result.messages))
+
+    def test_planning_reviews_require_dynamic_specialist_roster(self) -> None:
+        module = load_validator_module()
+        digest = module.reviewed_plan_hash(base_plan())
+        plan = base_plan(digest)
+        start = plan.index("### Dynamic Specialist Review Roster")
+        end = plan.index("### Human Readability Review")
+        plan = plan[:start] + plan[end:]
+
+        result = next(result for result in module.validate(plan) if result.gate == "PlanningReviewsComplete")
+
+        self.assertEqual(result.status, "Fail")
+        self.assertTrue(any("Dynamic Specialist Review Roster" in message for message in result.messages))
+
+    def test_planning_review_titles_allow_parenthetical_annotations(self) -> None:
+        module = load_validator_module()
+        digest = module.reviewed_plan_hash(base_plan())
+        plan = base_plan(digest).replace("### Zero-Context Review", "### Zero-Context Review (required)")
+
+        result = next(result for result in module.validate(plan) if result.gate == "PlanningReviewsComplete")
+
+        self.assertEqual(result.status, "Pass")
 
     def test_plan_state_sanity_blocks_open_questions(self) -> None:
         module = load_validator_module()

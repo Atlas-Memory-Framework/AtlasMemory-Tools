@@ -70,7 +70,7 @@ GitHub Project reconciliation:
 
 Local checkout:
 - Fast-forwarded `atlas-memory` to `origin/fix/mime-resolution-pins-mainline` at `ac01c3ae99dd05aabeee65b260aee4dd1fb3833f`.
-- No tracked local changes remain in `atlas-memory`; only pre-existing untracked `.cursor/plan-runs/...`.
+- No tracked local changes remain in `atlas-memory`; only pre-existing untracked `.codex/plan-runs/...`.
 - `AtlasMemory-Tools` has no tracked changes apart from this handoff; `.codex/` is untracked.
 
 ## Verification
@@ -108,7 +108,7 @@ Notes:
 
 ## Important Files And Artifacts
 
-- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.cursor/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: current plan and M1.5 scope. Key sections include `M1.5 Atlas-Owned Execution Cutover Stop`, `TOOLS-EXIT-001`, and `G-M15-SwitchOverPacket`.
+- `/run/host/var/home/mat/Desktop/AtlasMemory-Workspace/atlas-memory/.codex/plans/atlas_core_local_first_workspace_operations_mvp_2026-05-21.plan.md`: current plan and M1.5 scope. Key sections include `M1.5 Atlas-Owned Execution Cutover Stop`, `TOOLS-EXIT-001`, and `G-M15-SwitchOverPacket`.
 - `/run/host/var/home/mat/Desktop/AtlasMemory-Tools/templates/local-automation-runtime/`: canonical runtime template. Do not operate directly from this path as a live runtime.
 - `/tmp/atlas-project5-reconcile-dry.json`: dry-run summary from Project #5 reconciliation.
 - `/tmp/atlas-project5-reconcile-apply.json`: apply summary from Project #5 reconciliation.

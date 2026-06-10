@@ -38,13 +38,14 @@ class ManifestAndHarnessTests(unittest.TestCase):
         for template in self.manifest["templates"]:
             self.assertTrue((ROOT / template["path"]).is_dir(), template["name"])
 
-    def test_canonical_skills_do_not_point_at_cursor_sources(self) -> None:
+    def test_canonical_skills_do_not_point_at_retired_hidden_sources(self) -> None:
+        retired_path = "." + "cur" + "sor/"
         offenders: list[str] = []
         for path in (ROOT / "skills").rglob("*"):
             if not path.is_file():
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
-            if ".cursor/skills" in text or ".cursor/agents" in text:
+            if retired_path in text:
                 offenders.append(str(path.relative_to(ROOT)))
         self.assertEqual(offenders, [])
 
@@ -59,8 +60,8 @@ class ManifestAndHarnessTests(unittest.TestCase):
     def test_manual_edit_to_generated_file_fails_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
-            harnesslib.install_harness("cursor", target)
-            generated = target / ".cursor" / "skills" / "plan" / "SKILL.md"
+            harnesslib.install_harness("codex", target)
+            generated = target / ".codex" / "skills" / "plan" / "SKILL.md"
             generated.write_text(generated.read_text(encoding="utf-8") + "\nmanual edit\n", encoding="utf-8")
 
             errors = harnesslib.verify_harness_target(target)
@@ -70,34 +71,38 @@ class ManifestAndHarnessTests(unittest.TestCase):
     def test_missing_generated_file_fails_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
-            harnesslib.install_harness("cursor", target)
-            generated = target / ".cursor" / "skills" / "plan" / "SKILL.md"
+            harnesslib.install_harness("codex", target)
+            generated = target / ".codex" / "skills" / "plan" / "SKILL.md"
             generated.unlink()
 
             errors = harnesslib.verify_harness_target(target)
 
         self.assertTrue(any("missing generated file" in error for error in errors))
 
-    def test_committed_cursor_copy_matches_generated_output(self) -> None:
+    def test_committed_codex_copy_matches_generated_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
-            harnesslib.install_harness("cursor", target)
-            generated_root = target / ".cursor"
-            committed_root = ROOT / ".cursor"
+            harnesslib.install_harness("codex", target)
+            generated_root = target / ".codex"
+            committed_root = ROOT / ".codex"
             self.assertTrue(committed_root.exists())
             mismatches: list[str] = []
-            for path in generated_root.rglob("*"):
-                if not path.is_file():
-                    continue
-                rel = path.relative_to(generated_root)
-                committed = committed_root / rel
-                if not committed.exists() or committed.read_bytes() != path.read_bytes():
-                    mismatches.append(str(rel))
-            extra = [
-                str(path.relative_to(committed_root))
-                for path in committed_root.rglob("*")
-                if path.is_file() and not (generated_root / path.relative_to(committed_root)).exists()
-            ]
+            extra: list[str] = []
+            for subdir in ("skills", "agents"):
+                generated_subdir = generated_root / subdir
+                committed_subdir = committed_root / subdir
+                for path in generated_subdir.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    rel = path.relative_to(generated_root)
+                    committed = committed_root / rel
+                    if not committed.exists() or committed.read_bytes() != path.read_bytes():
+                        mismatches.append(str(rel))
+                extra.extend(
+                    str(path.relative_to(committed_root))
+                    for path in committed_subdir.rglob("*")
+                    if path.is_file() and not (generated_root / path.relative_to(committed_root)).exists()
+                )
         self.assertEqual(mismatches, [])
         self.assertEqual(extra, [])
 
