@@ -515,6 +515,7 @@ class RuntimeTemplateTests(unittest.TestCase):
                 checkout_max_age_hours=24,
                 keep_checkouts_per_repo=1,
                 protect_recent_hours=0,
+                include_dirty_checkouts=False,
             )
 
             with mock.patch.dict(os.environ, {"AGENT_JOBS": str(jobs)}, clear=False):
@@ -539,10 +540,33 @@ class RuntimeTemplateTests(unittest.TestCase):
                 checkout_max_age_hours=1,
                 keep_checkouts_per_repo=0,
                 protect_recent_hours=0,
+                include_dirty_checkouts=False,
             )
 
             with mock.patch.dict(os.environ, {"AGENT_JOBS": str(jobs)}, clear=False):
                 candidates = self.cleanup.checkout_candidates(args, now)
+
+        self.assertEqual(candidates, [])
+
+    def test_cleanup_protects_dirty_worktree_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = root / "jobs"
+            worktree = jobs / "checkouts" / "owner__repo" / "issue-1-old"
+            worktree.mkdir(parents=True)
+            now = time.time()
+            os.utime(worktree, (now - 4 * 3600, now - 4 * 3600))
+            args = types.SimpleNamespace(
+                active_job_hours=12,
+                checkout_max_age_hours=1,
+                keep_checkouts_per_repo=0,
+                protect_recent_hours=0,
+                include_dirty_checkouts=False,
+            )
+
+            with mock.patch.dict(os.environ, {"AGENT_JOBS": str(jobs)}, clear=False):
+                with mock.patch.object(self.cleanup, "worktree_has_local_changes", return_value=True):
+                    candidates = self.cleanup.checkout_candidates(args, now)
 
         self.assertEqual(candidates, [])
 

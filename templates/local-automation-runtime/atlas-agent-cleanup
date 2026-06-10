@@ -206,6 +206,17 @@ def registered_worktrees(repo_cache: pathlib.Path) -> set[pathlib.Path]:
     return paths
 
 
+def worktree_has_local_changes(worktree: pathlib.Path) -> bool:
+    proc = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=str(worktree),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.returncode == 0 and bool(proc.stdout.strip())
+
+
 def checkout_candidates(args: argparse.Namespace, now: float) -> list[CleanupItem]:
     jobs = common.jobs_dir()
     root = jobs / "checkouts"
@@ -234,6 +245,9 @@ def checkout_candidates(args: argparse.Namespace, now: float) -> list[CleanupIte
             if contains_live_process_cwd(child, live_cwds):
                 continue
             if git_locks_present(child):
+                continue
+            if not args.include_dirty_checkouts and worktree_has_local_changes(child):
+                print(f"CLEANUP skip dirty checkout {child}", flush=True)
                 continue
             old_enough = args.checkout_max_age_hours >= 0 and child_age >= args.checkout_max_age_hours
             over_keep = args.keep_checkouts_per_repo >= 0 and child not in kept
@@ -534,6 +548,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=common.config_float("AGENT_CLEANUP_ACTIVE_JOB_HOURS", 12.0),
         help="Protect worktrees referenced by job worktree.txt markers this recent.",
+    )
+    parser.add_argument(
+        "--include-dirty-checkouts",
+        action="store_true",
+        help="Allow cleanup candidates with local git changes. Default protects dirty worktrees.",
     )
     parser.add_argument("--lock-wait-seconds", type=float, default=5.0)
     parser.add_argument("--lock-stale-seconds", type=float, default=6 * 60 * 60)
