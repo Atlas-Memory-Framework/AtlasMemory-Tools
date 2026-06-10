@@ -9,7 +9,6 @@ defaults to dry-run reporting unless --apply is supplied.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import pathlib
 import shutil
@@ -97,12 +96,35 @@ def path_size_bytes(path: pathlib.Path) -> int:
     return total
 
 
-def safe_relative_child(path: pathlib.Path, root: pathlib.Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
+def live_process_cwds() -> list[pathlib.Path]:
+    proc_root = pathlib.Path("/proc")
+    if not proc_root.exists():
+        return []
+    paths: list[pathlib.Path] = []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            target = os.readlink(entry / "cwd")
+        except OSError:
+            continue
+        if target.endswith(" (deleted)"):
+            target = target.removesuffix(" (deleted)")
+        candidate = pathlib.Path(target)
+        if candidate.is_absolute():
+            paths.append(candidate.resolve(strict=False))
+    return paths
+
+
+def contains_live_process_cwd(path: pathlib.Path, live_cwds: list[pathlib.Path]) -> bool:
+    root = path.resolve(strict=False)
+    for cwd in live_cwds:
+        try:
+            cwd.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def git_dir_for_worktree(worktree: pathlib.Path) -> pathlib.Path | None:
@@ -190,6 +212,7 @@ def checkout_candidates(args: argparse.Namespace, now: float) -> list[CleanupIte
     if not root.exists():
         return []
     protected = protected_worktree_paths(jobs, args.active_job_hours, now)
+    live_cwds = live_process_cwds()
     items: list[CleanupItem] = []
     for repo_root in sorted(root.iterdir()):
         if not repo_root.is_dir() or repo_root.is_symlink():
@@ -207,6 +230,8 @@ def checkout_candidates(args: argparse.Namespace, now: float) -> list[CleanupIte
             if resolved in protected:
                 continue
             if child_age < args.protect_recent_hours:
+                continue
+            if contains_live_process_cwd(child, live_cwds):
                 continue
             if git_locks_present(child):
                 continue
@@ -392,6 +417,8 @@ def apply_cleanup(args: argparse.Namespace, items: list[CleanupItem]) -> tuple[l
     for item in items:
         if limit is not None and len(deleted) >= limit:
             break
+        if not item.path.exists():
+            continue
         if remove_item(item, errors):
             deleted.append(item)
     return deleted, errors

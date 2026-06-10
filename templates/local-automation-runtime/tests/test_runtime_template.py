@@ -3,11 +3,14 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +36,8 @@ class RuntimeTemplateTests(unittest.TestCase):
         cls.bridge = load_script("template_plan_queue", "atlas-agent-plan-queue")
         cls.local_validate = load_script("template_local_validate", "atlas-agent-local-validate")
         cls.deployed_validate = load_script("template_deployed_validate", "atlas-agent-deployed-validate")
+        cls.cleanup = load_script("template_cleanup", "atlas-agent-cleanup")
+        cls.unattended = load_script("template_unattended", "atlas-agent-unattended")
 
     def test_finalizer_summary_serializes_decisions(self) -> None:
         decision = self.finalize.FinalizeDecision(
@@ -386,6 +391,7 @@ class RuntimeTemplateTests(unittest.TestCase):
     def test_durable_template_contains_unattended_validation_runtime(self) -> None:
         for relative in (
             "atlas-agent-unattended",
+            "atlas-agent-cleanup",
             "atlas-agent-issue-decompose",
             "atlas-agent-reconcile",
             "atlas-agent-project-reconcile",
@@ -491,6 +497,89 @@ class RuntimeTemplateTests(unittest.TestCase):
 
         self.assertEqual(self.deployed_validate.configured_install_commands(entry), ["npm ci"])
         self.assertEqual(self.deployed_validate.configured_commands(entry), ["npm run build"])
+
+    def test_cleanup_selects_stale_checkout_beyond_keep_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = root / "jobs"
+            repo_checkouts = jobs / "checkouts" / "owner__repo"
+            old = repo_checkouts / "issue-1-old"
+            new = repo_checkouts / "issue-2-new"
+            old.mkdir(parents=True)
+            new.mkdir()
+            now = time.time()
+            os.utime(old, (now - 4 * 3600, now - 4 * 3600))
+            os.utime(new, (now, now))
+            args = types.SimpleNamespace(
+                active_job_hours=12,
+                checkout_max_age_hours=24,
+                keep_checkouts_per_repo=1,
+                protect_recent_hours=0,
+            )
+
+            with mock.patch.dict(os.environ, {"AGENT_JOBS": str(jobs)}, clear=False):
+                candidates = self.cleanup.checkout_candidates(args, now)
+
+        self.assertEqual([candidate.path.name for candidate in candidates], ["issue-1-old"])
+        self.assertEqual(candidates[0].reason, "exceeds per-repo checkout keep count")
+
+    def test_cleanup_protects_recent_job_worktree_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = root / "jobs"
+            worktree = jobs / "checkouts" / "owner__repo" / "issue-1-old"
+            worktree.mkdir(parents=True)
+            job = jobs / "issue-1-20260101T000000Z"
+            job.mkdir()
+            (job / "worktree.txt").write_text(str(worktree) + "\n", encoding="utf-8")
+            now = time.time()
+            os.utime(worktree, (now - 4 * 3600, now - 4 * 3600))
+            args = types.SimpleNamespace(
+                active_job_hours=12,
+                checkout_max_age_hours=1,
+                keep_checkouts_per_repo=0,
+                protect_recent_hours=0,
+            )
+
+            with mock.patch.dict(os.environ, {"AGENT_JOBS": str(jobs)}, clear=False):
+                candidates = self.cleanup.checkout_candidates(args, now)
+
+        self.assertEqual(candidates, [])
+
+    def test_unattended_cleanup_command_respects_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chain_dir = Path(tmp)
+            args = types.SimpleNamespace(
+                cleanup_measure_size=True,
+                cleanup_max_delete=3,
+                cleanup_target=["checkouts"],
+                cleanup_mode="apply",
+                dry_run=True,
+            )
+
+            command = self.unattended.build_cleanup_command(args, chain_dir, "chain", 2)
+
+        self.assertNotIn("--apply", command.args)
+        self.assertIn("--measure-size", command.args)
+        self.assertIn("--target", command.args)
+        self.assertIn("checkouts", command.args)
+        self.assertEqual(command.summary_file, chain_dir / "cleanup-cycle-2.json")
+
+    def test_unattended_cleanup_command_can_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            chain_dir = Path(tmp)
+            args = types.SimpleNamespace(
+                cleanup_measure_size=False,
+                cleanup_max_delete=None,
+                cleanup_target=[],
+                cleanup_mode="apply",
+                dry_run=False,
+            )
+
+            command = self.unattended.build_cleanup_command(args, chain_dir, "chain", 1)
+
+        self.assertIn("--apply", command.args)
+        self.assertEqual(command.name, "cleanup-apply")
 
 
 if __name__ == "__main__":

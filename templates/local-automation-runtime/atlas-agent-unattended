@@ -43,6 +43,7 @@ DEFAULT_STAGES = (
     "review",
     "finalize",
     "summary",
+    "cleanup",
 )
 WARNING_PATTERNS = (
     "Traceback (most recent call last):",
@@ -105,6 +106,7 @@ def parse_stages(raw: str | None) -> list[str]:
         "repair",
         "finalize",
         "summary",
+        "cleanup",
     }
     unknown = [stage for stage in stages if stage not in allowed]
     if unknown:
@@ -1005,6 +1007,29 @@ def build_repair_commands(
     return commands
 
 
+def build_cleanup_command(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: int) -> CommandSpec:
+    summary_file = chain_dir / f"cleanup-cycle-{cycle}.json"
+    cmd = [
+        str(common.RUNTIME_DIR / "atlas-agent-cleanup"),
+        "--summary",
+        str(summary_file),
+    ]
+    if args.cleanup_measure_size:
+        cmd.append("--measure-size")
+    if args.cleanup_max_delete is not None:
+        cmd.extend(["--max-delete", str(args.cleanup_max_delete)])
+    for target in args.cleanup_target or []:
+        cmd.extend(["--target", target])
+    if args.cleanup_mode == "apply" and not args.dry_run:
+        cmd.append("--apply")
+    return CommandSpec(
+        name=f"cleanup-{args.cleanup_mode}",
+        args=cmd,
+        log_file=common.logs_dir() / f"unattended-{chain_id}-cleanup-cycle-{cycle}.log",
+        summary_file=summary_file,
+    )
+
+
 def any_failed(results: list[StageResult]) -> bool:
     return any(result.returncode != 0 for result in results)
 
@@ -1174,6 +1199,14 @@ def run_cycle(args: argparse.Namespace, chain_dir: Path, chain_id: str, cycle: i
             print(f"=== unattended cycle {cycle}/{args.cycles}: summary ===", flush=True)
             results = [run_command(build_summary_command(args, chain_dir, chain_id, cycle))]
             print_stage_report(stage, results)
+        elif stage == "cleanup":
+            if args.cleanup_mode == "off":
+                results = []
+            else:
+                print(f"=== unattended cycle {cycle}/{args.cycles}: cleanup ({args.cleanup_mode}) ===", flush=True)
+                command = build_cleanup_command(args, chain_dir, chain_id, cycle)
+                results = [run_command(command)]
+                print_stage_report(stage, results)
         else:
             raise AssertionError(stage)
         write_stage_results(chain_dir, cycle, stage, results)
@@ -1391,6 +1424,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repair-dry-run", action="store_true")
     parser.add_argument("--post-cycle-summary", action="store_true")
     parser.add_argument("--post-triage-teams-per-repo", action="store_true")
+    parser.add_argument(
+        "--cleanup-mode",
+        choices=["off", "dry-run", "apply"],
+        default=common.config_value("AGENT_CLEANUP_MODE", "dry-run"),
+        help="Run runtime artifact cleanup at the cleanup stage. Default dry-run reports without deleting.",
+    )
+    parser.add_argument(
+        "--cleanup-target",
+        action="append",
+        choices=["checkouts", "codex-homes", "jobs", "logs", "imported-backups"],
+        default=[],
+        help="Limit cleanup targets. Repeatable. Defaults to atlas-agent-cleanup's all-target policy.",
+    )
+    parser.add_argument(
+        "--cleanup-max-delete",
+        type=int,
+        default=None,
+        help="Maximum cleanup candidates to delete during this cycle. Defaults to AGENT_CLEANUP_MAX_DELETE.",
+    )
+    parser.add_argument(
+        "--cleanup-measure-size",
+        action="store_true",
+        help="Measure cleanup candidate sizes during cycle cleanup. This is slower on large trees.",
+    )
     parser.add_argument("--stop-on-error", action="store_true")
     return parser
 
@@ -1406,6 +1463,10 @@ def main() -> None:
         raise SystemExit("--dispatch-max-per-repo must be >= 1")
     if args.project_reconcile_every < 0:
         raise SystemExit("--project-reconcile-every must be >= 0")
+    if args.cleanup_mode not in {"off", "dry-run", "apply"}:
+        raise SystemExit("--cleanup-mode must be one of: off, dry-run, apply")
+    if args.cleanup_max_delete is not None and args.cleanup_max_delete < 0:
+        raise SystemExit("--cleanup-max-delete must be >= 0")
     if args.decompose_max < 0:
         raise SystemExit("--decompose-max must be >= 0")
     if args.repair_max < 0:
