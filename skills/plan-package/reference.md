@@ -34,7 +34,7 @@ Each leaf records:
 
 - `source_id`
 - `manifest_leaf_id`
-- `spec_path`
+- `spec_path` (`null` for `Spec: inline` manifest leaves)
 - `spec_hash`
 - `dependencies`
 - `required_gates`

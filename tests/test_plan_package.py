@@ -160,6 +160,34 @@ Implement {manifest_leaf_id}.
     def compile(self) -> dict:
         return COMPILE.compile_registry(self.write_package(), root=self.root)
 
+    def write_inline_package(self) -> Path:
+        plan = """# Feature: Inline Package Test
+
+## Plan State
+PlanId: plan-package-test
+
+## Automation Issue Manifest
+- LEAF-001: Inline example
+  - Spec: inline
+  - Dispatch: agent-ready
+  - Depends on:
+    - none
+  - Files in scope:
+    - `skills/example/scripts/inline_example.py`
+  - Files out of scope:
+    - `skills/example/scripts/other.py`
+  - Required gates:
+    - G-CI-Example
+  - Validation:
+    - python3 -m unittest tests.test_example
+  - Acceptance criteria:
+    - Inline example passes.
+  - One PR contract: yes
+"""
+        path = self.root / "plans/inline.plan.md"
+        path.write_text(plan, encoding="utf-8")
+        return path
+
     def test_compile_output_is_deterministic_and_records_required_metadata(self) -> None:
         first = self.compile()
         second = self.compile()
@@ -194,6 +222,20 @@ Implement {manifest_leaf_id}.
         second = next(leaf for leaf in registry["leaves"] if leaf["manifest_leaf_id"] == "LEAF-002")
 
         self.assertFalse(second["local_export"]["enabled"])
+
+    def test_compiler_includes_inline_manifest_leaves(self) -> None:
+        registry = COMPILE.compile_registry(self.write_inline_package(), root=self.root)
+        result = VALIDATE.validate_registry(registry, root=self.root)
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(len(registry["leaves"]), 1)
+        leaf = registry["leaves"][0]
+        self.assertEqual(leaf["source_id"], "plan-package-test#LEAF-001")
+        self.assertIsNone(leaf["spec_path"])
+        self.assertEqual(leaf["dispatch_mode"], "agent-ready")
+        self.assertEqual(leaf["files_in_scope"], ["skills/example/scripts/inline_example.py"])
+        self.assertTrue(leaf["local_export"]["enabled"])
+        self.assertNotIn(None, [member["path"] for member in registry["members"]])
 
     def test_validator_rejects_missing_package_member(self) -> None:
         registry = self.compile()
@@ -250,6 +292,19 @@ Implement {manifest_leaf_id}.
         result = VALIDATE.validate_registry(registry, root=self.root)
         self.assertFalse(result.ok)
         self.assertTrue(any("Dependency mismatch" in error for error in result.errors))
+
+    def test_validator_rejects_stale_regenerated_leaf_metadata(self) -> None:
+        registry = self.compile()
+        registry["leaves"][0]["files_in_scope"] = ["skills/example/scripts/stale.py"]
+        registry["package_hash"] = COMPILE.package_hash(registry)
+        result = VALIDATE.validate_registry(registry, root=self.root)
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any(
+                "Regenerated leaf metadata mismatch" in error and "files_in_scope" in error
+                for error in result.errors
+            )
+        )
 
     def test_compiler_rejects_manifest_spec_hash_mismatch(self) -> None:
         plan_path = self.write_package(second_leaf=False)

@@ -184,21 +184,28 @@ def compile_registry(plan_path: Path, *, root: Path | None = None, package_id: s
         manifest_fields["ManifestLeafId"] = manifest_leaf_id
         manifest_fields["Title"] = title
         spec_path = first_field(manifest_fields, "Spec path", "SpecPath")
-        if not spec_path:
-            continue
-        spec_rel = relative_to_root(root, confined_path(root, spec_path))
-        spec_markdown = read_text(root / spec_rel)
-        validation = ISSUE_SPEC.validate_sidecar(spec_markdown, plan_markdown, manifest_leaf_id)
-        if not validation.ok:
-            raise ValueError(f"{manifest_leaf_id}: " + "; ".join(validation.errors))
+        spec_rel: str | None = None
+        if spec_path:
+            spec_rel = relative_to_root(root, confined_path(root, spec_path))
+            spec_markdown = read_text(root / spec_rel)
+            validation = ISSUE_SPEC.validate_sidecar(spec_markdown, plan_markdown, manifest_leaf_id)
+            if not validation.ok:
+                raise ValueError(f"{manifest_leaf_id}: " + "; ".join(validation.errors))
 
-        spec_fields = ISSUE_SPEC.parse_fields(spec_markdown)
-        actual_spec_hash = ISSUE_SPEC.canonical_spec_hash(spec_markdown)
-        declared_spec_hash = first_field(manifest_fields, "Spec hash", "SpecHash")
-        if declared_spec_hash and declared_spec_hash != actual_spec_hash:
-            raise ValueError(
-                f"{manifest_leaf_id}: Spec hash mismatch: manifest {declared_spec_hash}, actual {actual_spec_hash}"
-            )
+            spec_fields = ISSUE_SPEC.parse_fields(spec_markdown)
+            actual_spec_hash = ISSUE_SPEC.canonical_spec_hash(spec_markdown)
+            declared_spec_hash = first_field(manifest_fields, "Spec hash", "SpecHash")
+            if declared_spec_hash and declared_spec_hash != actual_spec_hash:
+                raise ValueError(
+                    f"{manifest_leaf_id}: Spec hash mismatch: manifest {declared_spec_hash}, actual {actual_spec_hash}"
+                )
+        else:
+            validation = ISSUE_SPEC.validate_inline_manifest(plan_markdown, manifest_leaf_id)
+            if not validation.ok:
+                raise ValueError(f"{manifest_leaf_id}: " + "; ".join(validation.errors))
+
+            spec_fields = manifest_fields
+            actual_spec_hash = ISSUE_SPEC.canonical_spec_hash(block)
 
         source_id = first_field(spec_fields, "SourceId", "Spec source id") or f"{resolved_package_id}#{manifest_leaf_id}"
         if source_id in source_ids:
@@ -217,12 +224,13 @@ def compile_registry(plan_path: Path, *, root: Path | None = None, package_id: s
             first_field(spec_fields, "Acceptance criteria") or first_field(manifest_fields, "Acceptance criteria")
         )
 
-        members[spec_rel] = {
-            "path": spec_rel,
-            "kind": "issue_spec",
-            "hash": actual_spec_hash,
-            "patchable": True,
-        }
+        if spec_rel is not None:
+            members[spec_rel] = {
+                "path": spec_rel,
+                "kind": "issue_spec",
+                "hash": actual_spec_hash,
+                "patchable": True,
+            }
         leaves.append(
             {
                 "source_id": source_id,

@@ -46,6 +46,20 @@ REQUIRED_LEAF = (
     "projection_hints",
     "local_export",
 )
+RECOMPILED_LEAF_FIELDS = (
+    "manifest_leaf_id",
+    "spec_path",
+    "spec_hash",
+    "dependencies",
+    "required_gates",
+    "files_in_scope",
+    "files_out_of_scope",
+    "dispatch_mode",
+    "validation",
+    "acceptance_criteria",
+    "projection_hints",
+    "local_export",
+)
 
 
 @dataclass
@@ -217,10 +231,10 @@ def validate_registry(registry: dict[str, Any], *, root: Path) -> ValidationResu
                 if compiled_leaf is None:
                     errors.append(f"Registry leaf is not present in source plan/specs: {leaf['source_id']}.")
                     continue
-                for field in ("spec_hash", "dependencies"):
+                for field in RECOMPILED_LEAF_FIELDS:
                     if leaf.get(field) != compiled_leaf.get(field):
                         errors.append(
-                            f"Dependency/spec mismatch for {leaf['source_id']}: field {field} "
+                            f"Regenerated leaf metadata mismatch for {leaf['source_id']}: field {field} "
                             f"is {leaf.get(field)!r}, expected {compiled_leaf.get(field)!r}."
                         )
 

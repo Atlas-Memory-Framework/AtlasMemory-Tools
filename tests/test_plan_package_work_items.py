@@ -135,6 +135,34 @@ Implement {manifest_leaf_id}.
     def compile_registry(self, *, leaf_count: int = 2) -> dict:
         return COMPILE.compile_registry(self.write_package(leaf_count=leaf_count), root=self.root)
 
+    def write_inline_package(self) -> Path:
+        plan = """# Feature: Inline Work Items
+
+## Plan State
+PlanId: plan-package-work-items
+
+## Automation Issue Manifest
+- LEAF-001: Inline export
+  - Spec: inline
+  - Dispatch: agent-ready
+  - Depends on:
+    - none
+  - Files in scope:
+    - `skills/example/scripts/inline_export.py`
+  - Files out of scope:
+    - `skills/example/scripts/other.py`
+  - Required gates:
+    - G-CI-LocalWorkItemExport
+  - Validation:
+    - python3 -m unittest tests.test_example
+  - Acceptance criteria:
+    - Inline export passes.
+  - One PR contract: yes
+"""
+        path = self.root / "plans/inline-work-items.plan.md"
+        path.write_text(plan, encoding="utf-8")
+        return path
+
     def test_exports_local_records_from_compiled_leaf_metadata(self) -> None:
         registry = self.compile_registry()
         store = EXPORT.export_work_items(registry)
@@ -182,6 +210,17 @@ Implement {manifest_leaf_id}.
             ["plan-package-work-items#LEAF-001", "plan-package-work-items#LEAF-003"],
         )
         self.assertEqual(store["source"]["scope_budget"]["executable_leaf_count"], 2)
+
+    def test_exports_inline_manifest_leaf_records(self) -> None:
+        registry = COMPILE.compile_registry(self.write_inline_package(), root=self.root)
+        store = EXPORT.export_work_items(registry)
+
+        self.assertEqual(len(store["work_items"]), 1)
+        item = store["work_items"][0]
+        self.assertEqual(item["SourceId"], "plan-package-work-items#LEAF-001")
+        self.assertIsNone(item["spec_path"])
+        self.assertEqual(item["write_scope"], ["skills/example/scripts/inline_export.py"])
+        self.assertEqual(item["dispatch_mode"], "agent-ready")
 
     def test_scope_budget_status_warns_and_fails_from_compiled_leaf_count(self) -> None:
         warn_store = EXPORT.export_work_items(self.compile_registry(leaf_count=9))
