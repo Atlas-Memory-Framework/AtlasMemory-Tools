@@ -11,8 +11,11 @@ coordinated set of specialist agent roles, not a literal team, physical group, o
 - `TeamRunRoleResult`: one role's outputs, status, notes, and evidence links.
 
 Templates should make the expected outputs explicit. For planning, roles might cover architecture, auth, security, data
-models, data contracts, scaling, runtime operations, product semantics, and validation. For work items, roles might cover
-implementation, test execution, code review, semantic alignment, and final evidence rollup.
+models, data contracts, scaling, runtime operations, product semantics, and validation. Product-semantics roles should
+consume `## Intent Model` when it exists and report `intent_alignment_risks` alongside workflow and success-criteria
+findings. For work items, roles might cover implementation, test execution, code review, semantic alignment, and final
+evidence rollup. Semantic-alignment roles should compare the change against the plan's latent target, anti-targets,
+open loops, and intent checksum, not only against task completion.
 
 ## Rollup Contract
 
@@ -41,7 +44,7 @@ The bootstrap implementation lives in `templates/local-automation-runtime/atlas_
 live under `templates/local-automation-runtime/team-templates/`:
 
 - `planning-design-doc`: architecture, auth, security, data models, data contracts, scaling, runtime operations,
-  validation, product semantics, and rollup editing.
+  validation, product semantics, intent alignment, and rollup editing.
 - `work-item-change-lifecycle`: implementation, test execution, code review, semantic alignment, and evidence rollup for
   one work item.
 - `review-evidence-gate`: code review, security review, semantic review, and review decision rollup.

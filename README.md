@@ -87,6 +87,8 @@ Use `$plan` with agentic review mode.
 
 That phrase is the preferred Codex-facing wrapper for the planning system. `$plan` remains the public workflow and the only authority that writes the selected plan artifact, updates decision logs, and changes gate or approval state. Agentic review mode is an optional review layer inside `$plan`: it snapshots the selected markdown plan, runs independent reviewer personas against the snapshot, collects structured findings or patch proposals, reconciles conflicts, asks the user for intent decisions, and routes accepted edits back through `$plan`.
 
+For ambiguous, stream-of-thought, high-risk, or zero-interaction work, `$plan` preserves intent before problem framing in `## Intent Model`. That section records the latent target, anti-targets, expression-state gaps, open loops, and a checksum describing both success and the likely wrong-but-plausible implementation. It appears before `## Problem Definition` so downstream planning starts from the user's intended target rather than a prematurely flattened problem statement.
+
 Use it for all planning entrypoints:
 
 - New work: `Use $plan with agentic review mode to plan <feature/goal>.`

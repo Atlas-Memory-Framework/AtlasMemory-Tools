@@ -49,7 +49,7 @@
     },
     "product-semantics": {
       "ref": "agent-registry://product-semantics",
-      "description": "Product semantics role for workflow fit, success criteria, and scope drift.",
+      "description": "Product semantics role for Intent Model fit, workflow fit, success criteria, and scope drift.",
       "skills": [
         "plan-execution-readiness"
       ],
@@ -76,7 +76,7 @@
     },
     "semantic-alignment": {
       "ref": "agent-registry://semantic-alignment",
-      "description": "Work-item semantic alignment role for plan fit and product intent.",
+      "description": "Work-item semantic alignment role for Intent Model fit, plan fit, and product intent.",
       "skills": [
         "plan-execution-readiness"
       ],
@@ -103,7 +103,7 @@
     },
     "semantic-review": {
       "ref": "agent-registry://semantic-review",
-      "description": "Review gate role for plan alignment, scope drift, and user intent questions.",
+      "description": "Review gate role for Intent Model alignment, plan alignment, scope drift, and user intent questions.",
       "skills": [
         "plan-execution-readiness"
       ],

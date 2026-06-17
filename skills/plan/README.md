@@ -10,6 +10,11 @@ This README explains the *human workflow* for using `/plan` day-to-day.
 
 - **Problem → Feature → Technical → Human Readability → Implementation → Automation (when targeted) → Reviews**
 
+Before Problem framing hardens, `/plan` can create or refresh `## Intent Model`. This section sits before
+`## Problem Definition` and records the user's latent target, anti-targets, expression-state gaps, open-loop ledger, and
+intent checksum. It is required for `PlanTier: Full` and `AutomationTarget: unattended-prs`, and non-blocking for
+lighter plans unless a downstream gate depends on it.
+
 It uses deterministic “gate” checks to decide what to do next, and it logs decisions in the plan’s **Decision Log**.
 Human Readability is enforced as a gate between Technical and Implementation, even though the persisted
 `CurrentStage` remains one of the plan state stages.
@@ -146,6 +151,7 @@ Expectation when using `/plan`:
 ## Common outputs you should expect in the plan
 
 - **Decision Log** entries (`DR-xxx`) whenever there is a decision boundary
+- **Intent Model** entries when the user's expression may not fully encode the target
 - **Workstreams** with explicit owners and merge points
 - **Named gates** (CI vs deployed) with clear “green means” definitions
 - **Runbooks** for migrations, provisioning, rollout, rollback, or external effects when those domains are in scope

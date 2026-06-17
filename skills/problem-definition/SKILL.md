@@ -6,12 +6,13 @@ description: Define a clear problem statement with measurable success criteria a
 # Problem Definition
 
 ## Purpose
-Turn a vague idea into a crisp, testable, product-grounded problem definition before ideation or technical planning. The output must explain the real system/workflow gap well enough that future implementation agents with no user access understand what matters and why. Run as a sub-agent and return a draft section to the orchestrator; do not write the plan artifact directly.
+Turn a vague idea into a crisp, testable, product-grounded problem definition before ideation or technical planning. The output must explain the real system/workflow gap well enough that future implementation agents with no user access understand what matters and why. When `## Intent Model` exists, preserve its latent target, anti-targets, and open loops instead of flattening them into generic problem prose. Run as a sub-agent and return a draft section to the orchestrator; do not write the plan artifact directly.
 
 ## When to use
 - At the start of `/plan`
 - When the user asks to "define the problem"
 - Before challenge/ideation loops
+- After `/intent-reconciliation` has drafted or refreshed `## Intent Model` for stream-of-thought, under-specified, experiential, high-risk, or zero-interaction work
 
 ## Required outputs
 - Problem narrative (1–2 paragraphs, non-solutionized, product/system focused)
@@ -25,6 +26,7 @@ Turn a vague idea into a crisp, testable, product-grounded problem definition be
 - Open questions (true unknowns only)
 - Decision boundaries (A/B/C if a fork exists)
 - Draft section content for `## Problem Definition`
+- Notes that identify any required updates back to `## Intent Model` when problem framing reveals a new latent-intent gap
 
 ## Sub-agent output contract
 Return a single block in this shape:
@@ -57,21 +59,25 @@ Notes:
 - Explicit scope and anti-scope exist.
 - At least 1 constraint is captured (or "none").
 - Any forks are captured as decision boundaries.
+- The Problem Definition does not contradict or genericize `## Intent Model`.
+- Anti-targets and blocking open loops from `## Intent Model` are preserved as constraints, scope boundaries, open questions, or decision boundaries when they affect implementation.
 
 ## Process
 1) Restate the user goal neutrally.
-2) Interrogate for the product/system reality: current workflow, desired workflow, affected users/agents, why the gap matters, and why now.
-3) Collect at least 3 current-state facts from available repo context and/or user-provided context. Do not invent facts; if a fact is unavailable, ask for it or mark the gate failing.
-4) Propose measurable success criteria tied to behavior, evidence, and verification.
-5) Capture constraints, scope, and anti-scope.
-6) Identify decision boundaries (A/B/C).
-7) Finalize the Problem Definition block.
+2) Read `## Intent Model` when present and carry forward latent target, anti-targets, expression-state risks, and blocking open loops.
+3) Interrogate for the product/system reality: current workflow, desired workflow, affected users/agents, why the gap matters, and why now.
+4) Collect at least 3 current-state facts from available repo context and/or user-provided context. Do not invent facts; if a fact is unavailable, ask for it or mark the gate failing.
+5) Propose measurable success criteria tied to behavior, evidence, and verification.
+6) Capture constraints, scope, and anti-scope.
+7) Identify decision boundaries (A/B/C).
+8) Finalize the Problem Definition block.
 
 ## Interrogation rules
 - Ask targeted questions before returning `Pass` if any of these are missing: current workflow, desired workflow, why now, affected actor, concrete repo/user facts, non-negotiable constraint, or pass/fail evidence.
 - Do not accept generic answers like "make it better", "clean up the plan", or "improve automation" as the problem statement. Convert them into specific workflow gaps or ask for clarification.
 - If the user cannot answer a detail needed for implementation, record it as an Open question with owner/status or as a Decision boundary with A/B/C options and a recommended default.
 - Do not use authority-contract, registry, projection, dispatch, or artifact language in the opening narrative unless that machinery is itself the product/system being changed.
+- If the problem narrative sounds crisp but drops an anti-target, expression-state risk, or wrong-but-plausible failure from `## Intent Model`, mark the checklist failing and return a note for `/intent-reconciliation` or the orchestrator.
 
 ## Output template
 Use this exact template:

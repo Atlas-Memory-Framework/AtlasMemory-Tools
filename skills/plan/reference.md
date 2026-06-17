@@ -54,6 +54,7 @@ LastGateRun: <YYYY-MM-DD>
 ArtifactAuthorityMode: legacy-plan | migration-bridge | registry-first
 
 ## Gate Results
+IntentModelComplete: Pass | Fail | N/A
 ProblemDefinitionComplete: Pass | Fail | N/A
 FeatureClarity: Pass | Fail | N/A
 TechnicalClarity: Pass | Fail | N/A
@@ -87,6 +88,46 @@ PlanningReviewsComplete: Pass | Fail | N/A
   - Test:
   - Pass/Fail criteria:
   - Status: Untested | Tested | Accepted | Deferred (DR-xxx)
+
+## Intent Model
+<!-- owner: intent-reconciliation -->
+Latent target:
+- What the user appears to be trying to achieve:
+- What the user is reacting against:
+- Non-verbal / experiential target:
+- Confidence: High | Medium | Low
+
+Anti-targets:
+- ...
+
+Expression-state notes:
+- User phrase:
+  - Interpreted meaning:
+  - Alternate plausible interpretations:
+  - Confidence: High | Medium | Low
+  - Risk if wrong:
+
+Open Loop Ledger:
+- OL-001:
+  - Type: lexical-gap | concept-gap | referent-gap | scope-gap | acceptance-gap | negative-constraint | hidden-assumption | plan-output-gap
+  - Source:
+  - Latent object:
+  - Why it matters:
+  - Candidate interpretations:
+    - A)
+    - B)
+    - C)
+  - Status: Open | Resolved | Deferred
+  - Resolution evidence:
+  - Blocks: Problem | Technical | Implementation | Automation | none
+
+Intent checksum:
+- Success means:
+  - ...
+- Failure would look like:
+  - ...
+- User confirmation needed:
+  - ...
 
 ## Problem Definition
 <!-- owner: problem-definition -->

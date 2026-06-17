@@ -24,6 +24,10 @@
       "path": "skills/human-qa-loop"
     },
     {
+      "name": "intent-reconciliation",
+      "path": "skills/intent-reconciliation"
+    },
+    {
       "name": "draft-copy-paste-prompt",
       "path": "skills/draft-copy-paste-prompt"
     },
@@ -164,6 +168,11 @@
       "agentic-plan-review",
       "agentic-review-mode",
       "parallel-plan-review"
+    ],
+    "intent-reconciliation": [
+      "intent-model",
+      "open-loop-ledger",
+      "latent-intent"
     ],
     "plan-execution-readiness": [
       "plan-stress-review",

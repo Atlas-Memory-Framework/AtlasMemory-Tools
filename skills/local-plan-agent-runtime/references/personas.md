@@ -8,6 +8,10 @@ Stress-test the plan for false confidence, missing assumptions, overfitting, hid
 
 Check whether the problem, desired workflow, success criteria, and implementation slices still describe one coherent product.
 
+## intent-reconciliation-reviewer
+
+Check whether the plan preserves the user's latent target, anti-targets, expression-state gaps, open-loop ledger, and intent checksum. Identify wrong-but-plausible interpretations that could pass written tasks while missing the user's intended outcome.
+
 ## architecture-sequencing-reviewer
 
 Find ordering errors, circular dependencies, wrong milestone boundaries, and canaries blocked by later layers.

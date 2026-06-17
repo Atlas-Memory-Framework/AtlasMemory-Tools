@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan/README.md manifest=atlas-tools.v1 checksum=sha256:847b1ecdeab1986fb3b0c8e7a00788c900096a289279e813be8c49e6d2236723 -->
+<!-- atlas-tools-generated: source=skills/plan/README.md manifest=atlas-tools.v1 checksum=sha256:2f7a6f3c9b7ec9f73f98c688931492bc3237bdb4b7de616d9d1272cf93c148ee -->
 <!-- atlas-tools-generated-end -->
 # /plan skill — how we use it
 
@@ -11,6 +11,11 @@ This README explains the *human workflow* for using `/plan` day-to-day.
 `/plan` creates or updates a **single plan artifact** (a markdown file in the active harness planning directory) and moves it through:
 
 - **Problem → Feature → Technical → Human Readability → Implementation → Automation (when targeted) → Reviews**
+
+Before Problem framing hardens, `/plan` can create or refresh `## Intent Model`. This section sits before
+`## Problem Definition` and records the user's latent target, anti-targets, expression-state gaps, open-loop ledger, and
+intent checksum. It is required for `PlanTier: Full` and `AutomationTarget: unattended-prs`, and non-blocking for
+lighter plans unless a downstream gate depends on it.
 
 It uses deterministic “gate” checks to decide what to do next, and it logs decisions in the plan’s **Decision Log**.
 Human Readability is enforced as a gate between Technical and Implementation, even though the persisted
@@ -148,6 +153,7 @@ Expectation when using `/plan`:
 ## Common outputs you should expect in the plan
 
 - **Decision Log** entries (`DR-xxx`) whenever there is a decision boundary
+- **Intent Model** entries when the user's expression may not fully encode the target
 - **Workstreams** with explicit owners and merge points
 - **Named gates** (CI vs deployed) with clear “green means” definitions
 - **Runbooks** for migrations, provisioning, rollout, rollback, or external effects when those domains are in scope

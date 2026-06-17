@@ -31,10 +31,13 @@ Finding object:
   "why_it_matters": "",
   "evidence": [""],
   "proposed_remediation": "",
+  "intent_gap_type": "lexical-gap | concept-gap | referent-gap | scope-gap | acceptance-gap | negative-constraint | hidden-assumption | plan-output-gap | none",
   "requires_user_decision": false,
   "decision_options": {"A": "", "B": "", "C": ""}
 }
 ```
+
+`intent_gap_type` is optional for backward compatibility. Omit it or use `none` for ordinary technical, sequencing, validation, or automation findings.
 
 Patch object:
 

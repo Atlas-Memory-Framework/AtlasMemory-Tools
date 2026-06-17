@@ -33,8 +33,8 @@
       "label": "Semantic Alignment",
       "agent_ref": "agent-registry://semantic-alignment",
       "skills": ["plan-execution-readiness"],
-      "must_produce": ["plan_alignment", "behavioral_risks", "vision_drift_notes"],
-      "acceptance_criteria": ["Checks that the change still matches the broader plan and product intent."]
+      "must_produce": ["plan_alignment", "intent_model_alignment", "behavioral_risks", "vision_drift_notes"],
+      "acceptance_criteria": ["Checks that the change still matches the broader plan, Intent Model, anti-targets, and product intent."]
     },
     {
       "id": "evidence-rollup",

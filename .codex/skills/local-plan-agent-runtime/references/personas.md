@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/local-plan-agent-runtime/references/personas.md manifest=atlas-tools.v1 checksum=sha256:add6630bf16e9179feb05acaa3a47b57b10cf85ffdc680a9fdb1ebd5d4d2d555 -->
+<!-- atlas-tools-generated: source=skills/local-plan-agent-runtime/references/personas.md manifest=atlas-tools.v1 checksum=sha256:706bb87580294e5b0adea2ed6fd23b834bf6b2ada57a803ff5b8098154f4d9a6 -->
 <!-- atlas-tools-generated-end -->
 # Personas
 
@@ -9,6 +9,10 @@ Stress-test the plan for false confidence, missing assumptions, overfitting, hid
 ## product-spine-reviewer
 
 Check whether the problem, desired workflow, success criteria, and implementation slices still describe one coherent product.
+
+## intent-reconciliation-reviewer
+
+Check whether the plan preserves the user's latent target, anti-targets, expression-state gaps, open-loop ledger, and intent checksum. Identify wrong-but-plausible interpretations that could pass written tasks while missing the user's intended outcome.
 
 ## architecture-sequencing-reviewer
 

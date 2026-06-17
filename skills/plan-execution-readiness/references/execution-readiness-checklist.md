@@ -1,10 +1,18 @@
 # Execution Readiness Checklist
 
+## Intent alignment
+
+Check that `## Intent Model` names the latent target, anti-targets, expression-state gaps, open loops, and intent checksum before problem framing.
+
+For `PlanTier: Full` or `AutomationTarget: unattended-prs`, fail readiness when the section is missing, placeholder-only, or has open loops blocking Problem, Technical, Implementation, or Automation.
+
+Ask what wrong-but-plausible implementation could pass the written tasks or tests. If the answer is not represented in anti-targets, constraints, success criteria, or gates, flag the plan.
+
 ## Product spine
 
 Check that the plan names the current broken workflow, desired workflow, why the gap matters now, scope, anti-scope, and measurable success criteria.
 
-Fail readiness when product intent is replaced by planning machinery.
+Fail readiness when product intent is replaced by planning machinery or when the Problem Definition flattens the latent target from `## Intent Model`.
 
 ## Milestone separation
 
@@ -43,4 +51,4 @@ Check logs or metrics around depth and budget violations, policy denies, evidenc
 
 ## Agent-buildability
 
-A plan is not ready if future agents must infer product intent, acceptance criteria are prose-only, dependencies contradict milestone order, file ownership is ambiguous, required gates are unnamed, or human decisions are hidden inside implementation tasks.
+A plan is not ready if future agents must infer product intent, acceptance criteria are prose-only, dependencies contradict milestone order, file ownership is ambiguous, required gates are unnamed, human decisions are hidden inside implementation tasks, or an unresolved intent open loop blocks execution.

@@ -73,8 +73,8 @@
       "label": "Product Semantics",
       "agent_ref": "agent-registry://product-semantics",
       "skills": ["plan-execution-readiness"],
-      "must_produce": ["user_workflows", "semantic_risks", "success_criteria_alignment"],
-      "acceptance_criteria": ["Checks that implementation behavior still matches the intended product outcome."]
+      "must_produce": ["user_workflows", "intent_alignment_risks", "semantic_risks", "success_criteria_alignment"],
+      "acceptance_criteria": ["Checks that implementation behavior still matches the Intent Model, anti-targets, and intended product outcome."]
     },
     {
       "id": "rollup-editor",

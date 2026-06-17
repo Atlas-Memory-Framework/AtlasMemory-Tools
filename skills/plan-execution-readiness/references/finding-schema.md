@@ -12,6 +12,7 @@ Use this shape for structured plan execution-readiness findings.
 - Recommended remediation: <specific plan change>
 - Requires user decision: Yes | No
 - Decision options: A / B / C when needed
+- Intent gap type: lexical-gap | concept-gap | referent-gap | scope-gap | acceptance-gap | negative-constraint | hidden-assumption | plan-output-gap | none
 ```
 
 Severity guidance:
@@ -20,3 +21,5 @@ Severity guidance:
 - High: agents will stall, invent behavior, or merge incompatible work.
 - Medium: likely quality, validation, or sequencing weakness.
 - Low: clarity improvement that does not change execution behavior.
+
+Use `Intent gap type` when a finding concerns latent user intent. Use `none` for ordinary technical, sequencing, or validation findings.

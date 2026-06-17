@@ -13,6 +13,17 @@ FORBIDDEN_STATUS_RE = re.compile(
 PROTECTED_SECTION_RE = re.compile(r"\b(Plan State|Gate Results|Planning Reviews|Decision Log)\b", re.IGNORECASE)
 SEVERITIES = {"critical", "high", "medium", "low"}
 PATCH_TYPES = {"section-replacement", "section-insert", "decision-log-entry", "no-patch"}
+INTENT_GAP_TYPES = {
+    "lexical-gap",
+    "concept-gap",
+    "referent-gap",
+    "scope-gap",
+    "acceptance-gap",
+    "negative-constraint",
+    "hidden-assumption",
+    "plan-output-gap",
+    "none",
+}
 REQUIRED_TOP = ["agent_id", "persona", "source_plan_path", "source_plan_sha256", "scope", "summary", "findings", "patches", "human_decisions", "blocked_items"]
 
 
@@ -78,6 +89,9 @@ def validate(proposal, section_index, *, check_canonical=True):
             errors.append(f"finding {fid or i} missing why_it_matters")
         if not isinstance(finding.get("evidence"), list) or not finding.get("evidence"):
             errors.append(f"finding {fid or i} needs non-empty evidence list")
+        intent_gap_type = finding.get("intent_gap_type")
+        if intent_gap_type is not None and intent_gap_type not in INTENT_GAP_TYPES:
+            errors.append(f"finding {fid or i} has invalid intent_gap_type")
         if finding.get("requires_user_decision"):
             decision_findings.add(fid)
             opts = finding.get("decision_options") or {}

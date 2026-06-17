@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:76ae110a85dbad3a51f4cf46acf5155a69d5704d4e2babf00dc855e224d4cb92
+# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:20e6462c62cb535733c8e31de51c759128e43197bc7d78d36f28f4e49e923a63
 # atlas-tools-generated-end
 name: plan
 description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by the planning workflow) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
@@ -8,7 +8,7 @@ description: Orchestrate the /plan workflow to create or update the current plan
 # /plan Orchestrator
 
 ## Purpose
-Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface. Compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it does not replace the selected markdown plan as authoring authority. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
+Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. Before problem framing hardens, preserve the user's latent target, anti-targets, expression-state gaps, open loops, and intent checksum in `## Intent Model`. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface. Compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it does not replace the selected markdown plan as authoring authority. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
 
 ## Agentic review mode
 When the user says `Use $plan with agentic review mode`, asks for parallel plan review, asks to review an old plan before trusting it, or asks to run the local agentic planning workflow on a markdown plan, `$plan` remains the public workflow and canonical writer. Invoke `/local-plan-agent-runtime` as an internal review layer after the authoring artifact is selected and before preserving approval/readiness state.
@@ -21,6 +21,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 - The current markdown plan artifact is the planning write surface; do not assume a fixed filename.
 - **Substance before mechanics**: Product/system sections (`Problem Definition`, `Challenge Artifacts`, `Technical Plan`) must describe the real workflow failure/opportunity, desired behavior, and engineering approach. Planning machinery, authority contracts, projection, and dispatch policy belong in `Plan State`, `Implementation Plan`, `Automation Issue Manifest`, and `Execution Mechanics / Automation Appendix`.
 - **Zero-interaction implementer standard**: assume future build agents cannot ask the user questions and have no prior knowledge. If an implementation-critical fact is missing, ask now, record a decision boundary, or keep the gate failing. Do not fill gaps with vague defaults.
+- **Intent before problem framing**: `## Intent Model` belongs before `## Problem Definition`. It captures expression-to-intent mapping, anti-targets, open loops, and the wrong-but-plausible implementation to avoid. Do not let `Problem Definition`, `Technical Plan`, or `Implementation Plan` flatten those signals into generic implementation prose.
 - **Interrogate before advancing**: for Problem, Technical, and Implementation stages, ask targeted questions until the plan names the current workflow, desired workflow, why the gap matters now, concrete repo/user facts, owners, file boundaries, verification entrypoints, rollout, and rollback. It is better to block than to pass a lazy plan.
 - **Many atomic plans, one campaign**: when a large effort is intentionally split across multiple plan artifacts, each plan still owns exactly one selected authoring artifact. Use optional metadata such as `PlanGroup`, `ParentPlan`, `DependsOnPlans`, `BlocksPlans`, and `AtomicScope` only as descriptive links. These fields do not replace `@path` selection, do not create registry authority, and do not let one `/plan` invocation edit multiple plans.
 - **Artifact authority contract (required)**:
@@ -49,7 +50,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
   - how work is validated,
   - what remains blocked.
   If any answer is weak, patch the relevant Problem, Technical, Implementation, Automation, Decision Log, or Planning Reviews sections before preserving or setting any pass/approval state.
-- Workflow order is fixed: Problem -> Feature -> Technical -> Human Readability -> Implementation -> Automation (when `AutomationTarget != none`) -> Reviews. Human Readability is a gate, not a separate `CurrentStage`.
+- Workflow order is fixed: Problem -> Feature -> Technical -> Human Readability -> Implementation -> Automation (when `AutomationTarget != none`) -> Reviews. Human Readability is a gate, not a separate `CurrentStage`. Intent reconciliation is an early gate/subsection inside Problem-stage work, not a persisted `CurrentStage`.
 - Hard rule: `/problem-definition` and `/critical-ideation` are Q/A gated before advancing; run the Q/A loop inline with the user and only when the checklist fails or `Questions` is non-empty.
 - **No gate flips without evidence**: before changing any of `Status`, `CurrentStage`, quality/approval state fields, or any Gate Results, include a short checklist in chat stating:
   - which section(s) changed, and
@@ -68,12 +69,13 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 5) Determine `CurrentStage`. If the user requested agentic review mode, run `/local-plan-agent-runtime` in dry-run against the selected artifact before trusting readiness, review, projection, or dispatch state; use `/plan-execution-readiness` as the critical review persona/checklist when focused execution-readiness review is needed.
 6) If the plan is in Reviews/Approved re-entry state, run `/review mode=zero-context` as a fresh re-entry audit before trusting existing `Pass` or approval values. Treat all existing pass claims as stale until the audit answers the seven required questions above with concrete, plan-cited answers. If the audit is weak, route remediation to the owner skill for the weak section(s), set affected gates to `Fail`, and do not preserve or set approval state.
 7) Run validators in stage order up to the current stage.
-   - When available, run `python3 skills/plan/scripts/validate_plan.py <authoring-artifact>` as the deterministic mechanical check for `ProblemDefinitionComplete`, `PlanReadiness`, `AutomationReadiness`, `PlanningReviewsComplete`, and `PlanStateSanity`. Use the script output as blocking evidence, not as a substitute for human-agency decisions.
+   - When available, run `python3 skills/plan/scripts/validate_plan.py <authoring-artifact>` as the deterministic mechanical check for `IntentModelComplete`, `ProblemDefinitionComplete`, `PlanReadiness`, `AutomationReadiness`, `PlanningReviewsComplete`, and `PlanStateSanity`. Use the script output as blocking evidence, not as a substitute for human-agency decisions.
    - If the plan is part of an atomic-plan campaign, verify that its descriptive metadata is coherent enough for human navigation (`PlanGroup`, `AtomicScope`, and known dependencies), but do not fail the gate solely because optional cross-plan metadata is absent unless the plan itself depends on it.
-8) Route to the first failing gate and call the owner skill as a sub-agent to produce a draft section. Provide any known agent roster or `## Context Snapshot` so ownership can be assigned correctly.
+8) Route to the first failing gate and call the owner skill as a sub-agent to produce a draft section. Run `/intent-reconciliation` before `/problem-definition` when `## Intent Model` is missing, placeholder-only, has blocking open loops, or the user input is stream-of-thought, under-specified, experiential, architecture-intuition-heavy, prior-intent-miss recovery, high `RubberStampSignals`, `PlanTier: Full`, or `AutomationTarget: unattended-prs`. Provide any known agent roster or `## Context Snapshot` so ownership can be assigned correctly.
 9) Run the human Q/A loop inline with the user using the gate's mode (see map below) when:
    - the validator fails, OR
    - `Questions` is non-empty, OR
+   - `IntentModelComplete` fails with blocking open loops, OR
    - the Substance Gate requirements for `ProblemDefinitionComplete` are not all satisfied, OR
    - you are moving into/through **TechnicalClarity** and you have not yet run at least one `mode=comprehension` checkpoint in this /plan invocation, OR
    - you are moving into/through **PlanReadiness** and you have not yet run at least one `mode=comprehension` checkpoint in this /plan invocation.
@@ -99,7 +101,8 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 19) Hard rule: do not set `Status: Approved`, `SubstanceStatus: SubstantivelyReviewed`, `PlanningReviewsComplete: Pass`, `ProjectionApproval: ApprovedForProjection`, or `DispatchApproval: ApprovedForDispatch` if any human-agency items remain unresolved. Stop and request dispositions first.
 
 ## Validators (deterministic)
-- ProblemDefinitionComplete: problem narrative, measurable success criteria, constraints, scope/anti-scope, decision boundaries, and the **Substance Gate**. Must be Q/A gated; inline loop is required whenever substance is missing.
+- IntentModelComplete: latent target, anti-targets, expression-state notes, open-loop ledger, and intent checksum. It is required for `PlanTier: Full` or `AutomationTarget: unattended-prs`, and warning-style for lower-risk plans. Blocking open loops with `Blocks: Problem | Technical | Implementation | Automation` must prevent downstream pass/approval for high-risk plans until resolved, deferred by DR with trigger, or explicitly scoped as non-blocking.
+- ProblemDefinitionComplete: problem narrative, measurable success criteria, constraints, scope/anti-scope, decision boundaries, and the **Substance Gate**. Must preserve `## Intent Model` and be Q/A gated; inline loop is required whenever substance is missing.
   - **Substance Gate (required before pass)**:
     - The first paragraph describes the real product/system failure or opportunity, not the need to create a plan.
     - The first two paragraphs avoid planning-meta terms: `plan`, `artifact`, `gate`, `issue manifest`, `registry`, `projection`, `dispatch`.
@@ -114,7 +117,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
   - It must avoid authority/projection/dispatch language unless the technical work itself is authority/projection/dispatch.
   - It must leave no implementation-critical TBDs outside Decision Log/Open questions.
 - HumanReadabilityReview:
-  - A new engineer can explain what is being built and why after reading only `Problem Definition` and the `Technical Plan` intro.
+  - A new engineer can explain what is being built and why after reading only `Intent Model`, `Problem Definition`, and the `Technical Plan` intro.
   - Rendered HTML, if generated, reads like a product/engineering plan rather than a validator report.
   - Automation, authority-contract, projection, and dispatch details are confined to execution sections/appendices unless directly part of the product problem.
   - The review names the strongest remaining ambiguity or explicitly says none.
@@ -169,6 +172,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 - PlanStateSanity (blocks false “Approved/Execution”):
   - Do NOT allow `Status: Approved`, `StructuralStatus: StructurallyComplete`, `SubstanceStatus: SubstantivelyReviewed`, `ProjectionApproval: ApprovedForProjection`, `DispatchApproval: ApprovedForDispatch`, or `CurrentStage: Build/Execution` if:
     - any required gate is not `Pass`, OR
+    - `PlanTier: Full` or `AutomationTarget: unattended-prs` and `IntentModelComplete` is not `Pass`, OR
     - the plan is in Reviews/Approved re-entry state and the fresh zero-context re-entry audit is missing, stale, or weak, OR
     - `Open questions` contains any item with `Status: Open` (or missing Status), OR
     - ambiguity markers remain in critical areas (Problem/Technical/Implementation/Decision Log), including: `TBD`, `to be decided`, `choose later`, `or decide later`
@@ -185,6 +189,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
     - Only pass when required reviews are refreshed for the current plan state.
 
 ## Gate -> owner skill map (sub-agents)
+- IntentModelComplete -> `/intent-reconciliation`
 - ProblemDefinitionComplete -> `/problem-definition`
 - FeatureClarity -> `/critical-ideation`
 - TechnicalClarity -> `/technical-planning`
@@ -194,6 +199,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 - PlanningReviewsComplete -> `/planning-reviews`
 
 ## Gate -> Q/A loop mode map (inline)
+- IntentModelComplete -> `qa-loop mode=default`
 - ProblemDefinitionComplete -> `qa-loop mode=default`
 - FeatureClarity -> `qa-loop mode=default`
 - TechnicalClarity -> `qa-loop mode=comprehension` (must run at least once per /plan invocation when moving into/through this gate)
@@ -203,6 +209,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 - PlanningReviewsComplete -> `qa-loop mode=disposition`
 
 ## Review auto-remediation routing
+- Intent Model -> `/intent-reconciliation`
 - Problem -> `/problem-definition`
 - Feature -> `/critical-ideation`
 - Technical -> `/technical-planning`
@@ -251,6 +258,7 @@ Human-agency items MUST be explicitly decided by the user (use structured questi
 
 ## Sub-skills used (run as sub-agents unless noted)
 - `/problem-definition` -> sub-agent, Q/A gated (inline loop when needed)
+- `/intent-reconciliation` -> sub-agent, Q/A gated when blocking open loops remain or user confirmation is needed
 - `/critical-ideation` -> sub-agent, Q/A gated (inline loop when needed)
 - `/technical-planning` -> sub-agent, Q/A gated (inline loop when needed)
 - `/implementation-planning` -> sub-agent, Q/A gated (inline loop when needed)

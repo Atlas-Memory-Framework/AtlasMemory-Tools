@@ -40,6 +40,7 @@ def base_plan(review_hash: str = "0" * 64) -> str:
         LastUpdated: 2026-05-29T08:00:00
 
         ## Gate Results
+        IntentModelComplete: Pass
         ProblemDefinitionComplete: Pass
         TechnicalClarity: Pass
         HumanReadabilityReview: Pass
@@ -58,6 +59,46 @@ def base_plan(review_hash: str = "0" * 64) -> str:
           - C) Manual-only execution
         - Why chosen: It reduces review and merge risk.
         - Status: Accepted
+
+        ## Intent Model
+        Latent target:
+        - What the user appears to be trying to achieve: a bounded local automation lane that exposes enough evidence for safe unattended execution.
+        - What the user is reacting against: broad automation that depends on unstated human judgement.
+        - Non-verbal / experiential target: operator confidence that a ready issue will not surprise them.
+        - Confidence: High
+
+        Anti-targets:
+        - Do not let broad workstream dispatch masquerade as ready leaf work.
+        - Do not remove manual approval for risky work.
+
+        Expression-state notes:
+        - User phrase: "safe automation lane"
+          - Interpreted meaning: issue metadata and validation evidence are strong enough for bounded unattended execution.
+          - Alternate plausible interpretations: a GitHub Project view only; a fully autonomous merge lane.
+          - Confidence: High
+          - Risk if wrong: automation may run work that still requires human judgement.
+
+        Open Loop Ledger:
+        - OL-001:
+          - Type: scope-gap
+          - Source: user
+          - Latent object: project sync requirement for dispatch.
+          - Why it matters: dispatch could depend on a signal that is not available in the hot path.
+          - Candidate interpretations:
+            - A) Require project sync
+            - B) Use issue labels only
+            - C) Block automation
+          - Status: Resolved
+          - Resolution evidence: DR-001 keeps dispatch bounded and manually approved.
+          - Blocks: none
+
+        Intent checksum:
+        - Success means:
+          - A ready leaf issue can be dispatched without extra clarification and without broadening scope.
+        - Failure would look like:
+          - A broad workstream is dispatched because it has a ready-looking label but lacks leaf-level evidence.
+        - User confirmation needed:
+          - none
 
         ## Problem Definition
         Problem narrative:
@@ -339,12 +380,43 @@ class PlanValidatorTests(unittest.TestCase):
         results = module.validate(base_plan(digest))
 
         self.assertEqual({result.gate: result.status for result in results}, {
+            "IntentModelComplete": "Pass",
             "ProblemDefinitionComplete": "Pass",
             "PlanReadiness": "Pass",
             "AutomationReadiness": "Pass",
             "PlanningReviewsComplete": "Pass",
             "PlanStateSanity": "Pass",
         })
+
+    def test_high_risk_plan_requires_intent_model(self) -> None:
+        module = load_validator_module()
+        plan = module.remove_section(base_plan(), "Intent Model")
+
+        result = next(result for result in module.validate(plan) if result.gate == "IntentModelComplete")
+
+        self.assertEqual(result.status, "Fail")
+        self.assertTrue(any("Missing ## Intent Model" in message for message in result.messages))
+
+    def test_lite_plan_missing_intent_model_is_non_blocking(self) -> None:
+        module = load_validator_module()
+        plan = module.remove_section(base_plan(), "Intent Model")
+        plan = plan.replace("PlanTier: Full", "PlanTier: Lite")
+        plan = plan.replace("AutomationTarget: unattended-prs", "AutomationTarget: none")
+
+        result = next(result for result in module.validate(plan) if result.gate == "IntentModelComplete")
+
+        self.assertEqual(result.status, "N/A")
+        self.assertTrue(any("Missing ## Intent Model" in message for message in result.messages))
+
+    def test_blocking_open_intent_loops_fail_high_risk_plan(self) -> None:
+        module = load_validator_module()
+        plan = base_plan().replace("Status: Resolved", "Status: Open", 1)
+        plan = plan.replace("Blocks: none", "Blocks: Implementation", 1)
+
+        result = next(result for result in module.validate(plan) if result.gate == "IntentModelComplete")
+
+        self.assertEqual(result.status, "Fail")
+        self.assertTrue(any("Blocking open loops" in message for message in result.messages))
 
     def test_problem_definition_requires_three_sourced_facts(self) -> None:
         module = load_validator_module()

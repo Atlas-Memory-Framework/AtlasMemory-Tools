@@ -83,10 +83,10 @@ If you cannot provide an evidence hook, emit a finding with `Remediation target:
 3) **Dispositions needed**: prompt only for the remaining ids (A/R/D), not for auto-remediated items.
 
 ## Human Readability Review (required)
-Run this review after `TechnicalClarity` and refresh it whenever Problem Definition, Technical Plan intro, Implementation Plan summary, or execution/authority sections materially change.
+Run this review after `TechnicalClarity` and refresh it whenever Intent Model, Problem Definition, Technical Plan intro, Implementation Plan summary, or execution/authority sections materially change.
 
 ### Review questions
-- Can a new engineer explain what is being built and why after reading only `Problem Definition` and `Technical Plan Intro`?
+- Can a new engineer explain what is being built and why after reading only `Intent Model`, `Problem Definition`, and `Technical Plan Intro`?
 - Does the rendered HTML, or the markdown if HTML is not generated, read like a product/engineering plan instead of a validator report?
 - Are automation, source-of-truth, projection, dispatch, and authority-contract details confined to execution sections/appendices unless they are the actual product/system being changed?
 - Does the plan identify the strongest remaining ambiguity, or explicitly state that none remains?

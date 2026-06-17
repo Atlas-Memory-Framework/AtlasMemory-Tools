@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/local-plan-agent-runtime/references/proposal-schema.md manifest=atlas-tools.v1 checksum=sha256:1e6466e4daa69368cb7fdd9ab2ecf4aaf318bd8992e7d488902edd38d1705390 -->
+<!-- atlas-tools-generated: source=skills/local-plan-agent-runtime/references/proposal-schema.md manifest=atlas-tools.v1 checksum=sha256:73f60a205fe9f660092d865bf833088eab2fbd0bcc0915e193c81ba7ab3057a8 -->
 <!-- atlas-tools-generated-end -->
 # Proposal Schema
 
@@ -33,10 +33,13 @@ Finding object:
   "why_it_matters": "",
   "evidence": [""],
   "proposed_remediation": "",
+  "intent_gap_type": "lexical-gap | concept-gap | referent-gap | scope-gap | acceptance-gap | negative-constraint | hidden-assumption | plan-output-gap | none",
   "requires_user_decision": false,
   "decision_options": {"A": "", "B": "", "C": ""}
 }
 ```
+
+`intent_gap_type` is optional for backward compatibility. Omit it or use `none` for ordinary technical, sequencing, validation, or automation findings.
 
 Patch object:
 

@@ -251,6 +251,57 @@ def check_problem_definition(markdown: str) -> GateResult:
     return GateResult("ProblemDefinitionComplete", "Fail" if messages else "Pass", messages)
 
 
+def high_risk_intent_required(state: dict[str, str]) -> bool:
+    return (
+        state.get("PlanTier", "Full").lower() == "full"
+        or state.get("AutomationTarget", "none") == "unattended-prs"
+    )
+
+
+def blocking_open_intent_loops(intent: str) -> bool:
+    entries = re.split(r"^\s*-\s+OL-[A-Za-z0-9-]+:", intent, flags=re.MULTILINE)
+    for entry in entries[1:]:
+        if not re.search(r"Status:\s*Open\b", entry, re.IGNORECASE):
+            continue
+        if re.search(r"Blocks:\s*(Problem|Technical|Implementation|Automation)\b", entry, re.IGNORECASE):
+            return True
+    return False
+
+
+def check_intent_model(markdown: str, state: dict[str, str]) -> GateResult:
+    intent = section(markdown, "Intent Model")
+    messages: list[str] = []
+    required = high_risk_intent_required(state)
+    if not intent:
+        messages.append("Missing ## Intent Model.")
+        return GateResult("IntentModelComplete", "Fail" if required else "N/A", messages)
+
+    intent_bounds = section_bounds(markdown, "Intent Model")
+    problem_bounds = section_bounds(markdown, "Problem Definition")
+    if intent_bounds and problem_bounds and intent_bounds[0] > problem_bounds[0]:
+        messages.append("Intent Model must appear before Problem Definition.")
+
+    for label in (
+        "Latent target",
+        "Anti-targets",
+        "Expression-state notes",
+        "Open Loop Ledger",
+        "Intent checksum",
+    ):
+        if not has_label_content(intent, label):
+            messages.append(f"Intent Model missing {label}.")
+
+    if blocking_open_intent_loops(intent):
+        messages.append("Blocking open loops remain in Intent Model.")
+
+    if not re.search(r"Failure would look like:\s*(?:\n\s*-\s+\S|.+)", intent, re.IGNORECASE):
+        messages.append("Intent checksum must name a likely wrong-but-plausible failure.")
+
+    if messages:
+        return GateResult("IntentModelComplete", "Fail" if required else "N/A", messages)
+    return GateResult("IntentModelComplete", "Pass", [])
+
+
 def check_plan_readiness(markdown: str, state: dict[str, str]) -> GateResult:
     implementation = section(markdown, "Implementation Plan")
     messages: list[str] = []
@@ -482,6 +533,8 @@ def check_plan_state_sanity(markdown: str, state: dict[str, str], gates: dict[st
             "PlanReadiness",
             "PlanningReviewsComplete",
         ]
+        if high_risk_intent_required(state):
+            required_gates.insert(0, "IntentModelComplete")
         if state.get("AutomationTarget", "none") != "none":
             required_gates.append("AutomationReadiness")
         for gate in required_gates:
@@ -510,6 +563,7 @@ def validate(markdown: str) -> list[GateResult]:
     state = parse_key_values(section(markdown, "Plan State"))
     claimed_gates = gate_results(markdown)
     results = [
+        check_intent_model(markdown, state),
         check_problem_definition(markdown),
         check_plan_readiness(markdown, state),
         check_automation_readiness(markdown, state),

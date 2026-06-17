@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan-execution-readiness/references/finding-schema.md manifest=atlas-tools.v1 checksum=sha256:1dff467e49a30dd637ae92b5c52f6a99f4df24c132c570698e405e81ecec3316 -->
+<!-- atlas-tools-generated: source=skills/plan-execution-readiness/references/finding-schema.md manifest=atlas-tools.v1 checksum=sha256:93745b89e838f476b4d0555a2c576f0cf9e3e71ad091bc266e6eb758086dbc13 -->
 <!-- atlas-tools-generated-end -->
 # Finding Schema
 
@@ -14,6 +14,7 @@ Use this shape for structured plan execution-readiness findings.
 - Recommended remediation: <specific plan change>
 - Requires user decision: Yes | No
 - Decision options: A / B / C when needed
+- Intent gap type: lexical-gap | concept-gap | referent-gap | scope-gap | acceptance-gap | negative-constraint | hidden-assumption | plan-output-gap | none
 ```
 
 Severity guidance:
@@ -22,3 +23,5 @@ Severity guidance:
 - High: agents will stall, invent behavior, or merge incompatible work.
 - Medium: likely quality, validation, or sequencing weakness.
 - Low: clarity improvement that does not change execution behavior.
+
+Use `Intent gap type` when a finding concerns latent user intent. Use `none` for ordinary technical, sequencing, or validation findings.

@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan/reference.md manifest=atlas-tools.v1 checksum=sha256:bacdd5d348ada1990a9fd71498847b2a1d18eb0056bb9998563f8bb83392d28c -->
+<!-- atlas-tools-generated: source=skills/plan/reference.md manifest=atlas-tools.v1 checksum=sha256:3fa0b54f73b56e37c1fd3fdfcc484b59a5284d69955e768d44cd0e67802da0f4 -->
 <!-- atlas-tools-generated-end -->
 # Plan Authoring Template (Slim)
 
@@ -56,6 +56,7 @@ LastGateRun: <YYYY-MM-DD>
 ArtifactAuthorityMode: legacy-plan | migration-bridge | registry-first
 
 ## Gate Results
+IntentModelComplete: Pass | Fail | N/A
 ProblemDefinitionComplete: Pass | Fail | N/A
 FeatureClarity: Pass | Fail | N/A
 TechnicalClarity: Pass | Fail | N/A
@@ -89,6 +90,46 @@ PlanningReviewsComplete: Pass | Fail | N/A
   - Test:
   - Pass/Fail criteria:
   - Status: Untested | Tested | Accepted | Deferred (DR-xxx)
+
+## Intent Model
+<!-- owner: intent-reconciliation -->
+Latent target:
+- What the user appears to be trying to achieve:
+- What the user is reacting against:
+- Non-verbal / experiential target:
+- Confidence: High | Medium | Low
+
+Anti-targets:
+- ...
+
+Expression-state notes:
+- User phrase:
+  - Interpreted meaning:
+  - Alternate plausible interpretations:
+  - Confidence: High | Medium | Low
+  - Risk if wrong:
+
+Open Loop Ledger:
+- OL-001:
+  - Type: lexical-gap | concept-gap | referent-gap | scope-gap | acceptance-gap | negative-constraint | hidden-assumption | plan-output-gap
+  - Source:
+  - Latent object:
+  - Why it matters:
+  - Candidate interpretations:
+    - A)
+    - B)
+    - C)
+  - Status: Open | Resolved | Deferred
+  - Resolution evidence:
+  - Blocks: Problem | Technical | Implementation | Automation | none
+
+Intent checksum:
+- Success means:
+  - ...
+- Failure would look like:
+  - ...
+- User confirmation needed:
+  - ...
 
 ## Problem Definition
 <!-- owner: problem-definition -->

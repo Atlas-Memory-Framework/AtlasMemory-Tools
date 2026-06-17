@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:6403b9fd4e0b23cabc5597558980e3bfd63268e0e52833bdb1e1d9d6fc48b533
+# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:f3f80e3be6c37827ac628898bbd73c6bbe36b3f14c7f5c4b6bacb47671f56dff
 # atlas-tools-generated-end
 name: planning-reviews
 description: Run required planning-phase reviews, including human readability review, and log dispositions in the current plan artifact. Use after Implementation stage before plan approval.
@@ -85,10 +85,10 @@ If you cannot provide an evidence hook, emit a finding with `Remediation target:
 3) **Dispositions needed**: prompt only for the remaining ids (A/R/D), not for auto-remediated items.
 
 ## Human Readability Review (required)
-Run this review after `TechnicalClarity` and refresh it whenever Problem Definition, Technical Plan intro, Implementation Plan summary, or execution/authority sections materially change.
+Run this review after `TechnicalClarity` and refresh it whenever Intent Model, Problem Definition, Technical Plan intro, Implementation Plan summary, or execution/authority sections materially change.
 
 ### Review questions
-- Can a new engineer explain what is being built and why after reading only `Problem Definition` and `Technical Plan Intro`?
+- Can a new engineer explain what is being built and why after reading only `Intent Model`, `Problem Definition`, and `Technical Plan Intro`?
 - Does the rendered HTML, or the markdown if HTML is not generated, read like a product/engineering plan instead of a validator report?
 - Are automation, source-of-truth, projection, dispatch, and authority-contract details confined to execution sections/appendices unless they are the actual product/system being changed?
 - Does the plan identify the strongest remaining ambiguity, or explicitly state that none remains?
