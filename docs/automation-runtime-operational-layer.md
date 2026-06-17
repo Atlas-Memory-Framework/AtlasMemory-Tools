@@ -155,6 +155,18 @@ Minimal local store shape:
 After a local run, the item status moves through `running` to `done` or `failed`, with `claim` and `result` evidence
 entries preserved in the item lifecycle.
 
+Plan Package v0 can generate the same local store shape without creating GitHub issues or reading GitHub Project fields:
+
+```bash
+python3 skills/plan-package/scripts/export_work_items.py path/to/compiled-package.json --out work-items.json
+```
+
+The exporter reads the compiled package registry as its source of truth. It does not reparse sidecar specs during export
+and does not call GitHub APIs. Each generated item preserves `SourceId`, `SpecHash`, `PackageId`, `PackageHash`,
+dependencies, write scope, validation commands, dispatch mode, and scope-budget status. Scope budget status is derived
+from the compiled executable leaf count: `pass` for up to 8 leaves, `warn` for 9-12 leaves, and `fail` above 12 leaves.
+The resulting JSON can be passed directly to `atlas-agent-orchestrator --atlas-work-items`.
+
 ## Issue And Project Lifecycle
 
 Recommended label families:

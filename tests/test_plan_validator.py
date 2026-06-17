@@ -372,6 +372,73 @@ def base_plan(review_hash: str = "0" * 64) -> str:
     )
 
 
+def add_leaf_issues(plan: str, dispatch_modes: list[str]) -> str:
+    leaf_blocks = []
+    for index, dispatch in enumerate(dispatch_modes, start=2):
+        leaf_blocks.append(
+            textwrap.dedent(
+                f"""\
+                - WS1-LEAF-{index:03d}: Extra validator work {index}
+                  - Type: story
+                  - Parent: WS1
+                  - Owner: implementation
+                  - Agent type: generalPurpose
+                  - Dispatch: {dispatch}
+                  - Depends on:
+                    - none
+                  - Parallel group: validators
+                  - Blocks:
+                    - none
+                  - Critical path rank: {index}
+                  - Merge group: validators
+                  - Combine policy: solo
+                  - Conflict class: plan-validator
+                  - Validation tier: T1
+                  - External blockers:
+                    - none
+                  - Manual blockers:
+                    - none
+                  - Files in scope:
+                    - skills/plan/scripts/validate_plan.py
+                  - Files out of scope:
+                    - product/runtime files
+                  - Required gates:
+                    - G-CI-Unit
+                  - Validation:
+                    - python3 -m unittest tests.test_plan_validator
+                  - Acceptance criteria:
+                    - validator behavior is covered
+                  - One PR contract: yes
+                  - Risk / dispatch notes: low risk
+                  - Source plan sections:
+                    - Implementation Plan / WS1
+                """
+            )
+        )
+    return plan.replace(
+        "\n### Manifest validation summary",
+        "\n" + "\n".join(leaf_blocks) + "\n### Manifest validation summary",
+    )
+
+
+def add_scope_waiver(plan: str, executable_count: int) -> str:
+    waiver = textwrap.dedent(
+        f"""\
+
+        ### DR-099: Scope waiver for bounded fixture
+        - Stage: Automation
+        - Date: 2026-05-29
+        - Decision: Keep this validator fixture in one plan despite the leaf count.
+        - Executable leaf count: {executable_count}
+        - Rationale for not splitting: The fixture exercises validator aggregation in one local test document.
+        - Validation risk: Larger manifests are harder to review, so the test keeps identical low-risk leaves.
+        - Revisit trigger: Split before using this shape for real implementation work.
+        - Status: Accepted
+        """
+    )
+    return plan.replace("\n## Intent Model", waiver + "\n## Intent Model")
+
+
 class PlanValidatorTests(unittest.TestCase):
     def test_passing_plan_accepts_matching_review_hashes(self) -> None:
         module = load_validator_module()
@@ -472,6 +539,62 @@ class PlanValidatorTests(unittest.TestCase):
 
         self.assertEqual(result.status, "Fail")
         self.assertTrue(any("Open questions remain" in message for message in result.messages))
+
+    def test_automation_readiness_warns_above_eight_executable_leaves(self) -> None:
+        module = load_validator_module()
+        plan = add_leaf_issues(base_plan(), ["agent-ready"] * 8)
+
+        result = next(result for result in module.validate(plan) if result.gate == "AutomationReadiness")
+
+        self.assertEqual(result.status, "Pass")
+        self.assertTrue(any("above the recommended budget of 8" in message for message in result.messages))
+
+    def test_automation_readiness_fails_above_twelve_executable_leaves_without_waiver(self) -> None:
+        module = load_validator_module()
+        plan = add_leaf_issues(base_plan(), ["agent-ready"] * 12)
+
+        result = next(result for result in module.validate(plan) if result.gate == "AutomationReadiness")
+
+        self.assertEqual(result.status, "Fail")
+        self.assertTrue(any("exceeds 12" in message for message in result.messages))
+
+    def test_automation_readiness_counts_manual_review_and_blocked_leaves(self) -> None:
+        module = load_validator_module()
+        plan = add_leaf_issues(base_plan(), ["manual-review"] * 6 + ["blocked"] * 6)
+
+        result = next(result for result in module.validate(plan) if result.gate == "AutomationReadiness")
+
+        self.assertEqual(result.status, "Fail")
+        self.assertTrue(any("exceeds 12" in message for message in result.messages))
+
+    def test_automation_readiness_does_not_count_tracking_only_leaves(self) -> None:
+        module = load_validator_module()
+        plan = add_leaf_issues(base_plan(), ["agent-ready"] * 7 + ["tracking-only"] * 20)
+
+        result = next(result for result in module.validate(plan) if result.gate == "AutomationReadiness")
+
+        self.assertEqual(result.status, "Pass")
+        self.assertFalse(any("executable leaf count" in message for message in result.messages))
+
+    def test_automation_readiness_accepts_complete_dr_backed_scope_waiver(self) -> None:
+        module = load_validator_module()
+        plan = add_leaf_issues(base_plan(), ["agent-ready"] * 12)
+        plan = add_scope_waiver(plan, executable_count=13)
+
+        result = next(result for result in module.validate(plan) if result.gate == "AutomationReadiness")
+
+        self.assertEqual(result.status, "Pass")
+        self.assertTrue(any("above the recommended budget of 8" in message for message in result.messages))
+
+    def test_automation_readiness_rejects_incomplete_scope_waiver(self) -> None:
+        module = load_validator_module()
+        plan = add_leaf_issues(base_plan(), ["agent-ready"] * 12)
+        plan = add_scope_waiver(plan, executable_count=12)
+
+        result = next(result for result in module.validate(plan) if result.gate == "AutomationReadiness")
+
+        self.assertEqual(result.status, "Fail")
+        self.assertTrue(any("must exactly match 13" in message for message in result.messages))
 
 
 if __name__ == "__main__":

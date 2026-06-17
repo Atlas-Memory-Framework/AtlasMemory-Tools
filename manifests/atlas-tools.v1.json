@@ -28,6 +28,10 @@
       "path": "skills/intent-reconciliation"
     },
     {
+      "name": "issue-spec",
+      "path": "skills/issue-spec"
+    },
+    {
       "name": "draft-copy-paste-prompt",
       "path": "skills/draft-copy-paste-prompt"
     },
@@ -173,6 +177,11 @@
       "intent-model",
       "open-loop-ledger",
       "latent-intent"
+    ],
+    "issue-spec": [
+      "issue-spec-sidecar",
+      "sidecar-issue-spec",
+      "leaf-spec"
     ],
     "plan-execution-readiness": [
       "plan-stress-review",

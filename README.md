@@ -122,6 +122,10 @@ The simplified skill hierarchy is:
 - `plan-execution-readiness`: the critical review checklist/persona used standalone or inside the runtime.
 - `plan-stress-review`: legacy phrase/alias for `plan-execution-readiness`; do not add a separate workflow around it.
 
+Plan Package v0 is sidecar-first. A selected markdown plan may reference deep issue-spec sidecars from Automation Issue Manifest leaves using `Spec`, `Spec path`, `Spec hash`, `Spec source id`, and `Depth contract` fields. Those sidecars are governed attachments for local validation, local package/work-item records, and optional GitHub export metadata. Package directories remain opt-in; no GitHub Project fields are required for v0.
+
+Parent/child scope budgets keep plans reviewable. Parent plans should index child plans and dependency summaries with tracking-only entries. Child plans own bounded executable leaves, normally 3-8. The validator warns above 8 executable leaves and fails above 12 unless the plan is split or an accepted DR-backed scope waiver records exact count, rationale, validation risk, and revisit trigger. `manual-review`, `agent-ready`, and `blocked` leaves all count as executable; only `tracking-only` does not.
+
 Keep these systems repo-first. Source skills, scripts, references, and runtime protocol files belong under this repo's `skills/` tree. Local Codex copies are install artifacts used for execution. Update the repo-native source first, then install or sync into the local Codex skill directory.
 
 ## Local Automation Runtime

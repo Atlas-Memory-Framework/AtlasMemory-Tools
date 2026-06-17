@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +20,11 @@ def load_validator_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def sha256_text(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 class ProposalValidatorTests(unittest.TestCase):
@@ -74,6 +81,68 @@ class ProposalValidatorTests(unittest.TestCase):
             "blocked_items": [],
         }
 
+    def package_section_index(self, package_root: Path):
+        plan = package_root / "PLAN.md"
+        readonly = package_root / "readonly.md"
+        plan_text = "# Plan\n\n## Intent Model\nPlan body.\n"
+        readonly_text = "# Read Only\n\n## Context\nContext body.\n"
+        plan.write_text(plan_text, encoding="utf-8")
+        readonly.write_text(readonly_text, encoding="utf-8")
+        package_files = [
+            {
+                "file_id": "F0001",
+                "path": "PLAN.md",
+                "kind": "plan",
+                "sha256": sha256_text(plan_text),
+                "patchable": True,
+            },
+            {
+                "file_id": "F0002",
+                "path": "readonly.md",
+                "kind": "context",
+                "sha256": sha256_text(readonly_text),
+                "patchable": False,
+            },
+        ]
+        package_hash = self.validator.package_sha256(package_files)
+        return {
+            "package_mode": True,
+            "package_root": str(package_root),
+            "source_package_sha256": package_hash,
+            "plan_sha256": sha256_text(plan_text),
+            "plan_path": str(plan),
+            "package_files": package_files,
+            "sections": [
+                {
+                    "section_id": "F0001:S0001-plan",
+                    "heading": "# Plan",
+                    "sha256": sha256_text(plan_text),
+                    "file_path": "PLAN.md",
+                    "patchable": True,
+                },
+                {
+                    "section_id": "F0002:S0001-read-only",
+                    "heading": "# Read Only",
+                    "sha256": sha256_text(readonly_text),
+                    "file_path": "readonly.md",
+                    "patchable": False,
+                },
+            ],
+        }
+
+    def package_proposal(self, section_index: dict):
+        proposal = self.proposal()
+        proposal["source_plan_path"] = section_index["plan_path"]
+        proposal["source_plan_sha256"] = section_index["plan_sha256"]
+        proposal["source_package_sha256"] = section_index["source_package_sha256"]
+        proposal["findings"][0]["section_id"] = "F0001:S0001-plan"
+        proposal["findings"][0]["section"] = "# Plan"
+        proposal["patches"][0]["target_section_id"] = "F0001:S0001-plan"
+        proposal["patches"][0]["target_section"] = "# Plan"
+        proposal["patches"][0]["target_section_sha256"] = section_index["sections"][0]["sha256"]
+        proposal["patches"][0]["replacement_text"] = "# Plan\n\n## Intent Model\nUpdated body.\n"
+        return proposal
+
     def test_intent_gap_type_is_optional(self):
         errors = self.validator.validate(self.proposal(), self.section_index, check_canonical=False)
         self.assertEqual(errors, [])
@@ -93,6 +162,52 @@ class ProposalValidatorTests(unittest.TestCase):
             check_canonical=False,
         )
         self.assertIn("finding F-001 has invalid intent_gap_type", errors)
+
+    def test_package_mode_requires_source_package_sha256(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            section_index = self.package_section_index(Path(tmp))
+            proposal = self.package_proposal(section_index)
+            proposal.pop("source_package_sha256")
+
+            errors = self.validator.validate(proposal, section_index, check_canonical=False)
+
+            self.assertIn("missing top-level field: source_package_sha256", errors)
+            self.assertRegex(section_index["source_package_sha256"], r"^sha256:[a-f0-9]{64}$")
+
+    def test_package_mode_rejects_stale_package_snapshot_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            section_index = self.package_section_index(Path(tmp))
+            proposal = self.package_proposal(section_index)
+            proposal["source_package_sha256"] = "stale"
+
+            errors = self.validator.validate(proposal, section_index, check_canonical=False)
+
+            self.assertIn("source_package_sha256 does not match section index", errors)
+
+    def test_package_mode_rejects_changed_package_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_root = Path(tmp)
+            section_index = self.package_section_index(package_root)
+            proposal = self.package_proposal(section_index)
+            (package_root / "readonly.md").write_text("# Read Only\n\n## Context\nChanged.\n", encoding="utf-8")
+
+            errors = self.validator.validate(proposal, section_index, check_canonical=True)
+
+            self.assertIn("package document changed since snapshot: readonly.md", errors)
+
+    def test_package_mode_rejects_read_only_document_patch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            section_index = self.package_section_index(Path(tmp))
+            proposal = self.package_proposal(section_index)
+            proposal["findings"][0]["section_id"] = "F0002:S0001-read-only"
+            proposal["findings"][0]["section"] = "# Read Only"
+            proposal["patches"][0]["target_section_id"] = "F0002:S0001-read-only"
+            proposal["patches"][0]["target_section"] = "# Read Only"
+            proposal["patches"][0]["target_section_sha256"] = section_index["sections"][1]["sha256"]
+
+            errors = self.validator.validate(proposal, section_index, check_canonical=False)
+
+            self.assertIn("P-001 targets read-only package document: readonly.md", errors)
 
 
 if __name__ == "__main__":

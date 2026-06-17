@@ -97,8 +97,11 @@ Manifest leaf issue body should include:
 
 - source `## Automation Issue Manifest` / `### Leaf issues` leaf id
 - stable `SourceId` / plan-source marker in the issue body
+- concise projection metadata when present: `Source kind`, `SourceId`, `Package id`, `Package hash`, `Spec id`, `Spec source id`, `Spec path`, `Spec hash`, and `Projection schema`
+- a link to the sidecar spec path, not the full sidecar spec body
 - dispatch mode and dispatch recommendation
 - scheduler metadata when present: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, validation tier
+- depth contract when present
 - execution repo and base branch
 - write scope
 - validation commands
@@ -145,6 +148,12 @@ Canonical section:
 ## Automation Issue Manifest
 ### Leaf issues
 - LEAF-001: Parser support for manifest leaves
+  - Spec path: specs/leaf-001.md
+  - Spec hash: sha256:<64 lowercase hex chars>
+  - Spec id: pkg-001-leaf-001-spec
+  - Spec source id: pkg-001#LEAF-001
+  - Depth contract:
+    - Preserve parser compatibility fixtures for leaf projection.
   - Dispatch: agent-ready
   - Points: 1
   - Target repo: service

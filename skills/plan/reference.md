@@ -375,6 +375,11 @@ Applies when `AutomationTarget` is not `none`.
   - Acceptance criteria:
     - ...
   - One PR contract: yes | no
+  - Spec: inline | sidecar
+  - Spec path: <optional path to sidecar issue spec markdown; not a package-directory requirement>
+  - Spec hash: <optional sha256:... for sidecar freshness>
+  - Spec source id: <must match this leaf id when Spec is sidecar>
+  - Depth contract: <required for complex/data/testing/coverage/runtime/projection/cross-module/multi-file leaves; otherwise rationale for inline is acceptable>
   - Risk / dispatch notes:
   - Source plan sections:
     - Implementation Plan / WS...
@@ -386,7 +391,11 @@ Applies when `AutomationTarget` is not `none`.
 - File-scope conflicts resolved: Pass | Fail
 - Acceptance criteria executable: Pass | Fail
 - Required metadata complete: Pass | Fail
+- Executable leaf count: <integer; all non-tracking-only leaves including manual-review, agent-ready, and blocked>
+- Scope budget: Pass | Warning | Fail
+- Child-plan split: <none | parent tracking-only index | child plan owns bounded leaves>
 - Notes / waivers (must cite DR-xxx):
+  - Scope waivers above 12 executable leaves must cite an accepted DR with exact executable leaf count, rationale for not splitting, validation risk, and revisit trigger.
   - ...
 
 ## Planning Reviews

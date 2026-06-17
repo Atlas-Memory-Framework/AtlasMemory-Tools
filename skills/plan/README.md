@@ -23,7 +23,10 @@ structure, automation manifest readiness, false approval states, and stale plann
 
 Authority model:
 
+- `$plan` is the public planning entrypoint and the only workflow that writes the selected authoring artifact, decision log, gate state, or approval state
+- `local-plan-agent-runtime` is an internal dry-run review/proposal layer used by `$plan` for agentic review mode; it snapshots plans and returns findings, but it does not approve, dispatch, or write canonical planning state
 - the markdown plan is the authoring write surface
+- sidecar issue specs are governed attachments referenced by manifest leaf metadata; they do not require package directories and do not override the markdown manifest
 - compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it is not independent authoring authority
 - GitHub issues and PRs remain the execution truth
 - rendered overlays and project boards are derived views, not authoring inputs
@@ -56,6 +59,9 @@ Recommended pattern:
 - group related plans with optional `PlanGroup`
 - connect shards with optional `ParentPlan`, `DependsOnPlans`, `BlocksPlans`, and `AtomicScope`
 - keep cross-plan metadata descriptive; it is not a registry and does not replace explicit `@path` selection
+- parent/campaign plans should be tracking-only indexes unless they own a small bounded execution change
+- child plans should normally hold 3-8 executable leaves; more than 8 warns, and more than 12 requires a child-plan split or an accepted DR-backed scope waiver
+- scope waivers must record the DR id, exact executable-leaf count, rationale for not splitting, validation risk, and revisit trigger
 - use `/local-plan-agent-runtime` for agentic review of one selected plan at a time
 - project issues only after that plan's implementation and automation sections are explicit enough for zero-interaction agents
 
@@ -154,6 +160,7 @@ Expectation when using `/plan`:
 - **Intent Model** entries when the user's expression may not fully encode the target
 - **Workstreams** with explicit owners and merge points
 - **Named gates** (CI vs deployed) with clear “green means” definitions
+- **Automation Issue Manifest leaves** with optional sidecar metadata (`Spec`, `Spec path`, `Spec hash`, `Spec source id`, `Depth contract`) when inline leaf detail would be too shallow
 - **Runbooks** for migrations, provisioning, rollout, rollback, or external effects when those domains are in scope
 - **Planning Reviews** with findings + dispositions (Accept/Reject/Defer)
 - **Dynamic specialist review roster** when the plan touches high-risk or domain-specific boundaries

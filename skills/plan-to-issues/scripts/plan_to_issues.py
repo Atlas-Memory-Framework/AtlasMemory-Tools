@@ -54,6 +54,7 @@ ISSUE_EPIC_ID_RE = re.compile(r"^- Epic id: `([^`]+)`\r?$", re.MULTILINE)
 ISSUE_SOURCE_SECTION_RE = re.compile(r"^- Source section: `([^`]+)`\r?$", re.MULTILINE)
 ISSUE_PARENT_EPIC_RE = re.compile(r"^## Parent Epic\r?\n(\S+)", re.MULTILINE)
 FIELD_LINE_RE = re.compile(r"^\s*-\s+(?P<key>[^:]+):\s+(?P<value>.+)$")
+SPEC_HASH_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 # Nested bullets under "Review gates (named):" (common in Full-tier plans).
 REVIEW_GATES_HEADER_RE = re.compile(
     r"^(?P<indent>\s*)-\s+Review gates[^:]*:\s*(?P<rest>.*)$",
@@ -409,6 +410,15 @@ class IssueDraft:
     blocker_issue_refs: list[str] = field(default_factory=list)
     automation_blockers: list[str] = field(default_factory=list)
     priority: str | None = None
+    source_kind: str | None = None
+    package_id: str | None = None
+    package_hash: str | None = None
+    spec_id: str | None = None
+    spec_source_id: str | None = None
+    spec_path: str | None = None
+    spec_hash: str | None = None
+    projection_schema: str | None = None
+    depth_contract: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1659,7 +1669,19 @@ def _parse_scalar_frontmatter_block(block: str) -> dict[str, object]:
 
 def _flatten_frontmatter(data: Mapping[str, object]) -> dict[str, str]:
     frontmatter: dict[str, str] = {}
-    for key in ("name", "overview", "summary", "ProjectionWorkstreamLabel", "projectionWorkstreamLabel"):
+    for key in (
+        "name",
+        "overview",
+        "summary",
+        "ProjectionWorkstreamLabel",
+        "projectionWorkstreamLabel",
+        "Package id",
+        "Package hash",
+        "Projection schema",
+        "package_id",
+        "package_hash",
+        "projection_schema",
+    ):
         value = data.get(key)
         scalar = _clean_frontmatter_scalar(value)
         if scalar:
@@ -2108,6 +2130,108 @@ def clean_manifest_list_values(values: list[str]) -> list[str]:
         if item and item.lower() not in {"none", "n/a", "na"}:
             cleaned.append(item)
     return ordered_unique(cleaned)
+
+
+def canonical_markdown_hash(markdown: str) -> str:
+    normalized = markdown.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def resolve_plan_relative_path(plan_path: Path, value: str) -> Path:
+    raw = clean_manifest_field_value(value)
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    plan_relative = (plan_path.parent / candidate).resolve()
+    if plan_relative.exists():
+        return plan_relative
+    return (Path.cwd() / candidate).resolve()
+
+
+def parse_spec_id(markdown: str) -> str | None:
+    match = re.search(r"^SpecId:\s*(.+?)\s*$", markdown, re.MULTILINE)
+    if not match:
+        return None
+    return clean_manifest_field_value(match.group(1)) or None
+
+
+def parse_spec_source_id(markdown: str) -> str | None:
+    match = re.search(r"^SourceId:\s*(.+?)\s*$", markdown, re.MULTILINE)
+    if not match:
+        return None
+    return clean_manifest_field_value(match.group(1)) or None
+
+
+def collect_projection_metadata_lines(
+    *,
+    source_kind: str,
+    source_id: str,
+    package_id: str | None,
+    package_hash: str | None,
+    spec_id: str | None,
+    spec_source_id: str | None,
+    spec_path: str | None,
+    spec_hash: str | None,
+    projection_schema: str | None,
+) -> list[str]:
+    lines = [
+        "## Projection Metadata",
+        f"- Source kind: `{source_kind}`",
+        f"- SourceId: `{source_id}`",
+    ]
+    if package_id:
+        lines.append(f"- Package id: `{package_id}`")
+    if package_hash:
+        lines.append(f"- Package hash: `{package_hash}`")
+    if spec_id:
+        lines.append(f"- Spec id: `{spec_id}`")
+    if spec_source_id:
+        lines.append(f"- Spec source id: `{spec_source_id}`")
+    if spec_path:
+        escaped_path = spec_path.replace(")", "%29")
+        lines.append(f"- Spec path: [`{spec_path}`]({escaped_path})")
+    if spec_hash:
+        lines.append(f"- Spec hash: `{spec_hash}`")
+    if projection_schema:
+        lines.append(f"- Projection schema: `{projection_schema}`")
+    lines.append("")
+    return lines
+
+
+def validate_manifest_leaf_specs_for_apply(
+    plan_path: Path,
+    children: list[IssueDraft],
+) -> None:
+    errors: list[str] = []
+    for child in children:
+        if not child.spec_path:
+            if child.spec_hash:
+                errors.append(f"{child.source_id}: Spec hash is set but Spec path is missing.")
+            continue
+        spec_file = resolve_plan_relative_path(plan_path, child.spec_path)
+        if not spec_file.is_file():
+            errors.append(f"{child.source_id}: Spec path not found: {child.spec_path}")
+            continue
+        if child.spec_hash:
+            if not SPEC_HASH_RE.fullmatch(child.spec_hash):
+                errors.append(
+                    f"{child.source_id}: Spec hash must use sha256:<64 lowercase hex chars>."
+                )
+                continue
+            actual_hash = canonical_markdown_hash(read_text(spec_file))
+            if child.spec_hash != actual_hash:
+                errors.append(
+                    f"{child.source_id}: Spec hash mismatch: manifest {child.spec_hash}, actual {actual_hash}."
+                )
+        if child.spec_source_id:
+            actual_source_id = parse_spec_source_id(read_text(spec_file))
+            if child.spec_source_id != actual_source_id:
+                errors.append(
+                    f"{child.source_id}: Spec source id mismatch: manifest {child.spec_source_id}, "
+                    f"sidecar SourceId {actual_source_id or '<missing>'}."
+                )
+    if errors:
+        raise SystemExit("Manifest spec validation failed:\n- " + "\n- ".join(errors))
 
 
 def build_execution_state_lines(
@@ -3819,6 +3943,38 @@ def build_manifest_leaf_children(
         validation_tier = clean_optional_manifest_scalar(
             collect_field_values(lines, "validation tier")
         )
+        spec_path = clean_optional_manifest_scalar(
+            collect_field_values(lines, "spec path", "specpath")
+        )
+        spec_hash = clean_optional_manifest_scalar(
+            collect_field_values(lines, "spec hash", "spechash")
+        )
+        depth_contract = clean_manifest_list_values(
+            collect_field_values(lines, "depth contract")
+        )
+        spec_id = clean_optional_manifest_scalar(
+            collect_field_values(lines, "spec id", "specid")
+        )
+        spec_source_id = clean_optional_manifest_scalar(
+            collect_field_values(lines, "spec source id", "specsourceid")
+        )
+        if spec_path and not spec_id:
+            spec_file = resolve_plan_relative_path(plan_path, spec_path)
+            if spec_file.is_file():
+                spec_id = parse_spec_id(read_text(spec_file))
+        if spec_path and not spec_source_id:
+            spec_file = resolve_plan_relative_path(plan_path, spec_path)
+            if spec_file.is_file():
+                spec_source_id = parse_spec_source_id(read_text(spec_file))
+        package_id = clean_optional_manifest_scalar(
+            collect_field_values(lines, "package id", "package_id")
+        ) or frontmatter.get("Package id") or frontmatter.get("package_id")
+        package_hash = clean_optional_manifest_scalar(
+            collect_field_values(lines, "package hash", "package_hash")
+        ) or frontmatter.get("Package hash") or frontmatter.get("package_hash")
+        projection_schema = clean_optional_manifest_scalar(
+            collect_field_values(lines, "projection schema", "projection_schema")
+        ) or frontmatter.get("Projection schema") or frontmatter.get("projection_schema")
         requested_dispatch_mode = normalize_dispatch_mode(
             collect_field_values(lines, "dispatch mode", "dispatch")
         )
@@ -3940,6 +4096,17 @@ def build_manifest_leaf_children(
             *build_plan_reference_lines(plan_path, include_execution_note=bool(repo_targets)),
             f"- Source section: `{AUTOMATION_MANIFEST_SECTION_TITLE}` / `{source_id}`",
             "",
+            *collect_projection_metadata_lines(
+                source_kind="automation-manifest-leaf",
+                source_id=source_id,
+                package_id=package_id,
+                package_hash=package_hash,
+                spec_id=spec_id,
+                spec_source_id=spec_source_id,
+                spec_path=spec_path,
+                spec_hash=spec_hash,
+                projection_schema=projection_schema,
+            ),
             "## Automation Manifest Metadata",
             f"- Suggested points: `{points}`",
             f"- Issue ready: `{'true' if status_label == 'status:ready' else 'false'}`",
@@ -3965,6 +4132,8 @@ def build_manifest_leaf_children(
             body_lines.append(f"- Conflict class: `{conflict_class}`")
         if validation_tier:
             body_lines.append(f"- Validation tier: `{validation_tier}`")
+        if depth_contract:
+            body_lines.append(f"- Depth contract: `{'; '.join(depth_contract)}`")
         if risk_tags:
             body_lines.append(f"- Risk tags: `{', '.join(risk_tags)}`")
         if repo_targets:
@@ -4072,6 +4241,15 @@ def build_manifest_leaf_children(
                 blocker_issue_refs=blocker_analysis.issue_refs,
                 automation_blockers=automation_blockers,
                 priority=priority,
+                source_kind="automation-manifest-leaf",
+                package_id=package_id,
+                package_hash=package_hash,
+                spec_id=spec_id,
+                spec_source_id=spec_source_id,
+                spec_path=spec_path,
+                spec_hash=spec_hash,
+                projection_schema=projection_schema,
+                depth_contract=depth_contract,
             )
         )
     return drafts
@@ -5851,6 +6029,8 @@ def main() -> int:
     )
     epic.status_label = epic_status_label
     preflight = projection_preflight_report([epic, *children])
+    if args.strategy == "leaf-issues" and (args.apply or args.sync_apply):
+        validate_manifest_leaf_specs_for_apply(plan_path, children)
 
     payload = {
         "plan": plan_display_path,

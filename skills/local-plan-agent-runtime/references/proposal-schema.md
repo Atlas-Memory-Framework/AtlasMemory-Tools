@@ -10,6 +10,7 @@ Required top-level fields:
   "persona": "",
   "source_plan_path": "",
   "source_plan_sha256": "",
+  "source_package_sha256": "",
   "scope": [""],
   "summary": "",
   "findings": [],
@@ -18,6 +19,8 @@ Required top-level fields:
   "blocked_items": []
 }
 ```
+
+`source_package_sha256` is required for package-mode snapshots and omitted for legacy single-plan snapshots. Use the value from `section-index.json`.
 
 Finding object:
 
@@ -59,6 +62,7 @@ Patch rules:
 - Prefer minimal bounded section replacements.
 - Do not modify status, gate, approval, projection, dispatch, review, or decision-log fields.
 - Do not target `Plan State`, `Gate Results`, `Planning Reviews`, or `Decision Log` sections from worker proposals.
+- In package mode, do not target sections from package documents whose `patchable` flag is `false`.
 - Link every patch to one or more findings.
 - Use `no-patch` when the finding should be dispositioned but not applied.
 - If a finding requires a user decision, linked patches must use `no-patch`; the manager must convert the issue into a decision boundary.
