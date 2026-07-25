@@ -80,6 +80,8 @@ For work that may cross a context, process, or model-version boundary, persist a
 
 Improve the harness offline from recorded outcomes and traces. Start with deterministic outcome graders, add trace or model graders only where needed, calibrate subjective graders with humans, and compare one harness change at a time against a stable task set. Track task success, validation and review outcomes, stalls, repairs, human interventions, cost, latency, and unsafe-action denials.
 
+Use `agent-harness-evals` to diagnose harness failures and qualify any unattended or multi-hour lane before promotion. A new or materially changed lane must pass a representative one-item canary through result ingestion, validation, review, truthful terminal state, and resumable evidence.
+
 Use search or alternative branches mainly for reversible diagnosis, research, and planning. Select one bounded path before repository mutation unless isolated branches have explicit merge and evaluation contracts.
 
 ## Atlas Posture
@@ -105,6 +107,8 @@ Use the smallest runtime that fits:
 - Repo-isolated parallel work: worktrees or runtime job checkouts.
 - Local queue without GitHub mutation: AtlasMemory-Tools `atlas-agent-orchestrator --atlas-work-items`.
 - GitHub issue-to-PR lane: AtlasMemory-Tools `atlas-agent-unattended` or `atlas-agent-shift`.
+
+Before using `atlas-agent-unattended` or `atlas-agent-shift`, obtain an `agent-harness-evals` readiness disposition for the exact lane version. Do not infer readiness from dry-run, prompt construction, successful dispatch, or worker exit alone.
 
 For multiple Codex accounts or subscriptions, use separate installed runtime directories and separate runtime-local `codex-home/` directories. Do not point unattended workers at a shared personal Codex home unless the user explicitly accepts the billing/data coupling.
 

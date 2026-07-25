@@ -1,0 +1,6 @@
+<!-- atlas-tools-generated: source=skills/agent-harness-evals/agents/openai.yaml manifest=atlas-tools.v1 checksum=sha256:5dca1bea9227cb548bb00809a8204aa198a29577995d234b579a71faa4b8479c -->
+<!-- atlas-tools-generated-end -->
+interface:
+  display_name: "Agent Harness Evals"
+  short_description: "Evaluate agent harness progress and reliability"
+  default_prompt: "Use $agent-harness-evals to evaluate this agent harness or long-running operator lane before promotion."

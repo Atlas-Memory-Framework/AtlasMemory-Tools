@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/continuous-agent-loop/SKILL.md manifest=atlas-tools.v1 checksum=sha256:43aa624792504764fb873a0dee9936aa1062784ff5cd1b30c9cf398a8b5a97b0
+# atlas-tools-generated: source=skills/continuous-agent-loop/SKILL.md manifest=atlas-tools.v1 checksum=sha256:6e8a974b470cd42ae3b327d4bbc89f4d37f8acbf366fb19f69f38adfc5596312
 # atlas-tools-generated-end
 name: continuous-agent-loop
 description: Design and run bounded continuous agent work loops, including nested inner/outer loops, with explicit queue intake, authority, budgets, progress signals, work isolation, validation, evidence, review, resume state, and stop gates. Use when the user asks for loop engineering, unattended or semi-attended Codex work, recurring repo maintenance, multi-agent work queues, local JSON work-item loops, issue-to-PR automation, long-running development, or faster continuous development across one or more repos.
@@ -82,6 +82,8 @@ For work that may cross a context, process, or model-version boundary, persist a
 
 Improve the harness offline from recorded outcomes and traces. Start with deterministic outcome graders, add trace or model graders only where needed, calibrate subjective graders with humans, and compare one harness change at a time against a stable task set. Track task success, validation and review outcomes, stalls, repairs, human interventions, cost, latency, and unsafe-action denials.
 
+Use `agent-harness-evals` to diagnose harness failures and qualify any unattended or multi-hour lane before promotion. A new or materially changed lane must pass a representative one-item canary through result ingestion, validation, review, truthful terminal state, and resumable evidence.
+
 Use search or alternative branches mainly for reversible diagnosis, research, and planning. Select one bounded path before repository mutation unless isolated branches have explicit merge and evaluation contracts.
 
 ## Atlas Posture
@@ -107,6 +109,8 @@ Use the smallest runtime that fits:
 - Repo-isolated parallel work: worktrees or runtime job checkouts.
 - Local queue without GitHub mutation: AtlasMemory-Tools `atlas-agent-orchestrator --atlas-work-items`.
 - GitHub issue-to-PR lane: AtlasMemory-Tools `atlas-agent-unattended` or `atlas-agent-shift`.
+
+Before using `atlas-agent-unattended` or `atlas-agent-shift`, obtain an `agent-harness-evals` readiness disposition for the exact lane version. Do not infer readiness from dry-run, prompt construction, successful dispatch, or worker exit alone.
 
 For multiple Codex accounts or subscriptions, use separate installed runtime directories and separate runtime-local `codex-home/` directories. Do not point unattended workers at a shared personal Codex home unless the user explicitly accepts the billing/data coupling.
 

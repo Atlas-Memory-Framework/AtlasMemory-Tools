@@ -8,6 +8,7 @@ description: "Operate the local automation runtime: queue issues, run bounded or
 ## Purpose
 
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
+This skill owns operation of the `atlas-agent-shift` terminal program; there is no separate shift skill. The program is the durable supervisor wrapper, while this skill defines when and how an operator may use it.
 Use `repos.txt` to add target repos; use another runtime only for isolation, secrets separation, or intentional concurrent lanes.
 Run these commands from an installed runtime directory. Do not operate from `templates/local-automation-runtime/`
 inside the tools repository; that path is source material and direct execution will create runtime state in the
@@ -35,25 +36,33 @@ template tree.
 5. Run a bounded cycle:
    - `./run_e2e_chain.sh --cycles 1`
    - Add mutating flags only after preview looks correct.
-6. Run unattended cycles when the lane is stable:
+6. Qualify the exact lane before unattended or long-shift operation:
+   - Use `agent-harness-evals`.
+   - Run one representative work item through dispatch, result ingestion, validation, independent review, truthful terminal state, and resumable evidence.
+   - Compare accepted progress and operator attention with a direct supervised execution estimate.
+   - Declare no-progress, repeated-blocker, repair, approval, time, and cycle stop thresholds before launch.
+7. Run unattended cycles only after the canary passes:
    - `./atlas-agent-unattended --cycles 3 --dispatch-max-per-repo 2 --review-apply --post-cycle-summary`
-7. Run a long bounded shift when the lane is stable and durable resume state is needed:
+8. Run a long bounded shift only after the lane earns long-shift readiness:
    - `./atlas-agent-shift --cycles 12 --max-minutes 480 --sleep-seconds 300 --publish --apply --review-apply --post-cycle-summary`
    - Use the shift wrapper for wall-clock limits, a supervisor lock, heartbeat/status JSON, and an exit handoff.
-8. Review blockers:
+9. Review blockers:
    - `./atlas-agent-review --summary review.json`
    - `./atlas-agent-semantic-review OWNER/REPO#PR --apply`
-9. Validate and repair:
+10. Validate and repair:
    - `./atlas-agent-local-validate OWNER/REPO#PR --apply`
    - `./atlas-agent-deployed-validate OWNER/REPO#PR --apply`
    - `./atlas-agent-pr-repair OWNER/REPO#PR`
-10. Finalize only when review approves:
+11. Finalize only when review approves:
    - `./atlas-agent-finalize --required-checks-file required-checks.json --merge --close-issues`
 
 ## Guardrails
 
 - Keep cycles bounded with `--cycles`, `--dispatch-max-per-repo`, and per-stage repair/review/validation max and concurrency flags.
 - For multi-hour operation, use `atlas-agent-shift` instead of treating a Codex chat or subagent as the durable supervisor.
+- Do not start a long shift until one real item has passed the full canary. Stop after two consecutive no-progress cycles, the same blocker twice without new evidence, more than one repair of the same item, or any stale/nonterminal supervisor state after reconciliation.
+- Stop when harness repair consumes more effort than the remaining direct task path. Preserve the candidate and route a direct supervised takeover instead of automatically refreezing and relaunching.
+- Preserve exact-subject approvals where authority requires them. Do not ask again for an unchanged material decision merely because a wrapper, serialization, or internal hash changed without changing the effect envelope.
 - Treat `Open dependencies:` and `Manual gates remaining:` as the runtime dispatch contract; Project fields are advisory unless they match the issue body.
 - Keep unattended dispatch one-point only. Larger `points:N` issues must be decomposed or explicitly handled outside unattended dispatch.
 - Treat no-check PRs as blocked unless local validation and required-check policy explicitly allow them.
@@ -76,5 +85,9 @@ Summarize:
 - review labels/routes
 - validation results
 - repairs attempted
+- accepted progress units and terminal yield
+- no-progress cycles, repeated blockers, and stale-state incidents
+- approval prompts versus unique material decisions
+- operator interventions and direct-execution comparison
 - merged/closed items
 - remaining blockers and owner actions

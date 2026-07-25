@@ -6,7 +6,7 @@ AtlasMemory Tools is the canonical planning, issue projection, GitHub Project, a
 
 It owns four surfaces:
 
-- `skills/`: workflow contracts for situation modeling, planning, review, implementation, continuous agent loops, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
+- `skills/`: workflow contracts for situation modeling, agent harness evaluation, planning, review, implementation, continuous agent loops, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
 - `agents/`: reusable specialist role rubrics for planning, implementation, review, validation, data, infra, processing, and testing
 - `templates/local-automation-runtime/`: reusable local automation host for GitHub issue-to-PR execution
 - `manifests/atlas-tools.v1.json`: supported harness adapters, canonical skills, agents, templates, and generated-copy inventory
@@ -77,7 +77,8 @@ The verifier also checks committed Codex harness freshness, adapter CLI generati
 5. Use `plan-to-html` when a markdown plan should be rendered into a standalone review artifact.
 6. Use `implement` for approved plan execution.
 7. Use `handoff` before pausing, resuming, or moving work between agents.
-8. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for runtime lifecycle work.
+8. Use `agent-harness-evals` to qualify a new or changed unattended or long-shift lane with a representative one-item canary.
+9. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for runtime lifecycle work.
 
 For full planning details, see `skills/plan/README.md`.
 
@@ -119,6 +120,7 @@ The simplified skill hierarchy is:
 
 - `model-the-situation`: evidence-aware orientation and decision modeling before advice or action.
 - `continuous-agent-loop`: bounded queue execution with explicit authority, validation, evidence, and stop gates.
+- `agent-harness-evals`: evidence-based diagnosis and promotion gates for agent harnesses, including long-shift readiness and operator-burden limits.
 - `$plan`: the single user-facing planning command and canonical writer.
 - `local-plan-agent-runtime`: the internal agentic review mode used by `$plan` when parallel/local-file review is requested.
 - `plan-execution-readiness`: the critical review checklist/persona used standalone or inside the runtime.

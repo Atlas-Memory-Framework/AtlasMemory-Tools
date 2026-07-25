@@ -4,6 +4,10 @@
   "description": "Canonical inventory for AtlasMemory Tools skills, agents, templates, aliases, and harness adapter targets.",
   "skills": [
     {
+      "name": "agent-harness-evals",
+      "path": "skills/agent-harness-evals"
+    },
+    {
       "name": "automation-decomposition",
       "path": "skills/automation-decomposition"
     },
