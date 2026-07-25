@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/plan-to-issues/reference.md manifest=atlas-tools.v1 checksum=sha256:98c30a63d11a13391fd119fa1b996036e02fdb78b5fde2a2663543e7e550e5d0 -->
+<!-- atlas-tools-generated: source=skills/plan-to-issues/reference.md manifest=atlas-tools.v1 checksum=sha256:72ec027dc2bf97fa9dfef8202a110c63872f0f182abbb48f4fbb10ee884cf675 -->
 <!-- atlas-tools-generated-end -->
 # Plan-To-Issues Reference
 
@@ -99,8 +99,11 @@ Manifest leaf issue body should include:
 
 - source `## Automation Issue Manifest` / `### Leaf issues` leaf id
 - stable `SourceId` / plan-source marker in the issue body
+- concise projection metadata when present: `Source kind`, `SourceId`, `Package id`, `Package hash`, `Spec id`, `Spec source id`, `Spec path`, `Spec hash`, and `Projection schema`
+- a link to the sidecar spec path, not the full sidecar spec body
 - dispatch mode and dispatch recommendation
 - scheduler metadata when present: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, validation tier
+- depth contract when present
 - execution repo and base branch
 - write scope
 - validation commands
@@ -147,6 +150,12 @@ Canonical section:
 ## Automation Issue Manifest
 ### Leaf issues
 - LEAF-001: Parser support for manifest leaves
+  - Spec path: specs/leaf-001.md
+  - Spec hash: sha256:<64 lowercase hex chars>
+  - Spec id: pkg-001-leaf-001-spec
+  - Spec source id: pkg-001#LEAF-001
+  - Depth contract:
+    - Preserve parser compatibility fixtures for leaf projection.
   - Dispatch: agent-ready
   - Points: 1
   - Target repo: service

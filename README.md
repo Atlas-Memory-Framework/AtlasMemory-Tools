@@ -6,7 +6,7 @@ AtlasMemory Tools is the canonical planning, issue projection, GitHub Project, a
 
 It owns four surfaces:
 
-- `skills/`: workflow contracts for planning, review, implementation, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
+- `skills/`: workflow contracts for situation modeling, planning, review, implementation, continuous agent loops, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
 - `agents/`: reusable specialist role rubrics for planning, implementation, review, validation, data, infra, processing, and testing
 - `templates/local-automation-runtime/`: reusable local automation host for GitHub issue-to-PR execution
 - `manifests/atlas-tools.v1.json`: supported harness adapters, canonical skills, agents, templates, and generated-copy inventory
@@ -117,6 +117,8 @@ Agentic review mode should interrogate the user when the plan is missing impleme
 
 The simplified skill hierarchy is:
 
+- `model-the-situation`: evidence-aware orientation and decision modeling before advice or action.
+- `continuous-agent-loop`: bounded queue execution with explicit authority, validation, evidence, and stop gates.
 - `$plan`: the single user-facing planning command and canonical writer.
 - `local-plan-agent-runtime`: the internal agentic review mode used by `$plan` when parallel/local-file review is requested.
 - `plan-execution-readiness`: the critical review checklist/persona used standalone or inside the runtime.

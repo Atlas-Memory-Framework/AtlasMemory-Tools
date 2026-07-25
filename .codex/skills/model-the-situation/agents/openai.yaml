@@ -1,0 +1,6 @@
+<!-- atlas-tools-generated: source=skills/model-the-situation/agents/openai.yaml manifest=atlas-tools.v1 checksum=sha256:47b70f723e19d5296568d525d54603172b8d36102bab53414e11e3892ee38456 -->
+<!-- atlas-tools-generated-end -->
+interface:
+  display_name: "Model the Situation"
+  short_description: "Build clear models of decisions and situations"
+  default_prompt: "Use $model-the-situation to build an explicit working model of this decision or situation before recommending what I should do."

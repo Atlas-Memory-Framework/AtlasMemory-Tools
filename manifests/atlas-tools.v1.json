@@ -8,6 +8,10 @@
       "path": "skills/automation-decomposition"
     },
     {
+      "name": "continuous-agent-loop",
+      "path": "skills/continuous-agent-loop"
+    },
+    {
       "name": "critical-ideation",
       "path": "skills/critical-ideation"
     },
@@ -58,6 +62,10 @@
     {
       "name": "local-plan-agent-runtime",
       "path": "skills/local-plan-agent-runtime"
+    },
+    {
+      "name": "model-the-situation",
+      "path": "skills/model-the-situation"
     },
     {
       "name": "plan",

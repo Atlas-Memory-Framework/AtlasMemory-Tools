@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:20e6462c62cb535733c8e31de51c759128e43197bc7d78d36f28f4e49e923a63
+# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:9bc00f07291f74ce808a31f3acbbc579cc862fd9507be586b62a1b1ba8b5f72b
 # atlas-tools-generated-end
 name: plan
 description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by the planning workflow) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
@@ -8,7 +8,7 @@ description: Orchestrate the /plan workflow to create or update the current plan
 # /plan Orchestrator
 
 ## Purpose
-Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. Before problem framing hardens, preserve the user's latent target, anti-targets, expression-state gaps, open loops, and intent checksum in `## Intent Model`. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface. Compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it does not replace the selected markdown plan as authoring authority. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
+Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. `$plan` is the public planning entrypoint and canonical writer. Before problem framing hardens, preserve the user's latent target, anti-targets, expression-state gaps, open loops, and intent checksum in `## Intent Model`. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface. Compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it does not replace the selected markdown plan as authoring authority. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
 
 ## Agentic review mode
 When the user says `Use $plan with agentic review mode`, asks for parallel plan review, asks to review an old plan before trusting it, or asks to run the local agentic planning workflow on a markdown plan, `$plan` remains the public workflow and canonical writer. Invoke `/local-plan-agent-runtime` as an internal review layer after the authoring artifact is selected and before preserving approval/readiness state.
@@ -24,6 +24,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
 - **Intent before problem framing**: `## Intent Model` belongs before `## Problem Definition`. It captures expression-to-intent mapping, anti-targets, open loops, and the wrong-but-plausible implementation to avoid. Do not let `Problem Definition`, `Technical Plan`, or `Implementation Plan` flatten those signals into generic implementation prose.
 - **Interrogate before advancing**: for Problem, Technical, and Implementation stages, ask targeted questions until the plan names the current workflow, desired workflow, why the gap matters now, concrete repo/user facts, owners, file boundaries, verification entrypoints, rollout, and rollback. It is better to block than to pass a lazy plan.
 - **Many atomic plans, one campaign**: when a large effort is intentionally split across multiple plan artifacts, each plan still owns exactly one selected authoring artifact. Use optional metadata such as `PlanGroup`, `ParentPlan`, `DependsOnPlans`, `BlocksPlans`, and `AtomicScope` only as descriptive links. These fields do not replace `@path` selection, do not create registry authority, and do not let one `/plan` invocation edit multiple plans.
+- **Parent/child scope budgets**: parent or campaign plans index child plans and dependency summaries; child plans own bounded executable leaves. Count executable leaves as all non-`tracking-only` manifest leaves, including `manual-review`, `agent-ready`, and `blocked` work once blockers clear. Warn above 8 executable leaves. Fail above 12 executable leaves unless the work is split into child plans or an accepted DR-backed scope waiver records the DR id, exact executable-leaf count, rationale for not splitting, validation risk, and revisit trigger. Parent plans must not carry unbounded executable issue lists in any dispatch mode.
 - **Artifact authority contract (required)**:
   - the selected harness-local plan artifact is authoritative for authoring intent, rationale, and amendments.
   - compiled registry YAML is derived from the selected plan and may be used as a machine-readable package for local planning structure, joins, validator inputs, and projection metadata after successful compile. If it conflicts with the selected plan, patch the plan and recompile; do not treat the registry as independent intent authority.
@@ -160,6 +161,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
     - dispatch policy with strategy, concurrency, labels, branch/PR/merge/update/failure policies, and human-approval setting
     - containers for epics/workstreams/phases/merge points marked `tracking-only`
     - leaf issues with stable id, title, type, parent, owner, agent type, dispatch mode, dependencies, file scope, required gates, validation, acceptance criteria, source sections, and one-PR contract
+    - optional sidecar metadata on leaves (`Spec`, `Spec path`, `Spec hash`, `Spec source id`, `Depth contract`) when a deep issue spec is needed; sidecars are governed attachments and do not require package directories
     - dependency graph is acyclic and does not contradict workstream/phase dependencies
     - every dependency resolves to a leaf issue id, a structured external blocker, or a structured manual blocker
     - no gate, merge point, risk, assumption, or decision token is used as a dependency
@@ -169,6 +171,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
     - `issue-projection` and `unattended-prs` have no open dispatch-policy placeholders
     - `unattended-prs` has bounded concurrency, failure policy, branch policy, PR policy, and human approval before dispatch
     - risky work (secrets/auth/payments/live commerce/webhooks/migrations/infra/deploy/public API/data deletion/compliance) is converted into `manual-review`, `blocked`, or spike-first dispatch policy unless waived by DR
+    - executable leaf count uses all non-`tracking-only` work leaves, including `manual-review`, `agent-ready`, and `blocked`; more than 8 executable leaves is a warning, and more than 12 fails unless child-plan split or an accepted DR-backed scope waiver is present
 - PlanStateSanity (blocks false “Approved/Execution”):
   - Do NOT allow `Status: Approved`, `StructuralStatus: StructurallyComplete`, `SubstanceStatus: SubstantivelyReviewed`, `ProjectionApproval: ApprovedForProjection`, `DispatchApproval: ApprovedForDispatch`, or `CurrentStage: Build/Execution` if:
     - any required gate is not `Pass`, OR

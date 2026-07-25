@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# atlas-tools-generated: source=skills/plan/scripts/validate_plan.py manifest=atlas-tools.v1 checksum=sha256:324ab5da18e522dfb94cb4c68384bcf0addf49e933599c6250e95050a3ce898d
+# atlas-tools-generated: source=skills/plan/scripts/validate_plan.py manifest=atlas-tools.v1 checksum=sha256:ebcdcde52d980e34c98d16744840ae73c6b57ee2db0afea678d03808d37fdf7e
 # atlas-tools-generated-end
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 
 TOP_LEVEL_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 SUBSECTION_RE = re.compile(r"^###\s+(.+?)\s*$", re.MULTILINE)
-KEY_VALUE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_ /-]*):\s*(.*?)\s*$")
+KEY_VALUE_RE = re.compile(r"^(?:-\s*)?([A-Za-z][A-Za-z0-9_ /-]*):\s*(.*?)\s*$")
 SOURCE_FACT_RE = re.compile(r"\(source:\s*(file|command|user|issue)\)", re.IGNORECASE)
 REVIEWED_HASH_RE = re.compile(r"ReviewedPlanHash:\s*(?:sha256:)?([a-f0-9]{64})\b", re.IGNORECASE)
 REFRESHED_AT_RE = re.compile(r"RefreshedAt:\s*([0-9T:\-+.Z]+)")
@@ -27,6 +27,8 @@ DISALLOWED_DEP_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 PLACEHOLDER_RE = re.compile(r"(<[^>\n]+>|\.\.\.|\bTBD\b|\bto be decided\b|\bchoose later\b|\bor decide later\b)", re.IGNORECASE)
+LEAF_ITEM_RE = re.compile(r"^-\s+([A-Za-z0-9_.-]+):\s*(.*?)\s*$")
+DR_HEADING_RE = re.compile(r"^###\s+(DR-[A-Za-z0-9-]+):?.*$", re.MULTILINE)
 
 PLANNING_META_TERMS = (
     "plan",
@@ -54,6 +56,9 @@ REQUIRED_REVIEW_BLOCKS = (
     "Dynamic Specialist Review Roster",
     "Human Readability Review",
 )
+
+EXECUTABLE_LEAF_WARN_LIMIT = 8
+EXECUTABLE_LEAF_FAIL_LIMIT = 12
 
 
 @dataclass
@@ -125,6 +130,87 @@ def parse_key_values(section_text: str) -> dict[str, str]:
         if match:
             values[match.group(1).strip()] = match.group(2).strip()
     return values
+
+
+def manifest_leaf_blocks(leaves: str) -> list[tuple[str, str]]:
+    lines = leaves.splitlines()
+    blocks: list[tuple[str, list[str]]] = []
+    current_id: str | None = None
+    current_lines: list[str] = []
+    for line in lines:
+        match = LEAF_ITEM_RE.match(line)
+        if match:
+            if current_id is not None:
+                blocks.append((current_id, current_lines))
+            current_id = match.group(1).strip()
+            current_lines = [line]
+            continue
+        if current_id is not None:
+            current_lines.append(line)
+    if current_id is not None:
+        blocks.append((current_id, current_lines))
+    return [(leaf_id, "\n".join(block_lines)) for leaf_id, block_lines in blocks]
+
+
+def executable_leaf_ids(leaves: str) -> list[str]:
+    ids: list[str] = []
+    for leaf_id, block in manifest_leaf_blocks(leaves):
+        fields = parse_key_values(block)
+        dispatch = fields.get("Dispatch", "").strip().lower()
+        if dispatch != "tracking-only":
+            ids.append(leaf_id)
+    return ids
+
+
+def split_decision_records(decision_log: str) -> list[tuple[str, str]]:
+    matches = list(DR_HEADING_RE.finditer(decision_log))
+    records: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(decision_log)
+        records.append((match.group(1), decision_log[match.start() : end]))
+    return records
+
+
+def dr_scope_waiver_messages(decision_log: str, executable_count: int) -> list[str]:
+    partial_messages: list[str] = []
+    for dr_id, record in split_decision_records(decision_log):
+        lowered = record.lower()
+        if "scope waiver" not in lowered and "executable leaf count" not in lowered:
+            continue
+        fields = parse_key_values(record)
+        messages: list[str] = []
+        if not re.search(r"Status:\s*Accepted\b", record, re.IGNORECASE):
+            messages.append(f"{dr_id} scope waiver must have Status: Accepted.")
+
+        count_value = fields.get("Executable leaf count") or fields.get("Executable-leaf count")
+        if count_value is None:
+            messages.append(f"{dr_id} scope waiver missing Executable leaf count: {executable_count}.")
+        else:
+            count_match = re.search(r"\d+", count_value)
+            if not count_match or int(count_match.group(0)) != executable_count:
+                messages.append(
+                    f"{dr_id} scope waiver executable leaf count must exactly match {executable_count}."
+                )
+
+        required_fields = (
+            "Rationale for not splitting",
+            "Validation risk",
+            "Revisit trigger",
+        )
+        for field in required_fields:
+            if not has_label_content(record, field):
+                messages.append(f"{dr_id} scope waiver missing {field}.")
+
+        if not messages:
+            return []
+        partial_messages.extend(messages)
+
+    if partial_messages:
+        return partial_messages
+    return [
+        "Executable leaf count exceeds 12; split into child plans or add an accepted DR-backed scope waiver "
+        "with DR id, exact executable leaf count, rationale for not splitting, validation risk, and revisit trigger."
+    ]
 
 
 def parse_dateish(value: str) -> datetime | None:
@@ -381,9 +467,11 @@ def check_automation_readiness(markdown: str, state: dict[str, str]) -> GateResu
         messages.append("Containers must exist and be tracking-only.")
 
     leaves = subsection(manifest, "Leaf issues")
+    executable_ids: list[str] = []
     if not leaves:
         messages.append("Missing leaf issues.")
     else:
+        executable_ids = executable_leaf_ids(leaves)
         for label in (
             "Type",
             "Parent",
@@ -414,6 +502,15 @@ def check_automation_readiness(markdown: str, state: dict[str, str]) -> GateResu
                 messages.append(f"Invalid dependency token in leaf dependency: {item}")
                 break
 
+        executable_count = len(executable_ids)
+        if executable_count > EXECUTABLE_LEAF_WARN_LIMIT:
+            messages.append(
+                f"Warning: executable leaf count is {executable_count}, above the recommended budget of "
+                f"{EXECUTABLE_LEAF_WARN_LIMIT}; prefer a child-plan split."
+            )
+        if executable_count > EXECUTABLE_LEAF_FAIL_LIMIT:
+            messages.extend(dr_scope_waiver_messages(section(markdown, "Decision Log"), executable_count))
+
     if "### Manifest validation summary" not in manifest:
         messages.append("Missing Manifest validation summary.")
     else:
@@ -428,7 +525,8 @@ def check_automation_readiness(markdown: str, state: dict[str, str]) -> GateResu
             if not re.search(rf"{re.escape(summary_line)}:\s*Pass\b", manifest, re.IGNORECASE):
                 messages.append(f"Manifest validation summary does not pass {summary_line}.")
 
-    return GateResult("AutomationReadiness", "Fail" if messages else "Pass", messages)
+    blocking_messages = [message for message in messages if not message.startswith("Warning:")]
+    return GateResult("AutomationReadiness", "Fail" if blocking_messages else "Pass", messages)
 
 
 def normalize_review_title(title: str) -> str:

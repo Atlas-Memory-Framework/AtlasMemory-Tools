@@ -1,0 +1,6 @@
+<!-- atlas-tools-generated: source=skills/continuous-agent-loop/agents/openai.yaml manifest=atlas-tools.v1 checksum=sha256:6d4ea06d2103e8c3e481aefc52551ad438cde820d36d387b85d0a20d51fb4511 -->
+<!-- atlas-tools-generated-end -->
+interface:
+  display_name: "Continuous Agent Loop"
+  short_description: "Nested bounded loops with validation gates"
+  default_prompt: "Use $continuous-agent-loop to design or run a bounded nested work loop with progress, validation, and stop gates."

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# atlas-tools-generated: source=skills/local-plan-agent-runtime/scripts/validate_proposal.py manifest=atlas-tools.v1 checksum=sha256:39e7c1c647c0d356de120823178071883b601a3c37160491139dd3a36d78126c
+# atlas-tools-generated: source=skills/local-plan-agent-runtime/scripts/validate_proposal.py manifest=atlas-tools.v1 checksum=sha256:7778870dd01ca48f9fc397d8096579e7adab8dd4639f14139af633b93d8577b2
 # atlas-tools-generated-end
 """Validate a JSON worker proposal for local-plan-agent-runtime."""
 import argparse
@@ -30,7 +30,8 @@ REQUIRED_TOP = ["agent_id", "persona", "source_plan_path", "source_plan_sha256",
 
 
 def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def load_json(path):
@@ -38,6 +39,51 @@ def load_json(path):
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"invalid JSON in {path}: {exc}") from exc
+
+
+def package_sha256(package_files: list[dict]) -> str:
+    payload = [
+        {
+            "path": item["path"],
+            "sha256": item["sha256"],
+            "kind": item.get("kind", ""),
+            "patchable": bool(item.get("patchable", True)),
+        }
+        for item in sorted(package_files, key=lambda value: value["path"])
+    ]
+    return sha256_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def check_package_snapshot(proposal, section_index, errors, *, check_canonical=True) -> None:
+    if not section_index.get("package_mode"):
+        return
+
+    expected_package_hash = section_index.get("source_package_sha256")
+    if not proposal.get("source_package_sha256"):
+        errors.append("missing top-level field: source_package_sha256")
+    elif proposal.get("source_package_sha256") != expected_package_hash:
+        errors.append("source_package_sha256 does not match section index")
+
+    package_files = section_index.get("package_files", [])
+    if expected_package_hash and package_sha256(package_files) != expected_package_hash:
+        errors.append("section index package file metadata does not match source_package_sha256")
+
+    if not check_canonical:
+        return
+
+    package_root = Path(section_index.get("package_root", ""))
+    if not package_root:
+        errors.append("section index missing package_root")
+        return
+    for package_file in package_files:
+        rel_path = package_file.get("path", "")
+        canonical = (package_root / rel_path).resolve()
+        if not canonical.exists() or not canonical.is_file():
+            errors.append(f"package document missing since snapshot: {rel_path}")
+            continue
+        current_hash = sha256_text(canonical.read_text(encoding="utf-8"))
+        if current_hash != package_file.get("sha256"):
+            errors.append(f"package document changed since snapshot: {rel_path}")
 
 
 def validate(proposal, section_index, *, check_canonical=True):
@@ -61,6 +107,8 @@ def validate(proposal, section_index, *, check_canonical=True):
             current_hash = sha256_text(plan.read_text(encoding="utf-8"))
             if current_hash != expected_hash:
                 errors.append("canonical plan content changed since snapshot")
+
+    check_package_snapshot(proposal, section_index, errors, check_canonical=check_canonical)
 
     sections_by_id = {s.get("section_id"): s for s in section_index.get("sections", [])}
     headings = {}
@@ -129,6 +177,8 @@ def validate(proposal, section_index, *, check_canonical=True):
                     errors.append(f"{pid} target_section does not match target_section_id heading")
                 if PROTECTED_SECTION_RE.search(section.get("heading", "")):
                     errors.append(f"{pid} targets protected status/review/decision section")
+                if section_index.get("package_mode") and not section.get("patchable", True):
+                    errors.append(f"{pid} targets read-only package document: {section.get('file_path', '')}")
         replacement = patch.get("replacement_text", "") or ""
         if patch_type not in {"no-patch", "decision-log-entry"} and not replacement.strip():
             errors.append(f"{pid} missing replacement_text")

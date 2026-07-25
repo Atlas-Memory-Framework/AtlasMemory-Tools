@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model the Situation"
+  short_description: "Build clear models of decisions and situations"
+  default_prompt: "Use $model-the-situation to build an explicit working model of this decision or situation before recommending what I should do."

@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/local-plan-agent-runtime/SKILL.md manifest=atlas-tools.v1 checksum=sha256:abb2f0b4a83802059df7d0cf434509bc500eca3144e74245d313d8fa5931c9ea
+# atlas-tools-generated: source=skills/local-plan-agent-runtime/SKILL.md manifest=atlas-tools.v1 checksum=sha256:d6c86eeef36ab3b80bbf9f9800461cb80cfe28e1d9bfff9ceb8cc11699060008
 # atlas-tools-generated-end
 name: local-plan-agent-runtime
 description: Orchestrate independent Codex/local agent sessions over a local markdown plan artifact. Use when the user asks to run sub-agents against a plan, improve a plan with independent reviews, operate an agentic planning workflow on a local file instead of GitHub issues, or collect and reconcile structured planning proposals before routing final writes through $plan.
@@ -9,7 +9,7 @@ description: Orchestrate independent Codex/local agent sessions over a local mar
 
 ## Purpose
 
-Run an agentic planning workflow over one local markdown plan artifact without letting sub-agents mutate source-of-truth intent.
+Run an agentic planning workflow over one local markdown plan artifact, or an explicit plan package, without letting sub-agents mutate source-of-truth intent.
 
 This skill is not implementation handoff. It is a local-file planning runtime that snapshots a plan, fans out independent review/planning personas, collects structured proposal artifacts, reconciles conflicts, preserves user agency, and routes final accepted edits through `$plan`.
 
@@ -25,9 +25,9 @@ Validators verify.
 
 ## Authority rules
 
-- Treat the selected markdown plan as the canonical authoring artifact.
+- Treat the selected markdown plan as the canonical authoring artifact. In package mode, treat the package manifest as a bounded context list, not as authority to replace the selected plan.
 - Echo `AuthoringArtifact = <path>` before runtime work.
-- Snapshot the plan before launching workers.
+- Snapshot the plan before launching workers. In package mode, snapshot only package-declared files.
 - Sub-agents must not edit the canonical plan.
 - Sub-agents must not flip gates, approval states, projection states, dispatch states, review stamps, decision logs, or lifecycle status.
 - Sub-agents may produce findings, questions, decision boundaries, and patch proposals.
@@ -49,8 +49,8 @@ Read only the needed reference:
 
 Use scripts when a deterministic artifact is useful:
 
-- `scripts/snapshot_plan.py`: create a fresh run directory, plan snapshot, section index, and manifest.
-- `scripts/validate_proposal.py`: validate a JSON worker proposal against the snapshot, canonical path, section IDs, and section hashes.
+- `scripts/snapshot_plan.py`: create a fresh run directory, plan or package snapshot, section index, and manifest.
+- `scripts/validate_proposal.py`: validate a JSON worker proposal against the snapshot, canonical path, package hash, section IDs, section hashes, and package document patchability.
 - `scripts/summarize_run.py`: summarize only validated JSON proposal files into a run report and identify mechanical conflict hints.
 
 These scripts do not launch Codex by themselves. They provide guardrails for an orchestrator or human-managed run.
@@ -60,11 +60,11 @@ These scripts do not launch Codex by themselves. They provide guardrails for an 
 1. Select exactly one authoring artifact.
 2. Print `AuthoringArtifact = <path>`.
 3. Create a fresh run directory such as `.codex/plan-runs/<run-id>/`.
-4. Snapshot the plan and record plan hash and section hashes.
+4. Snapshot the plan and record plan hash and section hashes. For package context, run `python3 skills/local-plan-agent-runtime/scripts/snapshot_plan.py PLAN.md --package-manifest PACKAGE.json --out DIR`.
 5. Create bounded worker tasks using personas from `references/personas.md`.
 6. Launch independent workers against the immutable snapshot.
 7. Require each worker to return JSON matching `references/proposal-schema.md`.
-8. Reject malformed proposals, stale snapshot hashes, stale section hashes, source-path spoofing, canonical-plan drift, unauthorized gate flips, direct canonical edits, and hidden human decisions.
+8. Reject malformed proposals, stale snapshot hashes, stale package hashes, stale section hashes, source-path spoofing, canonical-plan/package drift, read-only package document patches, unauthorized gate flips, direct canonical edits, and hidden human decisions.
 9. Group findings and patches by target section.
 10. Detect mechanical conflicts with `scripts/summarize_run.py`; review semantic conflicts using `references/reconciliation.md`.
 11. Apply the human decision firewall before accepting intent-changing proposals.
