@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.private-derivation-manifest.v0",
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "identity": {"type": "object", "additionalProperties": false, "required": ["principal_id", "session_id"], "properties": {"principal_id": {"type": "string", "minLength": 1}, "session_id": {"type": "string", "minLength": 1}}},
+    "dimension": {"enum": ["actor", "expression_act", "stance", "modality", "evidence_status", "qualification", "frame_origin", "response_requirement", "severity", "failure_family", "wording", "names_entities", "numbers_dates", "analogy_narrative"]},
+    "source_unit": {"type": "object", "additionalProperties": false, "required": ["source_alias", "source_unit_alias", "locator"], "properties": {"source_alias": {"type": "string", "pattern": "^source-[0-9]{3}$"}, "source_unit_alias": {"type": "string", "pattern": "^source-unit-[0-9]{3}$"}, "locator": {"type": "object", "additionalProperties": false, "required": ["start", "end"], "properties": {"start": {"type": "integer", "minimum": 0}, "end": {"type": "integer", "minimum": 1}}}}},
+    "unit_mapping": {"type": "object", "additionalProperties": false, "required": ["unit_id", "source_units", "preserved_dimensions", "deliberately_changed_dimensions"], "properties": {"unit_id": {"type": "string", "minLength": 1}, "source_units": {"type": "array", "items": {"$ref": "#/$defs/source_unit"}}, "preserved_dimensions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/dimension"}}, "deliberately_changed_dimensions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/dimension"}}}},
+    "case_mapping": {"type": "object", "additionalProperties": false, "required": ["case_id", "origin_class", "unit_mappings"], "properties": {"case_id": {"type": "string", "pattern": "^ii-[a-z0-9-]+$"}, "origin_class": {"enum": ["structurally_equivalent_synthetic", "fully_synthetic"]}, "unit_mappings": {"type": "array", "items": {"$ref": "#/$defs/unit_mapping"}}}}
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "expires_at_epoch", "crosswalk_hash", "selection_count", "corpus_hash", "case_schema_hash", "rubric_hash", "policy_hash", "candidate_state_hash", "producer_identity", "fixture_author_identity", "sources", "cases", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.private-derivation-manifest.v0"},
+    "expires_at_epoch": {"type": "integer", "minimum": 1},
+    "crosswalk_hash": {"$ref": "#/$defs/hash"},
+    "selection_count": {"type": "integer", "minimum": 1},
+    "corpus_hash": {"$ref": "#/$defs/hash"}, "case_schema_hash": {"$ref": "#/$defs/hash"}, "rubric_hash": {"$ref": "#/$defs/hash"}, "policy_hash": {"$ref": "#/$defs/hash"}, "candidate_state_hash": {"$ref": "#/$defs/hash"},
+    "producer_identity": {"$ref": "#/$defs/identity"}, "fixture_author_identity": {"$ref": "#/$defs/identity"},
+    "sources": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["source_alias", "disposition", "reason_code"], "properties": {"source_alias": {"type": "string", "pattern": "^source-[0-9]{3}$"}, "disposition": {"enum": ["used", "reviewed_not_used"]}, "reason_code": {"enum": ["structural_seed", "redundant_structure", "outside_frozen_families", "privacy_minimization", "counter_control_only"]}}}},
+    "cases": {"type": "array", "minItems": 24, "maxItems": 24, "items": {"$ref": "#/$defs/case_mapping"}},
+    "authority_effect": {"const": "none"}
+  }
+}

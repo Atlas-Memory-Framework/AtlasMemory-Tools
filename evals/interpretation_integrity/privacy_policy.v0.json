@@ -1,0 +1,52 @@
+{
+  "allowed_origin_classes": [
+    "fully_synthetic",
+    "structurally_equivalent_synthetic"
+  ],
+  "allowed_tracked_prefixes": [
+    "evals/interpretation_integrity",
+    "plans/interpretation-integrity-evaluation.plan.md",
+    "scripts/interpretation_integrity_eval.py",
+    "scripts/interpretation_integrity_private_intake.py",
+    "scripts/run_interpretation_integrity_trials.py",
+    "scripts/verify_repo.py",
+    "tests/fixtures/interpretation_integrity",
+    "tests/test_interpretation_integrity_eval.py",
+    "tests/test_interpretation_integrity_private_intake.py"
+  ],
+  "atlas_native_capability": false,
+  "authority_effect": "none",
+  "excluded_surfaces": [
+    "atlas_repository",
+    "personal_installed_skills",
+    "global_codex_configuration",
+    "codex_session_index",
+    "non_owned_tools_paths"
+  ],
+  "forbidden_fields": [
+    "authorization",
+    "developer_prompt",
+    "environment",
+    "private_source_locator",
+    "prompt_text",
+    "provider_body",
+    "raw_trace_hash",
+    "source_hash",
+    "source_id",
+    "source_path",
+    "system_prompt"
+  ],
+  "private_file_mode": "0600",
+  "private_root_mode": "0700",
+  "raw_content_copied": false,
+  "raw_trace_ttl_seconds": 86400,
+  "sanitized_ttl_seconds": 604800,
+  "schema_version": "interpretation-integrity.privacy-policy.v0",
+  "secret_patterns": [
+    "AKIA[0-9A-Z]{16}",
+    "Bearer\\s+[A-Za-z0-9._~-]{16,}",
+    "gh[pousr]_[A-Za-z0-9]{20,}",
+    "https://[^\\s]+[?&](?:sig|token|key)=[^\\s]+"
+  ],
+  "source_crosswalk_ttl_seconds": 3600
+}

@@ -1,0 +1,144 @@
+{
+  "schema_version": "interpretation-integrity.source-log-shapes.v0",
+  "shapes": [
+    {
+      "shape_id": "observed-paired-root",
+      "expected": "accept",
+      "expected_selected_count": 1,
+      "selection": {"mode": "paired_indices", "response_indices": [1]},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic input."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic input.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "invented-old-envelope",
+      "expected": "reject",
+      "selection": {"mode": "unmatched", "root_session_id": "root-synthetic", "turn_id": "turn-a", "message_id": "message-a"},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "root_thread_id": "root-synthetic", "parent_thread_id": null}},
+        {"type": "event_msg", "turn_id": "turn-a", "message_id": "message-a", "direct": true, "payload": {"type": "user_message", "message": "Synthetic input."}}
+      ]
+    },
+    {
+      "shape_id": "unpaired-user-response",
+      "expected": "accept",
+      "expected_selected_count": 1,
+      "selection": {"mode": "paired_indices", "response_indices": [2]},
+      "non_claims": ["An unpaired role-user response is ignored; it is not evidence of a direct human turn."],
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic injected context."}], "id": "message-injected", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-injected"}}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic input."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic input.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "nonadjacent-pair",
+      "expected": "reject",
+      "selection": {"mode": "unmatched", "root_session_id": "root-synthetic", "turn_id": "turn-a", "message_id": "message-a"},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic input."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "synthetic_gap", "payload": {}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic input.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "pair-text-mismatch",
+      "expected": "reject",
+      "selection": {"mode": "unmatched", "root_session_id": "root-synthetic", "turn_id": "turn-a", "message_id": "message-a"},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic alpha."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic beta.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "identity-conflict",
+      "expected": "reject",
+      "selection": {"mode": "paired_indices", "response_indices": [1]},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic alpha."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic alpha.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic beta."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic beta.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "same-digest-distinct-identity",
+      "expected": "accept",
+      "expected_selected_count": 2,
+      "selection": {"mode": "paired_indices", "response_indices": [1, 3]},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Same synthetic text."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Same synthetic text.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Same synthetic text."}], "id": "message-b", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-b"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Same synthetic text.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "unsupported-media",
+      "expected": "reject",
+      "selection": {"mode": "unmatched", "root_session_id": "root-synthetic", "turn_id": "turn-a", "message_id": "message-a"},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic input."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic input.", "text_elements": [], "images": ["synthetic-image"], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "text-element-boundary",
+      "expected": "accept",
+      "expected_selected_count": 1,
+      "selection": {"mode": "paired_indices", "response_indices": [1]},
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Café"}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Café", "text_elements": [{"byte_range": {"start": 0, "end": 5}, "placeholder": "Café"}], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "partial-tail",
+      "expected": "accept",
+      "expected_selected_count": 1,
+      "selection": {"mode": "paired_indices", "response_indices": [1]},
+      "partial_tail": "{\"synthetic_partial\":",
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "root-synthetic"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic input."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic input.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "operator-provenance-fork-limitation",
+      "expected": "accept",
+      "expected_selected_count": 1,
+      "selection": {"mode": "paired_indices", "response_indices": [1]},
+      "non_claims": ["The envelope does not mechanically prove that the explicitly selected root file is free of inherited fork copies; root-file choice is operator provenance."],
+      "records": [
+        {"type": "session_meta", "payload": {"source": "cli", "id": "operator-selected-root"}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Synthetic operator-selected input."}], "id": "message-a", "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "Synthetic operator-selected input.", "text_elements": [], "images": [], "local_images": [], "audio": [], "local_audio": []}}
+      ]
+    },
+    {
+      "shape_id": "malformed-complete-record",
+      "expected": "reject",
+      "raw_jsonl": "{\"type\":\"session_meta\",\"payload\":{\"source\":\"cli\",\"id\":\"root-synthetic\"}}\n{\"synthetic_broken\":}\n"
+    },
+    {
+      "shape_id": "duplicate-key",
+      "expected": "reject",
+      "raw_jsonl": "{\"type\":\"session_meta\",\"payload\":{\"source\":\"cli\",\"id\":\"a\",\"id\":\"b\"}}\n"
+    },
+    {
+      "shape_id": "nonfinite-constant",
+      "expected": "reject",
+      "raw_jsonl": "{\"type\":\"session_meta\",\"payload\":{\"source\":\"cli\",\"id\":\"root-synthetic\",\"number\":NaN}}\n"
+    }
+  ]
+}

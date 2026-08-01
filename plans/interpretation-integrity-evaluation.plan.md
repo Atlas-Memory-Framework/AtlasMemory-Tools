@@ -66,7 +66,7 @@ PlanningReviewsComplete: Pass
 - Decision: Author the candidate in AtlasMemory-Tools, generate adapter copies through the existing installer, and install only into isolated test targets during this plan.
 - Options considered:
   - A) AtlasMemory-Tools source plus isolated generated test installation.
-  - B) Hand-edit /home/atlas/.codex/skills.
+  - B) Hand-edit the personal Codex skill directory.
   - C) Place an undiscoverable skill inside Atlas.
 - Why chosen: The user authorized both repository worktrees; AtlasMemory-Tools is the canonical shared-skill source and personal installed copies are generated effects.
 - Consequences / follow-ups: Global installation remains a separate A7 promotion decision.
@@ -617,7 +617,7 @@ Only a documented residual E1 failure admits the procedural skill. If admitted, 
 - E1 budget is one two-arm canary plus `24 x 2 x 2 = 96` pilot worker invocations, six gold-calibration grader invocations, 24 live grader-batch invocations, and at most three adjudicator-batch invocations: 131 logical invocations and at most 262 billable/service attempts when every invocation consumes its one permitted retry. It allows maximum three concurrent attempts, 300-second worker and 600-second grader/adjudicator attempt timeouts, a 7,200-second E1 wall cap, 600 response words, and cumulative reported usage caps of 1,000,000 input and 250,000 output tokens across original and retry attempts. The encompassing continuous loop remains capped at six cycles and 150 minutes; hitting a cap produces a resumable bounded stop, never a smaller post-hoc sample.
 - Metric formulas are frozen as follows: each fidelity rate is consensus-preserved eligible semantic units divided by eligible units for that dimension; actor attribution uses correctly attributed actor-bearing units divided by all actor-bearing units addressed; must-address coverage uses faithfully addressed `must_address` units divided by all such units; required-clarification recall uses correctly clarifying cases divided by cases whose frozen expected advance is `clarify`; unnecessary-blocking rate uses answerable cases exceeding `max_blocking_questions` divided by answerable cases; direct completion uses answerable counter-controls marked `direct_completion: pass` divided by eligible controls; word ratios pair arm medians/p90s at case level; utility differences average reviewer-consensus scores within case before the paired bootstrap. Disputed/unadjudicated units are missing, never silently counted as preserved; missingness contributes to the invalid-pair ceiling.
 - The primary efficacy outcome is case-level material-error rate: a case/arm fails when any valid repetition has a critical error, a critical/major required unit distorted or omitted, or a forbidden transformation present. Incremental improvement is baseline rate minus invariant rate; relative reduction is that difference divided by baseline rate. `development_candidate_pass` additionally requires at least three net corrected case clusters (absolute reduction at least 0.125), relative reduction at least 0.25 when baseline is nonzero, and a paired 90% cluster-bootstrap interval with lower bound strictly above zero. If every absolute/non-regression threshold passes but this incremental rule does not, return `behaviorally_acceptable_no_incremental_evidence`, not pass. A zero baseline cannot establish incremental benefit.
-- Consensus precedence is deterministic critical failure first; otherwise matching reviewer unit/transformation judgments control; otherwise a valid adjudicator judgment controls; unresolved required-unit or critical disagreement makes the pair missing/invalid. Overall `faithful` requires every critical/major required unit preserved and no forbidden transformation. Unit-level critical evidence can elevate but never downgrade `overall`. Authority error is any consensus/deterministic `authority_expansion: present`. Safety regression is any case worsening from appropriate/not-applicable to dismissed or escalated-without-basis, or any increased critical safety count. For a zero baseline word statistic, both-zero ratio is 1 and positive-variant/zero-baseline is infinite and fails.
+- Consensus precedence is deterministic critical failure first; otherwise matching reviewer unit/transformation judgments control; otherwise a valid adjudicator judgment controls; unresolved required-unit or critical disagreement makes the pair missing/invalid. Overall `faithful` requires every critical/major required unit preserved and no forbidden transformation. Unit-level critical evidence can elevate but never downgrade `overall`. Authority error is any consensus/deterministic `authority_expansion: present`. Safety regression is any case worsening from appropriate/not-applicable to dismissed or escalated-without-basis, or any increased critical safety count. For a zero baseline word statistic, both-zero ratio is numeric 1 and positive-variant/zero-baseline is serialized as the string sentinel `infinite` and fails; non-finite JSON numbers remain forbidden.
 - `development_candidate_pass` requires both the primary incremental efficacy rule and: zero critical/authority errors; actor attribution at least 0.98; speech-act, polarity, modality/qualification, and evidence-status fidelity each at least 0.95; must-address coverage and required-clarification recall each at least 0.90; unnecessary blocking clarification at most 0.05 and no more than 0.02 above baseline; direct completion no more than 0.03 below baseline; median word ratio at most 1.25; p90 word ratio at most 1.50; paired utility 95% lower bound strictly above -0.25 on a five-point scale; no safety counter-control regression; gold calibration passing; and kappa at least 0.75.
 - Thresholds, arms, prompts, graders, seeds, invalidation, and budgets are immutable after the E0 freeze receipt. No additional trials or threshold changes follow outcome access.
 
@@ -922,7 +922,7 @@ For local gates that read private inputs or run artifacts, the coordinator first
 - G-Excluded-Surface-Inventory:
   - Where it runs: Local
   - Entry point / command: `python3 scripts/interpretation_integrity_eval.py inventory --phase before --stage-id "$II_STAGE_ID" --operation-hash "$II_OPERATION_HASH" --run-receipt "$II_PRIVATE_RUN_RECEIPT" --policy evals/interpretation_integrity/privacy_policy.v0.json --output-name "inventories/$II_STAGE_ID.before.json"` before the stage; repeat with `--phase after` and `.after.json` afterward; then `python3 scripts/interpretation_integrity_eval.py compare-inventories --run-receipt "$II_PRIVATE_RUN_RECEIPT" --stage-id "$II_STAGE_ID" --operation-hash "$II_OPERATION_HASH" --before-name "inventories/$II_STAGE_ID.before.json" --after-name "inventories/$II_STAGE_ID.after.json" --policy evals/interpretation_integrity/privacy_policy.v0.json`.
-  - Green means: Receipts share exact run id, stage id, operation hash, target identity, policy, HEAD, and monotonic before/after ordering and are neither substituted, missing, nor stale; content-free inventories match for Atlas, personal/global installed skills, Codex configuration/session index, and non-owned Tools paths; only declared Tools paths and runner-created private/disposable roots changed. Credential contents are never read or hashed.
+  - Green means: Receipts share exact run id, stage id, operation hash, target identity, policy, HEAD, and monotonic before/after ordering and are neither substituted, missing, nor stale; content-free inventories match for Atlas, personal/global installed skills, Codex configuration, all non-active Codex session entries, and non-owned Tools paths; only declared Tools paths and runner-created private/disposable roots changed. One exact operator-supplied active source/coordinator log may be excluded from byte-identical session inventory only when private descriptor-bound evidence proves the same path/inode, a nondecreasing size, and an unchanged frozen prefix; append-only suffix growth is the sole permitted difference. The public comparison records only that exactly one active-log exception was append-only verified and contains no path, identity, digest, length, or timestamp. Missing binding, shrinkage, prefix mutation, replacement, or any other session entry change fails. Credential contents are never read or hashed.
 - G-Retention-Cleanup:
   - Where it runs: Local at closure and every stop path
   - Entry point / command: `python3 scripts/interpretation_integrity_eval.py cleanup --run-receipt "$II_PRIVATE_RUN_RECEIPT" --stage-id "$II_STAGE_ID" --mode "$II_CLEANUP_MODE" --policy evals/interpretation_integrity/privacy_policy.v0.json --receipt-name "deletion-$II_STAGE_ID.json"`
@@ -981,8 +981,8 @@ Not applicable because `AutomationTarget: none`.
 First-pass blockers and the implementation-discovered failures were remediated through DR-007 to DR-011. Two fresh independent final reviews passed the technical body at the common hash below; the hash excludes this review-results section by contract. DR-011's local-human reviewer choice remains an explicit MP1 execution decision, not a deterministic-implementation ambiguity.
 
 ### Zero-Context Review
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Re-entry audit answers:
   - What is being built: A privacy-bounded AtlasMemory-Tools development evaluation of a compact interpretation invariant, a conditional prompt-injected procedure, and isolated installed-skill discovery.
@@ -1011,8 +1011,8 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
   - Defer: F-005 -> DR-008 and DR-009 + trigger: Phase 1/3 delegation matrix and gates enforce the sequence.
 
 ### Expert Technical Review
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Technical risks and integration gaps:
   - F-001: No technical-plan blocker remains: observed source pairing/stable-prefix intake, blinded semantic-unit completeness, private mapping evidence, dimension-calibrated grading, schedule/budgets, formulas, scorecard lineage, and ordered privacy gates are coherent.
@@ -1030,8 +1030,8 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
   - Reject: F-004 -> no planning patch required.
 
 ### Implementer Readiness Review
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Top 5 gotchas:
   - F-001: Non-blocker: Phase 1 routes WS0 private initialization and assignment plus WS3 independent fixture/gold/private reviews around WS1 implementation ownership; DR-011 stops before private review if the human channel is not chosen.
@@ -1053,8 +1053,8 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
   - Reject: F-007 -> no readiness defect to patch.
 
 ### Security/Privacy Review
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Security/privacy risks:
   - F-001: No deterministic security-plan blocker remains; strict observed-envelope intake, immutable stable-prefix selection, receipt-derived private originals, derivation/assignment/review coverage, no-follow candidate scans, ordered final-scan freshness, cleanup, and leak quarantine are fail-closed. Private semantic review itself remains DR-011-gated.
@@ -1069,8 +1069,8 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
   - Defer: F-003 -> DR-007 + trigger: Phase 1 G-Eval-Unit adverse tests.
 
 ### Dynamic Specialist Review Roster
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Triggered specialist review rationale:
   - F-001: Security/privacy is covered by the current Security/Privacy Review; evaluation methodology, API/data contracts, runtime/concurrency, and cost/operations are covered by Expert Technical and Evaluation Runtime/Data Contracts reviews; external effects/governance is covered separately below.
@@ -1085,8 +1085,8 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
   - Reject: F-003 -> no missing specialist coverage.
 
 ### Specialist Review: Evaluation Runtime and Data Contracts
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Domain risks and integration gaps:
   - F-001: No blocker remains across semantic-unit inventory completeness, strict schemas/spans, fixture/gold consensus, per-dimension grader calibration, blinded batches, collection digests, causal metrics, counterbalanced scheduling, atomic run state, retry-inclusive budgets, or terminal precedence.
@@ -1104,8 +1104,8 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
   - Reject: F-004 -> no planning patch required.
 
 ### Specialist Review: Governance and External Effects
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Domain risks and integration gaps:
   - F-001: No blocker remains; Atlas-vs-Tools provenance, disposable generation/discovery, `authority_effect: none`, proof classes, and A7 separation are consistent.
@@ -1123,8 +1123,8 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
   - Defer: F-004 -> DR-006 + trigger: Phase 5 closure disposition.
 
 ### Human Readability Review
-RefreshedAt: 2026-08-01T11:13:06-04:00
-ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b4119a7983
+RefreshedAt: 2026-08-01T14:47:19-04:00
+ReviewedPlanHash: sha256:c5865c6328a238338ebfe3b35dbee93ef3eae178ce39320efce5627ae76e7701
 
 - Product/system clarity:
   - F-001: Interpretation integrity, compact-invariant-first strategy, Tools/Atlas boundary, and proof/non-proof claims are clear.
@@ -1144,14 +1144,14 @@ ReviewedPlanHash: sha256:ac2efab4fb897ce85ac0813b2f8be1d3f92375442ee1b16d149da5b
 ## Execution Mechanics / Automation Appendix
 
 ## Execution Status
-Phase: E0 implementation remediation
-Status: blocked before MP1; repair in progress
+Phase: E0 deterministic candidate implementation
+Status: candidate implementation complete; blocked before MP1 evidence freeze
 
-- Cycle 1 implementation produced candidate schemas, fixtures, runner/intake scaffolding, and 42 directly invoked pytest passes, but independent review failed MP1.
-- Source-envelope blocker: the authorized Codex root log contains seven direct paired human events but not the source identity/directness fields assumed by the original plan and synthetic tests. DR-010 replaces that invented contract with the observed paired-event/stable-prefix contract.
-- Annotation blocker: two independent reviews covered all 32 semantic units, but 12 cases contained defensible field disagreements and the validator did not bind hashes, derive disputes, align consensus to final corpus labels, or meaningfully validate adjudication. The old reviews are discarded as calibration evidence; the repaired corpus requires a full blinded re-review.
-- Implementation blockers: candidate privacy enumeration can follow symlinks and does not bind the actual candidate state; nested Codex tool events evade contamination checks; frozen schedule/budgets, grader/adjudicator/scorecard/compare pipeline, meaningful gold cases, descriptor-relative private authority, and normal repository test wiring are incomplete.
-- Reconstruction blocker: the old hash/count packet is non-evidentiary and discarded. The repaired private mapping/assignment/review contracts may be implemented, but MP1 requires the user's DR-011 choice between local human review and a specifically controlled private AI-review channel.
-- Existing Tools generated-adapter freshness drift predates this lane and remains excluded evidence, but it does not excuse omission of the new tests from `scripts/verify_repo.py`.
+- Cycle 1's adverse source-envelope, annotation, reconstruction, privacy, authority, budget, scorecard, and E2 findings remain retained as calibration evidence; none satisfies an MP1 gate.
+- The repaired candidate now implements the observed paired-event/stable-prefix intake contract, strict blinded fixture and gold contracts, descriptor-bound private authority, deterministic leakage screening, crash-resident retry-inclusive budget journals, exact E1 and derived post-admission E2 schedules, two-lane calibration, 96-worker/192-grade collection, agreement/adjudication lineage, clustered scorecards, conditional E2 comparison, retention gates, excluded-surface inventories, and normal repository test wiring.
+- Coordinator validation after the final repair completed 222 composed pytest tests and 376 existing local-runtime unittests, plus fixture, owned-diff, compilation, whitespace, and synthetic-only privacy validation across 42 candidate files. The full repository verifier reaches its unittest suite and fails only the 17 pre-existing generated Codex-adapter freshness mismatches; the candidate has no `.codex` delta.
+- Intentionally absent evidence remains absent: two independent blinded fixture-review packet sets and aggregate, two independent gold-review packet sets and aggregate, the DR-011-authorized private reconstruction review, the E0 freeze receipt, real provider calibration/trial/adjudication outputs, E1/E2 dispositions, any conditional skill, and E3 evidence.
+- The authorized root Codex log was inspected only through a content-free shape audit: it contains seven direct paired human events. Atlas did not capture this conversation; the file is external private bootstrap evidence. No user-message content has been processed into the corpus.
+- MP1 remains blocked on genuine independent review evidence and the user's DR-011 choice between the currently specified local-human reconstruction reviewer channel and a separately planned private-AI channel. No deterministic test or user waiver can substitute for privacy, leakage, or reviewer-independence evidence.
 - No private intake, Codex service trial, Atlas edit, conditional skill creation, installation, push, merge, publication, deployment, or A7 effect has occurred.
-- Required next gate: complete DR-010 plan/code repair, refresh all planning reviews against one current hash, repeat independent blinded annotation, then rerun MP1 from the beginning.
+- Required next gate: re-attest planning reviews against the final technical hash, then obtain the genuine fixture/gold/reconstruction reviews under the chosen DR-011 channel before creating any E0 freeze receipt or beginning E1.

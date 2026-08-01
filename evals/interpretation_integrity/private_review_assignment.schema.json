@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "interpretation-integrity.private-review-assignment.v0",
+  "$defs": {"hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "identity": {"type": "object", "additionalProperties": false, "required": ["principal_id", "session_id"], "properties": {"principal_id": {"type": "string", "minLength": 1}, "session_id": {"type": "string", "minLength": 1}}}},
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "assignment_id", "issued_at_epoch", "expires_at_epoch", "coordinator_identity", "reviewer_identity", "reviewer_kind", "producer_identity", "fixture_author_identity", "procedure_version", "tool_version", "prompt_hash", "candidate_state_hash", "allowed_input", "allowed_output", "review_channel", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.private-review-assignment.v0"}, "assignment_id": {"type": "string", "pattern": "^[a-z0-9-]+$"}, "issued_at_epoch": {"type": "integer", "minimum": 1}, "expires_at_epoch": {"type": "integer", "minimum": 1},
+    "coordinator_identity": {"$ref": "#/$defs/identity"}, "reviewer_identity": {"$ref": "#/$defs/identity"}, "reviewer_kind": {"const": "local_human"}, "producer_identity": {"$ref": "#/$defs/identity"}, "fixture_author_identity": {"$ref": "#/$defs/identity"},
+    "procedure_version": {"const": "private-reconstruction-review-v1"}, "tool_version": {"type": "string", "minLength": 1}, "prompt_hash": {"$ref": "#/$defs/hash"}, "candidate_state_hash": {"$ref": "#/$defs/hash"},
+    "allowed_input": {"type": "array", "minItems": 4, "uniqueItems": true, "items": {"enum": ["selected_source_content", "derivation_manifest", "frozen_public_corpus", "annotation_rubric"]}},
+    "allowed_output": {"const": "raw/reconstruction-review.json"}, "review_channel": {"const": "local_human_no_provider"}, "authority_effect": {"const": "none"}
+  }
+}

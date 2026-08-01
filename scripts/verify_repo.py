@@ -115,6 +115,9 @@ PY_COMPILE_FILES = (
     "scripts/sync_runtime_template.py",
     "scripts/verify_harness.py",
     "scripts/verify_repo.py",
+    "scripts/interpretation_integrity_eval.py",
+    "scripts/interpretation_integrity_private_intake.py",
+    "scripts/run_interpretation_integrity_trials.py",
     "skills/github-project/scripts/create_project.py",
     "skills/plan-to-html/scripts/plan_to_html.py",
     "skills/plan-to-issues/scripts/plan_to_issues.py",
@@ -368,7 +371,15 @@ def check_temp_harness_cli() -> None:
 def run_test_suite() -> None:
     env = python_env()
     run([sys.executable, "-m", "unittest", "discover", "tests"], env=env)
-    if shutil.which("pytest"):
+    pytest_available = subprocess.run(
+        [sys.executable, "-c", "import pytest"],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+        check=False,
+    ).returncode == 0
+    if pytest_available:
         run(
             [
                 sys.executable,
@@ -377,11 +388,13 @@ def run_test_suite() -> None:
                 "-p",
                 "no:cacheprovider",
                 "skills/plan-to-issues/scripts/test_plan_to_issues.py",
+                "tests/test_interpretation_integrity_eval.py",
+                "tests/test_interpretation_integrity_private_intake.py",
             ],
             env=env,
         )
     else:
-        run([sys.executable, "skills/plan-to-issues/scripts/test_plan_to_issues.py"], env=env)
+        raise VerificationFailure("pytest is required for interpretation-integrity repository gates")
     run([sys.executable, "-m", "unittest", "discover", "templates/local-automation-runtime/tests"], env=env)
 
 

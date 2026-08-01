@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.private-reconstruction-packet.v0",
+  "$defs": {"hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "expires_at_epoch", "assignment_hash", "derivation_manifest_hash", "crosswalk_hash", "selection_count", "corpus_hash", "case_schema_hash", "rubric_hash", "policy_hash", "candidate_state_hash", "source_aliases", "derivation_manifest", "deterministic_screen", "source_content_persisted", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.private-reconstruction-packet.v0"},
+    "expires_at_epoch": {"type": "integer", "minimum": 1},
+    "assignment_hash": {"$ref": "#/$defs/hash"}, "derivation_manifest_hash": {"$ref": "#/$defs/hash"}, "crosswalk_hash": {"$ref": "#/$defs/hash"},
+    "selection_count": {"type": "integer", "minimum": 1},
+    "corpus_hash": {"$ref": "#/$defs/hash"}, "case_schema_hash": {"$ref": "#/$defs/hash"}, "rubric_hash": {"$ref": "#/$defs/hash"}, "policy_hash": {"$ref": "#/$defs/hash"}, "candidate_state_hash": {"$ref": "#/$defs/hash"},
+    "source_aliases": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^source-[0-9]{3}$"}},
+    "derivation_manifest": {"$ref": "private_derivation_manifest.schema.json"},
+    "deterministic_screen": {"type": "object", "additionalProperties": false, "required": ["exact_overlap_flags", "normalized_overlap_flags", "distinctive_name_flags", "distinctive_number_date_flags", "analogy_narrative_flags", "mosaic_flags", "screen_version"], "properties": {"exact_overlap_flags": {"type": "integer", "minimum": 0}, "normalized_overlap_flags": {"type": "integer", "minimum": 0}, "distinctive_name_flags": {"type": "integer", "minimum": 0}, "distinctive_number_date_flags": {"type": "integer", "minimum": 0}, "analogy_narrative_flags": {"type": "integer", "minimum": 0}, "mosaic_flags": {"type": "integer", "minimum": 0}, "screen_version": {"type": "string", "minLength": 1}}},
+    "source_content_persisted": {"const": false},
+    "authority_effect": {"const": "none"}
+  }
+}

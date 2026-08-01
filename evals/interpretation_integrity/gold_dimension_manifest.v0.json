@@ -1,0 +1,24 @@
+{
+  "schema_version": "interpretation-integrity.gold-dimension-manifest.v0",
+  "gold_count": 24,
+  "dimensions": [
+    {"dimension": "overall_result", "eligible_denominator": 24, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "critical_overall_recall", "eligible_denominator": 8, "threshold_kind": "critical_recall", "minimum": 1.0},
+    {"dimension": "noncritical_false_critical", "eligible_denominator": 16, "threshold_kind": "false_positive_rate", "maximum": 0.0},
+    {"dimension": "unit_result", "eligible_denominator": 32, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "unit_coverage", "eligible_denominator": 32, "threshold_kind": "coverage", "minimum": 1.0},
+    {"dimension": "citation_validity", "eligible_denominator": 24, "threshold_kind": "coverage", "minimum": 1.0},
+    {"dimension": "transformation_result", "eligible_denominator": 24, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "critical_transformation", "eligible_denominator": 12, "threshold_kind": "critical_exact", "minimum": 1.0},
+    {"dimension": "qualification_fidelity", "eligible_denominator": 24, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "authority", "eligible_denominator": 24, "threshold_kind": "critical_exact", "minimum": 1.0},
+    {"dimension": "safety", "eligible_denominator": 24, "threshold_kind": "critical_exact", "minimum": 1.0},
+    {"dimension": "required_advance", "eligible_denominator": 24, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "direct_completion", "eligible_denominator": 8, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "clarification", "eligible_denominator": 24, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "blocking_question_threshold", "eligible_denominator": 24, "threshold_kind": "categorical_accuracy", "minimum": 0.90},
+    {"dimension": "directness", "eligible_denominator": 24, "threshold_kind": "numeric", "max_mean_absolute_error": 0.50, "minimum_within_one": 0.90},
+    {"dimension": "utility", "eligible_denominator": 24, "threshold_kind": "numeric", "max_mean_absolute_error": 0.50, "minimum_within_one": 0.90}
+  ],
+  "authority_effect": "none"
+}
