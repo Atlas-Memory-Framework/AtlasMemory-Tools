@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.fixture-label-review.v0",
+  "$defs": {"hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "corpus_hash", "case_schema_hash", "rubric_hash", "annotation_packet_hash", "reviewer_stage_packets", "adjudicator_packets", "resolved_labels_hash", "original_disagreements", "adjudicated_cases", "unresolved_disputes", "per_field_exact_agreement", "pooled_noncritical_kappa", "inventory_complete", "propositions_source_faithful", "policy_labels_appropriate", "final_corpus_aligned", "full_rereview_after_last_repair", "post_output_relabeling_allowed", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.fixture-label-review.v0"},
+    "corpus_hash": {"$ref": "#/$defs/hash"},
+    "case_schema_hash": {"$ref": "#/$defs/hash"},
+    "rubric_hash": {"$ref": "#/$defs/hash"},
+    "annotation_packet_hash": {"$ref": "#/$defs/hash"},
+    "reviewer_stage_packets": {"type": "array", "minItems": 6, "maxItems": 6, "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["reviewer_id", "stage", "packet_hash"], "properties": {"reviewer_id": {"type": "string", "minLength": 1}, "stage": {"enum": ["stage_a", "stage_b", "stage_c"]}, "packet_hash": {"$ref": "#/$defs/hash"}}}},
+    "adjudicator_packets": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": false, "required": ["case_id", "packet_hash"], "properties": {"case_id": {"type": "string", "minLength": 1}, "packet_hash": {"$ref": "#/$defs/hash"}}}},
+    "resolved_labels_hash": {"$ref": "#/$defs/hash"},
+    "original_disagreements": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["case_id", "unit_id", "field", "reviewer_a_value", "reviewer_b_value", "critical_by_either", "resolution_source"], "properties": {"case_id": {"type": "string", "minLength": 1}, "unit_id": {"type": "string", "minLength": 1}, "field": {"type": "string", "minLength": 1}, "reviewer_a_value": {}, "reviewer_b_value": {}, "critical_by_either": {"type": "boolean"}, "resolution_source": {"enum": ["none", "third_adjudicator"]}}}},
+    "adjudicated_cases": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "unresolved_disputes": {"type": "array", "maxItems": 0},
+    "per_field_exact_agreement": {"type": "object", "minProperties": 9, "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}},
+    "pooled_noncritical_kappa": {"type": "number", "minimum": 0.8, "maximum": 1},
+    "inventory_complete": {"const": true},
+    "propositions_source_faithful": {"const": true},
+    "policy_labels_appropriate": {"const": true},
+    "final_corpus_aligned": {"const": true},
+    "full_rereview_after_last_repair": {"const": true},
+    "post_output_relabeling_allowed": {"const": false},
+    "authority_effect": {"const": "none"}
+  }
+}

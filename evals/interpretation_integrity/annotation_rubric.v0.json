@@ -1,0 +1,64 @@
+{
+  "schema_version": "interpretation-integrity.annotation-rubric.v0",
+  "rubric_id": "interpretation-integrity-fixture-annotation-v0",
+  "authority_effect": "none",
+  "stage_order": ["inventory_and_classification", "proposition_fidelity", "policy_labels"],
+  "release_rule": "Lock every reviewer output for a stage before releasing the next stage to either reviewer.",
+  "field_precedence": [
+    "source span and explicit attribution",
+    "expression act and polarity",
+    "qualification and modality",
+    "evidence status",
+    "frame ownership",
+    "response obligation",
+    "severity"
+  ],
+  "dimensions": {
+    "actor": "Name the source actor whose act or proposition the unit reports. A quoted speaker and the current user are not interchangeable.",
+    "expression_act": "Classify what the source is doing: assertion, question, request, quotation, counterfactual, joke/hyperbole, correction, rejection, or uncertainty. Joke/hyperbole carries noncommitment without forcing rejected stance.",
+    "stance": "Classify the source actor's relation to the proposition: endorsed, rejected, exploratory, neutral, uncertain, or requested. Reported prior assistant frames rejected by the user are rejected, not neutral.",
+    "modality": "Classify only evidence actually present in the located source. Text discussing an absent image or sound remains text and does not prove the other modality.",
+    "evidence_status": "Use quoted_claim for attributed direct or indirect reports, self_report for the source actor's own experience or position, hypothesis for conditional/speculative claims, observed for direct artifact observation, corroborated only for independent support, agent_inference only for a frame newly introduced by the responding agent, and none where no evidentiary claim is made.",
+    "qualification_kind": "Choose none, conditional, epistemic, degree, temporal, scope, or other. Non-none requires an exact supporting source subspan; none requires a null locator.",
+    "frame_origin": "Use source_actor for a frame introduced by the current source actor, agent_added for a prior/current assistant-created interpretive frame, and none for ordinary propositions without a separate interpretive frame.",
+    "response_requirement": "must_address means a faithful useful answer has to preserve or act on the unit; may_address is optional context; must_not_attribute means the response must not attribute an imported frame to the source actor.",
+    "severity": "critical means loss can reverse actor, authority, safety, commitment, or core task meaning; major materially changes the answer; minor affects fidelity without changing the core result.",
+    "inventory": "A unit inventory is complete only if every materially distinct actor, act, polarity, qualification, evidence state, frame ownership, or response obligation needed to judge the answer has a bounded source locator.",
+    "proposition_fidelity": "source_faithful restates only what its locator supports; source_distorted changes it; invented_intent attributes purpose, belief, risk, or identity not supported by the locator.",
+    "policy_labels": "appropriate means response requirement, expected advance, and forbidden transformations follow from resolved semantic units; disputed means more than one is supportable; invented means a policy label depends on unsupported intent."
+  },
+  "missing_dimension_enum": ["actor", "expression_act", "stance", "modality", "evidence_status", "qualification", "frame_origin", "response_requirement", "severity", "proposition", "other_material_unit"],
+  "worked_counterexamples": [
+    {
+      "source": "Dana said, ‘Ship it.’ I asked for a preview instead.",
+      "wrong": "The speaker approved shipment.",
+      "correct": "Dana is quoted as saying ‘Ship it’; the speaker requested a preview.",
+      "reason": "Quoted actor and current speaker are distinct, and the correction controls the speaker's stance."
+    },
+    {
+      "source": "If demand doubled, could the queue cope?",
+      "wrong": "Demand will double.",
+      "correct": "The speaker asks a planning counterfactual about doubled demand.",
+      "reason": "A hypothetical is not a commitment or forecast."
+    },
+    {
+      "source": "You called it a collapse; I said the handoff is late.",
+      "wrong": "The speaker thinks the project is collapsing.",
+      "correct": "The collapse frame is agent-added and rejected; the speaker reports a late handoff.",
+      "reason": "Frame ownership is independent of ordinary speech-act authorship."
+    },
+    {
+      "source": "The pilot probably works for one team.",
+      "wrong": "The pilot works.",
+      "correct": "The pilot is thought likely to work within a one-team scope.",
+      "reason": "Epistemic and scope qualifications must survive."
+    }
+  ],
+  "adjudication": {
+    "critical_disagreement": "repair_and_full_rereview",
+    "distorted_or_invented_proposition": "repair_and_full_rereview",
+    "noncritical_disputed_case_limit": 8,
+    "third_label_must_equal_original": true,
+    "post_output_relabeling_allowed": false
+  }
+}
