@@ -1,0 +1,6 @@
+interface:
+  display_name: "Grill Me"
+  short_description: "Resolve material decisions before planning"
+  default_prompt: "Use $grill-me to challenge and clarify what I actually want before producing a plan or implementation."
+policy:
+  allow_implicit_invocation: false

@@ -1,2 +1,3 @@
 pytest
 playwright
+PyYAML==6.0.3

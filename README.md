@@ -70,15 +70,16 @@ The verifier also checks committed Codex harness freshness, adapter CLI generati
 
 ## Quick Start
 
-1. Use `plan` with a feature idea or existing plan file.
-2. Use `review` / planning review skills until planning gates pass.
-3. Use `github-project` when the work needs the standard execution Project board.
-4. Use `plan-to-issues` when approved work should become GitHub issues and Project items.
-5. Use `plan-to-html` when a markdown plan should be rendered into a standalone review artifact.
-6. Use `implement` for approved plan execution.
-7. Use `handoff` before pausing, resuming, or moving work between agents.
-8. Use `agent-harness-evals` to qualify a new or changed unattended or long-shift lane with a representative one-item canary.
-9. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for runtime lifecycle work.
+1. Use `grill-me` explicitly when the real design or scope is still in your head. It inspects available context, resolves material decisions, challenges unnecessary scope, and stops before writing or implementation.
+2. Use `plan` to formalize the approved decision record, or start directly with a feature idea or existing plan file.
+3. Use `review` / planning review skills until planning gates pass.
+4. Use `github-project` when the work needs the standard execution Project board.
+5. Use `plan-to-issues` when approved work should become GitHub issues and Project items.
+6. Use `plan-to-html` when a markdown plan should be rendered into a standalone review artifact.
+7. Use `build` / `implement` for approved plan execution.
+8. Use `handoff` before pausing, resuming, or moving work between agents.
+9. Use `agent-harness-evals` to qualify a new or changed unattended or long-shift lane with a representative one-item canary.
+10. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for runtime lifecycle work.
 
 For full planning details, see `skills/plan/README.md`.
 

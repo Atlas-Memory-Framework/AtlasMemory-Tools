@@ -6,7 +6,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +20,74 @@ import enforce_local_ssot  # noqa: E402
 import verify_repo  # noqa: E402
 import sync_runtime_template  # noqa: E402
 import runtime_control  # noqa: E402
+
+
+def read_skill_frontmatter(path: Path) -> dict[str, object]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0] != "---":
+        raise ValueError("missing opening frontmatter delimiter")
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        raise ValueError("missing closing frontmatter delimiter") from None
+
+    try:
+        fields = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML frontmatter: {exc}") from exc
+    if not isinstance(fields, dict):
+        raise ValueError("frontmatter must be a YAML mapping")
+    return fields
+
+
+def skill_catalog_errors(manifest: dict) -> list[str]:
+    errors: list[str] = []
+    skills = manifest.get("skills") or []
+    aliases = manifest.get("aliases") or {}
+    names = [str(skill.get("name", "")) for skill in skills]
+    paths = [str(skill.get("path", "")) for skill in skills]
+
+    if len(names) != len(set(names)):
+        errors.append("duplicate manifest skill name")
+    if len(paths) != len(set(paths)):
+        errors.append("duplicate manifest skill path")
+
+    known_names = set(names)
+    for owner in aliases:
+        if owner not in known_names:
+            errors.append(f"alias owner is not a manifest skill: {owner}")
+
+    for skill in skills:
+        install_name = str(skill.get("name", ""))
+        relative = str(skill.get("path", ""))
+        skill_file = ROOT / relative / "SKILL.md"
+        if not skill_file.is_file():
+            continue
+        try:
+            frontmatter = read_skill_frontmatter(skill_file)
+        except ValueError as exc:
+            errors.append(f"{relative}: {exc}")
+            continue
+        public_name_value = frontmatter.get("name")
+        description_value = frontmatter.get("description")
+        public_name = public_name_value.strip() if isinstance(public_name_value, str) else ""
+        description = description_value.strip() if isinstance(description_value, str) else ""
+        if not public_name:
+            errors.append(f"{relative}: missing frontmatter name")
+        if not description:
+            errors.append(f"{relative}: missing frontmatter description")
+        if public_name and public_name != install_name and public_name not in aliases.get(install_name, []):
+            errors.append(
+                f"{relative}: frontmatter name {public_name!r} differs from manifest name "
+                f"{install_name!r} without an explicit alias"
+            )
+
+    registered_paths = set(paths)
+    for skill_file in (ROOT / "skills").glob("*/SKILL.md"):
+        relative = skill_file.parent.relative_to(ROOT).as_posix()
+        if relative not in registered_paths:
+            errors.append(f"unregistered canonical skill: {relative}")
+    return errors
 
 
 class ManifestAndHarnessTests(unittest.TestCase):
@@ -38,6 +109,54 @@ class ManifestAndHarnessTests(unittest.TestCase):
         for template in self.manifest["templates"]:
             self.assertTrue((ROOT / template["path"]).is_dir(), template["name"])
 
+    def test_skill_catalog_identity_is_explicit_and_complete(self) -> None:
+        self.assertEqual(skill_catalog_errors(self.manifest), [])
+
+    def test_skill_catalog_rejects_undeclared_frontmatter_name_drift(self) -> None:
+        manifest = deepcopy(self.manifest)
+        manifest["aliases"].pop("implement")
+
+        errors = skill_catalog_errors(manifest)
+
+        self.assertTrue(any("skills/implement" in error and "without an explicit alias" in error for error in errors))
+
+    def test_skill_catalog_rejects_duplicate_identity_and_unknown_alias_owner(self) -> None:
+        manifest = deepcopy(self.manifest)
+        manifest["skills"].append(deepcopy(manifest["skills"][0]))
+        manifest["aliases"]["not-a-skill"] = ["ghost"]
+
+        errors = skill_catalog_errors(manifest)
+
+        self.assertIn("duplicate manifest skill name", errors)
+        self.assertIn("duplicate manifest skill path", errors)
+        self.assertIn("alias owner is not a manifest skill: not-a-skill", errors)
+
+    def test_skill_frontmatter_rejects_malformed_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_file = Path(tmp) / "SKILL.md"
+            skill_file.write_text(
+                '---\nname: "unterminated\ndescription:\n  - broken\n---\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "invalid YAML frontmatter"):
+                read_skill_frontmatter(skill_file)
+
+    def test_skill_catalog_rejects_non_string_required_frontmatter(self) -> None:
+        manifest = deepcopy(self.manifest)
+        manifest["skills"] = [{"name": "invalid", "path": "skills/invalid"}]
+        manifest["aliases"] = {}
+        with tempfile.TemporaryDirectory(dir=ROOT / "skills") as tmp:
+            skill_dir = Path(tmp)
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text("---\nname: []\ndescription: null\n---\n", encoding="utf-8")
+            manifest["skills"][0]["path"] = skill_dir.relative_to(ROOT).as_posix()
+
+            errors = skill_catalog_errors(manifest)
+
+        self.assertTrue(any("missing frontmatter name" in error for error in errors))
+        self.assertTrue(any("missing frontmatter description" in error for error in errors))
+
     def test_canonical_skills_do_not_point_at_retired_hidden_sources(self) -> None:
         retired_path = "." + "cur" + "sor/"
         offenders: list[str] = []
@@ -56,6 +175,23 @@ class ManifestAndHarnessTests(unittest.TestCase):
                 changed = harnesslib.install_harness(harness, target)
                 self.assertTrue(changed)
                 self.assertEqual(harnesslib.verify_harness_target(target), [])
+
+    def test_generated_skill_metadata_is_valid_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            harnesslib.install_harness("codex", target)
+            generated_files = sorted((target / ".codex" / "skills").glob("*/agents/openai.yaml"))
+            parsed_by_skill: dict[str, dict] = {}
+            for generated in generated_files:
+                lines = generated.read_text(encoding="utf-8").splitlines()
+                self.assertTrue(lines[0].startswith("# atlas-tools-generated:"), generated)
+                self.assertEqual(lines[1], "# atlas-tools-generated-end", generated)
+                self.assertFalse(any("<!--" in line or "-->" in line for line in lines), generated)
+                parsed = yaml.safe_load("\n".join(lines))
+                self.assertIsInstance(parsed, dict, generated)
+                parsed_by_skill[generated.parents[1].name] = parsed
+
+        self.assertEqual(parsed_by_skill["grill-me"]["policy"]["allow_implicit_invocation"], False)
 
     def test_manual_edit_to_generated_file_fails_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
