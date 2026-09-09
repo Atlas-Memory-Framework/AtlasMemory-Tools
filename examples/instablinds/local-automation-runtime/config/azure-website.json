@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "provider": "azure-devops",
+  "repository": {
+    "organization": "Instablinds",
+    "project": "Instablinds",
+    "name": "Website",
+    "url": "https://dev.azure.com/Instablinds/Instablinds/_git/Website",
+    "base_branch": "develop",
+    "checkout": "/home/instablinds-admin/code/Website"
+  },
+  "capabilities": ["read"],
+  "models": {
+    "planning": {"model": "gpt-6-astra", "reasoning": "max"},
+    "implementation": {"model": "gpt-6-astra", "reasoning": "max"},
+    "review": {"model": "gpt-6-astra", "reasoning": "max"},
+    "repair": {"model": "gpt-6-astra", "reasoning": "max"}
+  },
+  "sandbox": "workspace-write",
+  "approval_policy": "on-request"
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "repository_url": "https://dev.azure.com/Instablinds/Instablinds/_git/Website",
+  "limits": {"max_cycles": 2, "max_items": 1, "max_seconds": 60},
+  "items": [
+    {
+      "id": "azdo:Instablinds:Instablinds:1",
+      "context_root": "/home/instablinds-admin/code/Website",
+      "actions": ["assess", "local_execute"],
+      "definition": {
+        "schema_version": 1,
+        "worker_packet": {
+          "schema_version": 1,
+          "id": "azdo:Instablinds:Instablinds:1",
+          "repository_url": "https://dev.azure.com/Instablinds/Instablinds/_git/Website",
+          "base_branch": "develop",
+          "task": "UNAPPROVED EXAMPLE: choose the actual Board item and provide reviewed scope, commands, acceptance evidence, branch and base commit before requesting execution. This draft must remain blocked.",
+          "write_scope": [],
+          "commands": [],
+          "acceptance": [],
+          "role_timeout_seconds": 600
+        },
+        "step": {
+          "id": "prepare-example",
+          "kind": "coding",
+          "action": "local_execute",
+          "candidate_sha": null
+        },
+        "sources": [
+          {"id": "repository-instructions", "kind": "instructions", "path": "AGENTS.md"},
+          {"id": "repository-agent-policy", "kind": "instructions", "path": "docs/ai/agent-policy.md"}
+        ],
+        "affected_paths": [],
+        "points": null,
+        "human_gates": [],
+        "attempts": [],
+        "budget": {
+          "max_model_calls": 10,
+          "max_tokens": 120000,
+          "model_calls_used": 0,
+          "tokens_used": 0
+        },
+        "owner": ""
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Entry point for inert previews and separately authorized Azure Board patches."""
+
+import sys
+
+sys.dont_write_bytecode = True
+
+from atlas_azure_reconcile import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Continuous Agent Loop"
+  short_description: "Nested bounded loops with validation gates"
+  default_prompt: "Use $continuous-agent-loop to design or run a bounded nested work loop with progress, validation, and stop gates."

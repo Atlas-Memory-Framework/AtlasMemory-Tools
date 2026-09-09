@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "policy_id": "instablinds-website-routing",
+  "version": 1,
+  "repository_url": "https://dev.azure.com/Instablinds/Instablinds/_git/Website",
+  "assessment_models": {
+    "assessment": {
+      "model": "gpt-5.6-terra",
+      "reasoning": "medium"
+    },
+    "challenge": {
+      "model": "gpt-5.6-sol",
+      "reasoning": "high"
+    },
+    "reassessment": {
+      "model": "gpt-5.6-sol",
+      "reasoning": "high"
+    }
+  },
+  "profiles": {
+    "clerical": {
+      "planning": {
+        "model": "gpt-5.6-terra",
+        "reasoning": "medium"
+      },
+      "implementation": {
+        "model": "gpt-5.6-luna",
+        "reasoning": "low"
+      },
+      "review": {
+        "model": "gpt-5.6-sol",
+        "reasoning": "high"
+      },
+      "repair": {
+        "model": "gpt-5.6-terra",
+        "reasoning": "medium"
+      }
+    },
+    "routine": {
+      "planning": {
+        "model": "gpt-5.6-sol",
+        "reasoning": "high"
+      },
+      "implementation": {
+        "model": "gpt-5.6-terra",
+        "reasoning": "medium"
+      },
+      "review": {
+        "model": "gpt-5.6-sol",
+        "reasoning": "high"
+      },
+      "repair": {
+        "model": "gpt-5.6-terra",
+        "reasoning": "high"
+      }
+    },
+    "complex": {
+      "planning": {
+        "model": "gpt-5.6-sol",
+        "reasoning": "high"
+      },
+      "implementation": {
+        "model": "gpt-5.6-terra",
+        "reasoning": "high"
+      },
+      "review": {
+        "model": "gpt-6-astra",
+        "reasoning": "high"
+      },
+      "repair": {
+        "model": "gpt-5.6-sol",
+        "reasoning": "high"
+      }
+    },
+    "sensitive": {
+      "planning": {
+        "model": "gpt-6-astra",
+        "reasoning": "high"
+      },
+      "implementation": {
+        "model": "gpt-6-astra",
+        "reasoning": "high"
+      },
+      "review": {
+        "model": "gpt-6-astra",
+        "reasoning": "max"
+      },
+      "repair": {
+        "model": "gpt-6-astra",
+        "reasoning": "high"
+      }
+    }
+  },
+  "sensitive_paths": [
+    "src/auth",
+    "src/components/checkout",
+    "src/context/CartContext.tsx",
+    "src/services/payments",
+    "server",
+    "scripts/devops",
+    "infra",
+    "azure-pipelines",
+    "docs/ai/agent-policy.md",
+    "authority"
+  ],
+  "limits": {
+    "max_points": 8,
+    "max_paths": 40,
+    "evidence_max_age_seconds": 900,
+    "max_model_calls": 10,
+    "max_tokens": 180000,
+    "max_attempts": 2,
+    "require_challenge": true
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Harness Evals"
+  short_description: "Evaluate agent harness progress and reliability"
+  default_prompt: "Use $agent-harness-evals to evaluate this agent harness or long-running operator lane before promotion."

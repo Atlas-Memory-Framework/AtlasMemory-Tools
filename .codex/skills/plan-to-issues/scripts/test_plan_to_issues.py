@@ -1,16 +1,25 @@
-# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:635a267195b1d6840607b75a19c495654771a719b487a71183c657331e3b57b5
+# atlas-tools-generated: source=skills/plan-to-issues/scripts/test_plan_to_issues.py manifest=atlas-tools.v1 checksum=sha256:c5ad2c961bff5e98945e85a5fad7a166d033cb95ac2a956951f18fdaf4246df8
 # atlas-tools-generated-end
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
+import hashlib
 import subprocess
 import sys
+import tempfile
+import traceback
 from pathlib import Path
 from unittest.mock import patch
 
 
 SCRIPT_PATH = Path(__file__).with_name("plan_to_issues.py")
+
+
+def canonical_markdown_hash(markdown: str) -> str:
+    normalized = markdown.replace("\r\n", "\n").replace("\r", "\n").rstrip() + "\n"
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def load_plan_to_issues_module():
@@ -2500,6 +2509,277 @@ tracking:
     assert len(payload["children"]) == 2
 
 
+def test_leaf_issue_dry_run_projects_spec_metadata_without_copying_sidecar(tmp_path: Path) -> None:
+    spec_path = tmp_path / "specs" / "leaf-001.md"
+    spec_path.parent.mkdir()
+    spec_markdown = """# Issue Spec: Parser support
+
+SpecId: pkg-001-leaf-001-spec
+SourceId: pkg-001#LEAF-001
+ParentPlanId: pkg-001
+ManifestLeafId: LEAF-001
+Dispatch mode: manual-review
+One PR contract: yes
+
+## Intent
+Detailed sidecar-only instruction that should not be copied into the GitHub issue body.
+
+## Anti-scope
+- none
+
+## Files in scope
+- `skills/plan-to-issues/scripts/plan_to_issues.py`
+
+## Dependencies
+- none
+
+## Required gates
+- G-ISSUE-Sidecar
+
+## Validation
+- `python3 skills/plan-to-issues/scripts/test_plan_to_issues.py`
+
+## Acceptance criteria
+- Sidecar metadata is projected concisely.
+
+## Depth contract
+- Preserve dry-run metadata.
+
+## Open decisions
+- none
+"""
+    spec_path.write_text(spec_markdown, encoding="utf-8")
+    spec_hash = canonical_markdown_hash(spec_markdown)
+
+    plan_path = tmp_path / "automation_manifest_sidecar.plan.md"
+    plan_path.write_text(
+        f"""---
+name: automation manifest sidecar
+tracking:
+  epicRepo: OWNER/service
+Package id: pkg-001
+Package hash: sha256:{"1" * 64}
+Projection schema: atlas.issue-projection.v0
+---
+
+# Feature: Automation manifest sidecar
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: Parser support for sidecars
+  - Spec path: specs/leaf-001.md
+  - Spec hash: {spec_hash}
+  - Spec source id: pkg-001#LEAF-001
+  - Dispatch: manual-review
+  - Points: 1
+  - Target repo: service
+  - Depends on: none
+  - Depth contract:
+    - Preserve dry-run metadata.
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+  - Validation:
+    - `python3 skills/plan-to-issues/scripts/test_plan_to_issues.py`
+  - Required gates: `G-ISSUE-Sidecar`
+""",
+        encoding="utf-8",
+    )
+
+    payload = run_cli(
+        "--plan",
+        str(plan_path),
+        "--strategy",
+        "leaf-issues",
+        "--dry-run",
+    )
+
+    child = payload["children"][0]
+    assert child["source_kind"] == "automation-manifest-leaf"
+    assert child["package_id"] == "pkg-001"
+    assert child["package_hash"] == f"sha256:{'1' * 64}"
+    assert child["spec_id"] == "pkg-001-leaf-001-spec"
+    assert child["spec_source_id"] == "pkg-001#LEAF-001"
+    assert child["spec_path"] == "specs/leaf-001.md"
+    assert child["spec_hash"] == spec_hash
+    assert child["projection_schema"] == "atlas.issue-projection.v0"
+    assert child["depth_contract"] == ["Preserve dry-run metadata."]
+    assert "- Source kind: `automation-manifest-leaf`" in child["body"]
+    assert "- SourceId: `LEAF-001`" in child["body"]
+    assert "- Package id: `pkg-001`" in child["body"]
+    assert f"- Package hash: `sha256:{'1' * 64}`" in child["body"]
+    assert "- Spec id: `pkg-001-leaf-001-spec`" in child["body"]
+    assert "- Spec source id: `pkg-001#LEAF-001`" in child["body"]
+    assert "- Spec path: [`specs/leaf-001.md`](specs/leaf-001.md)" in child["body"]
+    assert f"- Spec hash: `{spec_hash}`" in child["body"]
+    assert "- Projection schema: `atlas.issue-projection.v0`" in child["body"]
+    assert "- Depth contract: `Preserve dry-run metadata.`" in child["body"]
+    assert "Detailed sidecar-only instruction" not in child["body"]
+
+
+def test_leaf_issue_apply_blocks_missing_spec_path(tmp_path: Path) -> None:
+    plan_path = tmp_path / "automation_manifest_missing_spec.plan.md"
+    plan_path.write_text(
+        """---
+name: automation manifest missing spec
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Automation manifest missing spec
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: Missing sidecar
+  - Spec path: specs/missing.md
+  - Dispatch: manual-review
+  - Points: 1
+  - Target repo: service
+  - Depends on: none
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--plan",
+            str(plan_path),
+            "--strategy",
+            "leaf-issues",
+            "--apply",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Spec path not found: specs/missing.md" in result.stderr
+
+
+def test_leaf_issue_apply_blocks_spec_hash_mismatch(tmp_path: Path) -> None:
+    spec_path = tmp_path / "specs" / "leaf-001.md"
+    spec_path.parent.mkdir()
+    spec_path.write_text(
+        """# Issue Spec: Parser support
+
+SpecId: pkg-001-leaf-001-spec
+SourceId: pkg-001#LEAF-001
+ParentPlanId: pkg-001
+ManifestLeafId: LEAF-001
+Dispatch mode: manual-review
+One PR contract: yes
+
+## Intent
+Keep sidecar metadata current.
+""",
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "automation_manifest_stale_spec.plan.md"
+    plan_path.write_text(
+        f"""---
+name: automation manifest stale spec
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Automation manifest stale spec
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: Stale sidecar hash
+  - Spec path: specs/leaf-001.md
+  - Spec hash: sha256:{"0" * 64}
+  - Dispatch: manual-review
+  - Points: 1
+  - Target repo: service
+  - Depends on: none
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--plan",
+            str(plan_path),
+            "--strategy",
+            "leaf-issues",
+            "--apply",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Spec hash mismatch" in result.stderr
+
+
+def test_leaf_issue_apply_blocks_spec_source_id_mismatch(tmp_path: Path) -> None:
+    spec_path = tmp_path / "specs" / "leaf-001.md"
+    spec_path.parent.mkdir()
+    spec_markdown = """# Issue Spec: Parser support
+
+SpecId: pkg-001-leaf-001-spec
+SourceId: pkg-001#LEAF-001
+ParentPlanId: pkg-001
+ManifestLeafId: LEAF-001
+Dispatch mode: manual-review
+One PR contract: yes
+
+## Intent
+Keep sidecar metadata current.
+"""
+    spec_path.write_text(spec_markdown, encoding="utf-8")
+    plan_path = tmp_path / "automation_manifest_wrong_source.plan.md"
+    plan_path.write_text(
+        f"""---
+name: automation manifest wrong source
+tracking:
+  epicRepo: OWNER/service
+---
+
+# Feature: Automation manifest wrong source
+
+## Automation Issue Manifest
+### Leaf issues
+- LEAF-001: Wrong sidecar source id
+  - Spec path: specs/leaf-001.md
+  - Spec hash: {canonical_markdown_hash(spec_markdown)}
+  - Spec source id: wrong-package#LEAF-001
+  - Dispatch: manual-review
+  - Points: 1
+  - Target repo: service
+  - Depends on: none
+  - Files in scope:
+    - `skills/plan-to-issues/scripts/plan_to_issues.py`
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--plan",
+            str(plan_path),
+            "--strategy",
+            "leaf-issues",
+            "--apply",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Spec source id mismatch" in result.stderr
+
+
 def test_manifest_leaf_explicit_execution_repo_overrides_custom_source_repo(tmp_path: Path) -> None:
     plan_path = tmp_path / "custom_execution_repo.plan.md"
     plan_path.write_text(
@@ -2786,3 +3066,31 @@ tracking:
     ]
     assert "## Dispatch Guardrails" in child["body"]
     assert "Convert dependency token `WS1-MP2`" in child["body"]
+
+
+def main() -> int:
+    failures: list[str] = []
+    test_items = [
+        (name, obj)
+        for name, obj in sorted(globals().items())
+        if name.startswith("test_") and callable(obj)
+    ]
+    for name, test_func in test_items:
+        signature = inspect.signature(test_func)
+        kwargs = {}
+        with tempfile.TemporaryDirectory(prefix=f"{name}-") as temp_dir:
+            if "tmp_path" in signature.parameters:
+                kwargs["tmp_path"] = Path(temp_dir)
+            try:
+                test_func(**kwargs)
+            except Exception:
+                failures.append(f"{name}\n{traceback.format_exc()}")
+    if failures:
+        sys.stderr.write("\n\n".join(failures))
+        return 1
+    print(f"ok - {len(test_items)} tests")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

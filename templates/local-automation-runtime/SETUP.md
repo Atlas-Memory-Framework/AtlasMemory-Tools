@@ -1,5 +1,40 @@
 # Setup
 
+For Azure Boards/Azure Repos, use the
+[Azure operating contract](../../docs/azure-devops-runtime.md) and the non-secret
+[Website source example](../../examples/instablinds/local-automation-runtime/config/azure-website.json).
+It enables only reads, pins each Codex role's
+model/reasoning, and supplies no runtime location or execution authority. The
+Website's 18 remaining prerequisite edges and execution authority still block
+dispatch. An inert source-template preview needs no installation.
+
+An installed runtime must be explicitly selected inside the current identity's
+passwd home; do not use another identity's runtime, auth, or browser state.
+Installation, local execution, draft publication and Board reconciliation need
+separate authorization. The control wrapper never implicitly syncs or migrates
+configuration, including during status or dry-run commands. Its explicit sync
+apply requires `--apply --yes` after the exact update has been reviewed.
+
+Before Azure assessment, worker execution or writes, an authorized operator must
+separately enroll public approval issuers in the fixed runtime authority
+registry. No preview, template sync or agent bootstraps that trust. Signing
+secrets remain outside the runtime and agent access. Plain local approval
+strings no longer suffice. Missing trust or the installed OpenSSL verifier
+blocks execution; this setup does not install dependencies automatically.
+See [dispatcher and trusted approvals](../../docs/azure-dispatch-governance.md)
+for policy selection, human gates, signed bindings and qualification limits.
+
+The [supervisor operating guide](../../docs/azure-supervisor.md) covers the local
+review inbox and intake refresh. Its observe mode needs an explicit owned state
+directory outside Git and permits only Azure reads and local evidence writes.
+Source commands can use that state directory without copying runtime code or
+installing a service. Review requests remain unsigned until an operator enrolls
+the public issuer and a protected `authority/issuer.json` adapter profile. The
+adapter must authenticate the approver externally; a CLI confirmation or local
+button does not supply identity. No private signing key belongs in this runtime.
+
+The remaining setup steps configure the separate GitHub provider for other repos.
+
 1. Install GitHub CLI and authenticate:
 
    ```bash

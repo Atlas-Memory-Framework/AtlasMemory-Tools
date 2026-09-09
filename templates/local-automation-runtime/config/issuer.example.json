@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "enabled": false,
+  "issuer": "OWNER-enrolled-issuer-id",
+  "executable": "/OPERATOR-CONFIGURED-PROTECTED-PATH/approval-adapter",
+  "executable_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "timeout_seconds": 60,
+  "actions": ["assess", "local_execute", "draft_pr", "board_write", "human_gate"]
+}

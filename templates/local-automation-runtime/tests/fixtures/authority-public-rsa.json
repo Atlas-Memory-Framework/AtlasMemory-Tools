@@ -1,0 +1,25 @@
+{
+  "description": "Synthetic public RSA fixture. Impossible production runtime; no private key is stored.",
+  "envelope": {
+    "algorithm": "rsa-sha256",
+    "issuer": "synthetic-public-fixture",
+    "payload": {
+      "action": "assess",
+      "bindings": {
+        "issue_id": "azdo:EXAMPLE:EXAMPLE:17",
+        "issue_revision": 1
+      },
+      "expires_at": 1800003600,
+      "grant_id": "public-fixture-only",
+      "issued_at": 1800000000,
+      "not_before": 1800000000,
+      "policy_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "runtime_dir": "/__synthetic_authority_fixture__/runtime",
+      "schema": 1
+    },
+    "schema": 1,
+    "signature": "BppXlxp/G65zbVWs8DGFP8LXvPCx/J/Xy5Ei/CCynz1gFLuWCDYdJlflRIHMlXljh3xms1MtzIZeFdtYon9bscPnXp4UMLF48Ajl1d5U+fAcaFbNx2/NXRQ+z0p9LN0dC6YCX5rqouc5jUiirsx8UyutOMyq44DJl/UzZ3n9Q4niNmMr6mOMdIJ3CBfB65JTHgd9RJiDkfu2DgvwcQBO9rPxl2ZbTMA69lDQt+t0HIZDxRdPVPGWlFA53KKYT21YSBQKe64WSW0RcfBtIRmbgx1BF/SG1DYjEBU2f93O9Kko/l89/0Zdg8Ljxx6FVH4zFFB4h6dVKg63r5dKW2U1JQ=="
+  },
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA22GuucD5+DyZgDk2Cjbq\nVh9zvOlkRJV5OihWpd+xXYZgl7D84cQ5uAk7KKb9fbiBxH8ZymYUMVqtA6OXb0gF\nc5cA9Wx2WjXrtesHdU6ragn7IxEY3SkWTPvAxVljgggDSgNl+SGuXkjUYkYABs/r\nMxB3QfefzFN/YN0P1gZ0rA3tXKQ0KQg5Jf8S28DuyNIS4eLnuZCaZYkgmsZlLS0W\ndW/CtPfiVQmGZ9I7s32NCMT5PT638hOkGTwyUYvaWV8ejB97OPWcK0MaNtasw7g4\nh9VhCwEhfe6Y+7jdecsf1B6KNOMPTp//XB4zNYO2JKovluTQStk99/ySxMTT1lFi\nQQIDAQAB\n-----END PUBLIC KEY-----\n",
+  "signed_message_sha256": "db4627fd25373423019c0a0631a1904f7eadb05d0eb8e63e98cb43be0d451aee"
+}

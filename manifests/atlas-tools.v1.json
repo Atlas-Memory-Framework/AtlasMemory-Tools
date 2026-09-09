@@ -4,8 +4,16 @@
   "description": "Canonical inventory for AtlasMemory Tools skills, agents, templates, aliases, and harness adapter targets.",
   "skills": [
     {
+      "name": "agent-harness-evals",
+      "path": "skills/agent-harness-evals"
+    },
+    {
       "name": "automation-decomposition",
       "path": "skills/automation-decomposition"
+    },
+    {
+      "name": "continuous-agent-loop",
+      "path": "skills/continuous-agent-loop"
     },
     {
       "name": "critical-ideation",
@@ -14,6 +22,10 @@
     {
       "name": "github-project",
       "path": "skills/github-project"
+    },
+    {
+      "name": "grill-me",
+      "path": "skills/grill-me"
     },
     {
       "name": "handoff",
@@ -58,6 +70,10 @@
     {
       "name": "local-plan-agent-runtime",
       "path": "skills/local-plan-agent-runtime"
+    },
+    {
+      "name": "model-the-situation",
+      "path": "skills/model-the-situation"
     },
     {
       "name": "plan",
@@ -177,6 +193,9 @@
       "intent-model",
       "open-loop-ledger",
       "latent-intent"
+    ],
+    "implement": [
+      "build"
     ],
     "issue-spec": [
       "issue-spec-sidecar",

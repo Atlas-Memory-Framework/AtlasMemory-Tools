@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:fabc7abaf72fc60be55a4d8b877a5fedb151c01cd6326131f3a2322686b878f5
+# atlas-tools-generated: source=skills/plan-to-issues/SKILL.md manifest=atlas-tools.v1 checksum=sha256:5a10a8c556c453af0700567350fb895c4acc1113f7a5b320ee959eeaed0d44f3
 # atlas-tools-generated-end
 name: plan-to-issues
 description: Sync or materialize GitHub issues and optional project tracking from the current plan artifact. Use when the user asks to create or update issues from a plan, wants a dry-run issue breakdown, or wants to project workstreams into a GitHub Project without replacing planning authority.
@@ -115,8 +115,10 @@ Use the plan's existing identifiers wherever possible:
 - Workstream extraction prefers bullet workstreams under `### Workstreams + merge points` when that block defines at least one workstream; otherwise it falls back to `### WS* ...` headings.
 - `--strategy leaf-issues` consumes the canonical `### Automation Issue Manifest` section and projects its executable leaves instead of workstream or phase buckets. `## Automation Issue Manifest` -> `### Leaf issues` is also accepted as a compatibility alias.
 - Manifest leaves should be bullets shaped as `- LEAF-001: Short executable title` with nested metadata for `Dispatch`, `Points`, `Target repo`, `Files in scope`, `Validation`, `Depends on`, `External blockers`, `Manual blockers`, and `Required gates`.
+- Manifest leaves may include sidecar metadata: `Spec path`, `Spec hash`, `Spec id`, `Spec source id`, `Depth contract`, `Package id`, `Package hash`, and `Projection schema`. Dry-run JSON and issue bodies project these fields when present.
+- Apply-style modes fail closed when a declared `Spec path` is missing, when `Spec hash` is present without a path, or when the sidecar hash does not match `sha256:<64 lowercase hex chars>` over normalized markdown.
 - For unattended local automation, prefer one-point manifest leaves (`Points: 1`). Larger leaves should stay tracking/manual until decomposed into one-point child issues.
-- Manifest leaf issues emit automation metadata in dry-run JSON and issue bodies: `dispatch_mode`, `write_scope`, `validation_commands`, dependencies, gates, repo/base-branch routing, and dispatch guardrails.
+- Manifest leaf issues emit automation metadata in dry-run JSON and issue bodies: source metadata, spec links/hashes, `dispatch_mode`, `write_scope`, `validation_commands`, dependencies, gates, repo/base-branch routing, and dispatch guardrails.
 - Generated executable issues must include runtime execution-state fields: `Open dependencies:` and `Manual gates remaining:`. These are the local automation dispatch contract; `## Dependencies` and Project fields are human/operator context.
 - Generated executable issues must include a stable body source marker such as `SourceId` / manifest leaf id / workstream id. Project fields may mirror it, but they must not be the only place it exists.
 - `Dispatch: agent-ready` with `Points` greater than `1` is not unattended-ready. Treat it as tracking/manual until decomposed, even if other metadata looks queueable.

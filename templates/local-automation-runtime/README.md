@@ -1,8 +1,35 @@
 # Local Automation Runtime Template
 
-This template is the host-side local Codex automation lane for GitHub issue-to-PR automation.
+This template contains separate GitHub and Azure providers. The Azure provider
+supports read-only inspection, one bounded local task, separately authorized
+draft PR publication and revision-safe Board reconciliation. Start with the
+read-only [Website source example](../../examples/instablinds/local-automation-runtime/config/azure-website.json) and the
+[Azure operating contract](../../docs/azure-devops-runtime.md). Website uses
+Azure exclusively; the GitHub workflow below is for other repositories.
 
-It provides:
+`scripts/runtime_control.py` requires an explicit provider and an existing owned
+runtime within the current identity. Status and dry-run commands never install,
+migrate or dispatch child commands. Effective model/reasoning/argv settings for
+planning, implementation, review and repair are reported before Azure dispatch.
+Capabilities never replace exact operation authorization.
+
+The Azure dispatcher adds explicit routing policy, independent challenge,
+candidate-bound human gates and signed issuer grants. Its offline preview is
+inert; assessment and worker execution are separate authorized operations.
+See [routing and authority](../../docs/azure-dispatch-governance.md). Protect
+`authority/`, `.azure-dispatch/`, `.azure-api/`, `.azure-supervisor/`,
+`approval-inbox/`, `azure-reconcile/` and
+`worktrees/` as operator state; template synchronization preserves them.
+
+The [Azure supervisor and review inbox](../../docs/azure-supervisor.md) add
+bounded observation, intake refresh and authenticated decision handoffs.
+`atlas-agent-azure-supervise`, `atlas-agent-azure-intake` and
+`atlas-agent-azure-approval` default to local previews. The supervisor prepares
+requests and consumes verified responses; a separately configured issuer handles
+human authentication and consent. No supervisor command enrolls that issuer or
+installs a background process.
+
+The GitHub lane provides:
 
 - issue queueing from `status:ready` to `agent:ready`
 - local Codex worker execution in isolated per-job worktrees

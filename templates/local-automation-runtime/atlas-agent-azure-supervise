@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Inert by default; explicit bounded Azure supervision."""
+import sys
+sys.dont_write_bytecode = True
+from atlas_supervisor import main
+raise SystemExit(main())

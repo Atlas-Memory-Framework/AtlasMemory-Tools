@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:b3146130252c9f7165be6cf5a3892df0ed4356a73488a9d2493ab45ea81ccfcb
+# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:a6b9740cdb5fefc33071d1bfc55d953fa98daef0eb902b87e0e394bf5d60172f
 # atlas-tools-generated-end
 name: automation-decomposition
 description: Produce the Automation Issue Manifest for /plan when a plan must project into bounded issues or unattended issue-to-PR execution. Use after implementation planning and before planning reviews when AutomationTarget is not none.
@@ -22,12 +22,20 @@ Convert the accepted implementation plan into a machine-readable `## Automation 
 - Leaf issues: bounded executable units that one agent can turn into one PR.
 - Dependencies: explicit references between leaf issue ids, or structured external/manual blockers.
 - Gates: validation evidence attached to one or more leaf issues. Gates are not dependencies.
+- Sidecar issue specs: optional deep markdown attachments for one leaf. They are referenced by leaf metadata (`Spec`, `Spec path`, `Spec hash`, `Spec source id`, `Depth contract`) and do not require package directories or replace the selected plan artifact.
 
 ## AutomationTarget modes
 - `none`: return `AutomationReadiness: N/A`; no manifest required.
 - `manifest-only`: produce a valid manifest for human review; dispatch can remain blocked.
 - `issue-projection`: every leaf issue can become a GitHub issue without additional decomposition.
 - `unattended-prs`: every `agent-ready` leaf issue has enough scope, dependency, validation, and dispatch metadata for local issue-to-PR automation after human dispatch approval.
+
+## Scope budget and parent/child plans
+- Count executable leaves as every leaf whose `Dispatch` is not `tracking-only`, including `manual-review`, `agent-ready`, and `blocked` leaves that can become executable after blockers clear.
+- Prefer 3-8 executable leaves per child plan. Warn above 8 executable leaves.
+- More than 12 executable leaves fails AutomationReadiness unless the plan is split into child plans or an accepted DR-backed scope waiver is present.
+- A DR-backed scope waiver must include the DR id, exact executable leaf count, rationale for not splitting, validation risk, and revisit trigger.
+- Parent/campaign plans may index child plans and dependency summaries, but they must not directly carry unbounded executable issue lists in any dispatch mode. Parent plan manifest entries should be `tracking-only` unless the parent owns a small bounded execution change.
 
 ## Leaf issue rules
 Each leaf issue must include:
@@ -38,6 +46,7 @@ Each leaf issue must include:
 - acceptance criteria that are executable by command or evidence artifact
 - one-PR contract and source plan sections
 - scheduler metadata for local automation: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, and validation tier; use `none` only when the field is not applicable
+- sidecar metadata when the leaf needs depth beyond the inline manifest. Use `Spec: sidecar`, `Spec path`, `Spec hash`, `Spec source id`, and `Depth contract`; use `Spec: inline` only when the manifest leaf itself is self-contained.
 
 Allowed dispatch modes:
 - `agent-ready`: eligible for issue-to-PR automation after dependencies close and human dispatch approval is present.
@@ -61,6 +70,7 @@ Return `Fail` unless:
 - every `agent-ready` issue has bounded write scope, validation command/evidence, dispatch mode, and one-PR contract
 - every `agent-ready` issue has explicit scheduler metadata, with `Blocks: none` when it does not unblock another leaf or issue
 - no `agent-ready` issue exceeds a reasonable budget: more than one repo, broad cross-cutting file ownership, unclear risk, or no focused acceptance criteria
+- executable leaf count is 12 or fewer, or an accepted DR-backed scope waiver includes exact count, rationale for not splitting, validation risk, and revisit trigger
 
 ## Sub-agent output contract
 Return a single block:
@@ -137,6 +147,11 @@ Use this structure:
   - Acceptance criteria:
     - ...
   - One PR contract: yes | no
+  - Spec: inline | sidecar
+  - Spec path: <optional path to sidecar issue spec markdown; not a package-directory requirement>
+  - Spec hash: <optional sha256:...>
+  - Spec source id: <must match this leaf id when Spec is sidecar>
+  - Depth contract: <required for complex/data/testing/coverage/runtime/projection/cross-module/multi-file leaves>
   - Risk / dispatch notes:
   - Source plan sections:
     - ...
@@ -148,6 +163,9 @@ Use this structure:
 - File-scope conflicts resolved: Pass | Fail
 - Acceptance criteria executable: Pass | Fail
 - Required metadata complete: Pass | Fail
+- Executable leaf count: <integer>
+- Scope budget: Pass | Warning | Fail
+- Child-plan split: <none | parent tracking-only index | child plan owns bounded leaves>
 - Notes / waivers (must cite DR-xxx):
   - ...
 ```

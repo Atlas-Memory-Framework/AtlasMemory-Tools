@@ -10,9 +10,11 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def load_script(name: str, filename: str):
@@ -60,6 +62,18 @@ class LocalAgentAutonomyTests(unittest.TestCase):
         cls.workstream_review = load_script("atlas_agent_workstream_review_test", "atlas-agent-workstream-review")
         for module in (cls.triage, cls.orchestrator, cls.reconcile):
             module.common.trusted_authors = lambda: {"trusted-user"}
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state = Path(temporary.name)
+        environment = patch.dict(os.environ, {
+            "AGENT_JOBS": str(state / "jobs"),
+            "AGENT_LOGS": str(state / "logs"),
+            "AGENT_REPOS": str(state / "repos"),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def test_triage_approves_review_before_dispatch_with_stale_needs_human(self) -> None:
         record = self.triage.classify_issue(
@@ -1256,12 +1270,19 @@ class LocalAgentAutonomyTests(unittest.TestCase):
                 "body": "## Parent Epic\nhttps://github.com/owner/repo/issues/1",
             },
         }
-        original_issue_state = self.project_reconcile.issue_state
-        self.project_reconcile.issue_state = lambda repo, number: "OPEN"
-        try:
+        with patch.object(
+            self.project_reconcile.common,
+            "gh_json_or_none",
+            return_value=[{"number": 1, "state": "OPEN"}, {"number": 2, "state": "OPEN"}],
+        ) as batch_read, patch.object(
+            self.project_reconcile, "issue_state", side_effect=AssertionError("unexpected fallback read")
+        ):
             decisions = self.project_reconcile.decide("owner", 2, config, [parent, child])
-        finally:
-            self.project_reconcile.issue_state = original_issue_state
+
+        batch_read.assert_called_once_with(
+            ["issue", "list", "--repo", "owner/repo", "--state", "all", "--limit", "1000", "--json", "number,state"],
+            retries=2,
+        )
 
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0].repo, "owner/repo")

@@ -1,0 +1,8 @@
+# atlas-tools-generated: source=skills/grill-me/agents/openai.yaml manifest=atlas-tools.v1 checksum=sha256:e8fea90329dd3bdc45a78849845e615ce2eee07d50cb20fbb97b3300c8ec61de
+# atlas-tools-generated-end
+interface:
+  display_name: "Grill Me"
+  short_description: "Resolve material decisions before planning"
+  default_prompt: "Use $grill-me to challenge and clarify what I actually want before producing a plan or implementation."
+policy:
+  allow_implicit_invocation: false
