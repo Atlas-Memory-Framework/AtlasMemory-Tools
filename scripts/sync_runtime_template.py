@@ -26,6 +26,13 @@ PRESERVE_FILES = {
 }
 
 PRESERVE_DIRS = {
+    "authority",
+    ".azure-api",
+    ".azure-dispatch",
+    ".azure-supervisor",
+    "approval-inbox",
+    "azure-reconcile",
+    "worktrees",
     "codex-home",
     "jobs",
     "logs",

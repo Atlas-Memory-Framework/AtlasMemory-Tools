@@ -1,0 +1,31 @@
+{
+  "applied_dependency_links": 53,
+  "blockers": [
+    "native-dependency-graph-incomplete",
+    "execution-authority-not-established"
+  ],
+  "complete": false,
+  "dependencies_satisfied": false,
+  "dependency_complete": false,
+  "example_only": true,
+  "execution_authority_established": false,
+  "expected_edges": 71,
+  "expected_nodes": 37,
+  "issue_id": "azdo:Instablinds:Instablinds:1",
+  "issue_revision": 1,
+  "items": [
+    {
+      "blockers": [
+        "native-dependency-graph-incomplete",
+        "execution-authority-not-established"
+      ],
+      "dependencies": [],
+      "eligible": false,
+      "id": "azdo:Instablinds:Instablinds:1",
+      "revision": 1
+    }
+  ],
+  "observed_at": "2026-09-08T20:00:00+00:00",
+  "rollout_issues": 21,
+  "unauthorized_prerequisite_edges": 18
+}

@@ -2,13 +2,13 @@
 
 ![AtlasMemory Tools architecture](./docs/atlasmemory-tools-overview.svg)
 
-AtlasMemory Tools is the canonical planning, issue projection, GitHub Project, and local issue-to-PR automation toolkit used by AtlasMemory-style repos.
+AtlasMemory Tools is the canonical planning, issue projection, and local issue-to-PR automation toolkit used by AtlasMemory-style repos. It supports GitHub and an explicitly configured Azure Boards/Azure Repos lane.
 
 It owns four surfaces:
 
 - `skills/`: workflow contracts for situation modeling, agent harness evaluation, planning, review, implementation, continuous agent loops, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
 - `agents/`: reusable specialist role rubrics for planning, implementation, review, validation, data, infra, processing, and testing
-- `templates/local-automation-runtime/`: reusable local automation host for GitHub issue-to-PR execution
+- `templates/local-automation-runtime/`: reusable local automation host with separate GitHub and bounded Azure providers
 - `manifests/atlas-tools.v1.json`: supported harness adapters, canonical skills, agents, templates, and generated-copy inventory
 
 The repo also carries shared `scripts/`, `docs/`, `tests/`, `examples/`, and committed generated `.codex/` adapter files.
@@ -18,7 +18,7 @@ The repo also carries shared `scripts/`, `docs/`, `tests/`, `examples/`, and com
 - This repo is the source of truth for shared instructions, scripts, Project schema helpers, and runtime templates.
 - Generated harness files in downstream repos are install artifacts. Do not edit downstream `.codex/**`, `.claude/**`, `.gemini/**`, or generated `AGENTS.md` copies as policy.
 - An installed local automation runtime is operational state: local config, auth, logs, jobs, checkouts, locks, and validation artifacts.
-- GitHub issues and PRs are execution truth. GitHub Projects are the portfolio/automation signal layer. Markdown plans remain the authoring surface until projection.
+- Issues and PRs in the configured provider are execution truth. GitHub Projects provide the GitHub portfolio/automation signal layer; Azure Boards retains native revisions and dependencies. Markdown plans remain the authoring surface until projection.
 - Adding a target product repo usually means adding one line to a runtime `repos.txt`, not creating another runtime.
 
 The checked-in `.codex/skills` and `.codex/agents` directories are retained as generated adapter copies. Update `skills/` or `agents/`, then regenerate and verify.
@@ -70,15 +70,16 @@ The verifier also checks committed Codex harness freshness, adapter CLI generati
 
 ## Quick Start
 
-1. Use `plan` with a feature idea or existing plan file.
-2. Use `review` / planning review skills until planning gates pass.
-3. Use `github-project` when the work needs the standard execution Project board.
-4. Use `plan-to-issues` when approved work should become GitHub issues and Project items.
-5. Use `plan-to-html` when a markdown plan should be rendered into a standalone review artifact.
-6. Use `implement` for approved plan execution.
-7. Use `handoff` before pausing, resuming, or moving work between agents.
-8. Use `agent-harness-evals` to qualify a new or changed unattended or long-shift lane with a representative one-item canary.
-9. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for runtime lifecycle work.
+1. Use `grill-me` explicitly when the real design or scope is still in your head. It inspects available context, resolves material decisions, challenges unnecessary scope, and stops before writing or implementation.
+2. Use `plan` to formalize the approved decision record, or start directly with a feature idea or existing plan file.
+3. Use `review` / planning review skills until planning gates pass.
+4. Use `github-project` when the work needs the standard execution Project board.
+5. Use `plan-to-issues` when approved work should become GitHub issues and Project items.
+6. Use `plan-to-html` when a markdown plan should be rendered into a standalone review artifact.
+7. Use `build` / `implement` for approved plan execution.
+8. Use `handoff` before pausing, resuming, or moving work between agents.
+9. Use `agent-harness-evals` to qualify a new or changed unattended or long-shift lane with a representative one-item canary.
+10. Use `local-automation-runtime-setup`, `local-automation-runtime-operate`, and `local-automation-runtime-upgrade` for runtime lifecycle work.
 
 For full planning details, see `skills/plan/README.md`.
 
@@ -134,7 +135,25 @@ Keep these systems repo-first. Source skills, scripts, references, and runtime p
 
 ## Local Automation Runtime
 
-The runtime template now supports the full unattended loop:
+The Azure provider offers read-only inspection, one bounded local worker, separately authorized draft PR publication, and revision-safe Board reconciliation. It exposes effective planning, implementation, review, and repair model settings. The Website example retains `gpt-6-astra` / `max` and permits reads only; the campaign's missing dependency authorization keeps dispatch blocked. See [Azure runtime operations](docs/azure-devops-runtime.md) for the review slices, configuration, acceptance requirements, and next read-only pilot.
+
+The [Azure dispatcher and authority contract](docs/azure-dispatch-governance.md)
+adds explicit model routing, independent counterfactual challenge, human gates,
+bounded assessment budgets and signed operation grants from enrolled issuers.
+Points influence sizing; risk, evidence and policy determine the route. Models
+cannot grant authority. Default previews remain inert, and routing does not
+enable Website pipeline runs, approvals, merges or deployments.
+
+The [Azure supervisor](docs/azure-supervisor.md) connects fresh intake, a local
+review inbox and those bounded operations. It prepares missing decisions,
+deduplicates unchanged requests and resumes only with current evidence and
+verified grants. Its default preview is inert; explicit observation is read-only
+and its run mode retains each child's authority checks. Issuer enrollment and
+unattended operation remain separate setup and qualification steps.
+
+`scripts/runtime_control.py` requires an explicit provider and runtime location. It no longer installs or migrates a runtime implicitly. Previews do not dispatch child commands. Installation and live capabilities require separate authorization.
+
+The GitHub provider retains its existing unattended loop:
 
 ```text
 reconcile -> decompose -> workstream-review -> dependency-promote ->

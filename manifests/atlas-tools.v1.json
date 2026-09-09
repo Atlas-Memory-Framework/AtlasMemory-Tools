@@ -24,6 +24,10 @@
       "path": "skills/github-project"
     },
     {
+      "name": "grill-me",
+      "path": "skills/grill-me"
+    },
+    {
       "name": "handoff",
       "path": "skills/handoff"
     },
@@ -189,6 +193,9 @@
       "intent-model",
       "open-loop-ledger",
       "latent-intent"
+    ],
+    "implement": [
+      "build"
     ],
     "issue-spec": [
       "issue-spec-sidecar",

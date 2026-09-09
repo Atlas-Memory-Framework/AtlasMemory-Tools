@@ -45,6 +45,165 @@ class AtlasWorkItemProviderTests(unittest.TestCase):
     def read_items(self, path: Path) -> list[dict]:
         return json.loads(path.read_text(encoding="utf-8"))["work_items"]
 
+    def test_write_scope_directories_and_globs_conflict_conservatively(self) -> None:
+        overlap = self.work_items.write_scopes_overlap
+        for left, right in [
+            (["src"], ["src/a.py"]),
+            (["src/**/*.py"], ["src/nested/a.py"]),
+            (["src/a*.py"], ["src/abc.py"]),
+            (["../other"], ["docs"]),
+            (["**/a.py"], ["docs/a.py"]),
+        ]:
+            with self.subTest(left=left, right=right):
+                self.assertTrue(overlap(left, right))
+                self.assertTrue(overlap(right, left))
+        self.assertFalse(overlap(["src"], ["src2/a.py"]))
+        self.assertFalse(overlap(["src/a"], ["docs/b"]))
+
+    def test_azure_record_cannot_be_claimed_by_legacy_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = Path(tmp) / "work-items.json"
+            self.write_store(store_path, [{"id": "azdo:Instablinds:Instablinds:17", "status": "ready"}])
+            before = store_path.read_bytes()
+            provider = self.work_items.AtlasWorkItemOperationProvider(self.work_items.AtlasWorkItemStore(store_path))
+            operation = provider.operation_states()[0]
+            self.assertFalse(operation.ready)
+            self.assertIn("Azure records require the Azure worker and its authority gates", operation.blockers)
+            self.assertIsNone(provider.claim(operation))
+            self.assertEqual(before, store_path.read_bytes())
+
+    def test_azure_origin_detection_recognizes_https_and_ssh_authorities(self) -> None:
+        origins = [
+            "https://dev.azure.com/Instablinds/Instablinds/_git/Website",
+            "https://Instablinds@dev.azure.com/Instablinds/Instablinds/_git/Website",
+            "https://username:placeholder@dev.azure.com/Instablinds/Instablinds/_git/Website",
+            "https://DEV.AZURE.COM/Instablinds/Instablinds/_git/Website",
+            "https://dev.azure.com.:443/Instablinds/Instablinds/_git/Website",
+            "https://Instablinds.visualstudio.com/Instablinds/_git/Website",
+            "https://Instablinds.visualstudio.com:443/DefaultCollection/Instablinds/_git/Website",
+            "git@ssh.dev.azure.com:v3/Instablinds/Instablinds/Website",
+            "ssh.dev.azure.com:v3/Instablinds/Instablinds/Website",
+            "ssh://git@ssh.dev.azure.com/v3/Instablinds/Instablinds/Website",
+            "ssh://git@SSH.DEV.AZURE.COM:22/v3/Instablinds/Instablinds/Website",
+            "Instablinds@vs-ssh.visualstudio.com:v3/Instablinds/Instablinds/Website",
+            "ssh://Instablinds@vs-ssh.visualstudio.com:22/v3/Instablinds/Instablinds/Website",
+            # Classification excludes the legacy worker; it does not authorize
+            # an Azure endpoint. An unsupported transport/port stays excluded.
+            "http://dev.azure.com/Instablinds/Instablinds/_git/Website",
+            "https://dev.azure.com:8443/Instablinds/Instablinds/_git/Website",
+            "https://dev.azure.com:invalid/Instablinds/Instablinds/_git/Website",
+            "git://dev.azure.com/Instablinds/Instablinds/_git/Website",
+            "https://github.com@dev.azure.com/Instablinds/Instablinds/_git/Website",
+            "https://dev.azure.com/Instablinds/Instablinds/_git/Website?redirect=github.com#fragment",
+        ]
+        for origin in origins:
+            with self.subTest(origin=origin):
+                self.assertTrue(self.work_items.is_azure_operation("WI-1", {}, origin))
+
+    def test_azure_origin_detection_ignores_spoofed_hosts_and_embedded_references(self) -> None:
+        origins = [
+            "https://notdev.azure.com/org/repo",
+            "https://dev.azure.com.evil.example/org/repo",
+            "https://org.visualstudio.com.evil.example/org/repo",
+            "https://org.notvisualstudio.com/org/repo",
+            "https://dev.azure.com@github.com/org/repo",
+            "https://org.visualstudio.com@github.com/org/repo",
+            "https://github.com/org/dev.azure.com/repo",
+            "https://github.com/org/project.visualstudio.com/repo",
+            "https://github.com/org/dev.azure.com/",
+            "https://github.com/org/project.visualstudio.com/",
+            "https://github.com/org/repo?redirect=https://dev.azure.com/org/repo",
+            "https://github.com/org/repo#https://org.visualstudio.com/project/repo",
+            "git@github.com:org/dev.azure.com/repo",
+            "git@github.com:org/project.visualstudio.com/repo",
+            "ssh://git@github.com/dev.azure.com/org/repo",
+            "git@ssh.dev.azure.com.evil.example:v3/org/project/repo",
+            "Instablinds@vs-ssh.visualstudio.com.evil.example:v3/org/project/repo",
+            "dev.azure.com/org/project/repo",
+            "/tmp/dev.azure.com/org/project/repo",
+            "file:///tmp/org.visualstudio.com/project/repo",
+            "https://visualstudio.com/org/repo",
+            "https://org..visualstudio.com/org/repo",
+            "https://[dev.azure.com/org/repo",
+            "https://[::1/org.visualstudio.com/repo",
+            "https:///dev.azure.com/org/repo",
+            "",
+        ]
+        for origin in origins:
+            with self.subTest(origin=origin):
+                self.assertFalse(self.work_items.is_azure_operation("WI-1", {}, origin))
+
+    def test_explicit_azure_identity_is_preserved_regardless_of_origin(self) -> None:
+        for source_id, metadata in [
+            ("AZDO:Instablinds:Instablinds:17", {}),
+            ("azure:Instablinds/Instablinds:17", {"provider": "github"}),
+            ("WI-1", {"provider": "azure-devops"}),
+            ("WI-1", {"provider": "AZURE_DEVOPS"}),
+            ("WI-1", {"provider": "azure"}),
+        ]:
+            with self.subTest(source_id=source_id, metadata=metadata):
+                self.assertTrue(self.work_items.is_azure_operation(source_id, metadata, "https://github.com/org/repo"))
+        self.assertTrue(self.work_items.is_azure_operation("WI-1", {"provider": "github"}, "https://dev.azure.com/org/project/_git/repo"))
+
+    def test_azure_origins_block_legacy_projection_claims_and_worker_without_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_path = root / "work-items.json"
+            worker = self.work_items.LocalCommandOperationWorker([sys.executable, "-c", "pass"], jobs_dir=root / "jobs")
+            for origin in [
+                "https://dev.azure.com:443/Instablinds/Instablinds/_git/Website",
+                "git@ssh.dev.azure.com:v3/Instablinds/Instablinds/Website",
+                "Instablinds@vs-ssh.visualstudio.com:v3/Instablinds/Instablinds/Website",
+            ]:
+                with self.subTest(origin=origin):
+                    self.write_store(store_path, [{"id": "WI-1", "status": "ready", "scheduler": {"execution_repo": origin}}])
+                    before = store_path.read_bytes()
+                    provider = self.work_items.AtlasWorkItemOperationProvider(self.work_items.AtlasWorkItemStore(store_path))
+                    operation = provider.operation_states()[0]
+                    self.assertFalse(operation.ready)
+                    self.assertIsNone(provider.claim(operation))
+                    result = worker.run(operation, store_path)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(result.status, "failed")
+                    self.assertIn("Azure worker", result.summary)
+                    self.assertEqual(before, store_path.read_bytes())
+                    self.assertFalse(worker.jobs_dir.exists())
+
+    def test_github_repo_with_azure_text_remains_eligible_for_legacy_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store_path = Path(tmp) / "work-items.json"
+            self.write_store(store_path, [{"id": "WI-1", "status": "ready", "metadata": {"provider": "github"},
+                                          "scheduler": {"execution_repo": "https://github.com/org/dev.azure.com/"}}])
+            provider = self.work_items.AtlasWorkItemOperationProvider(self.work_items.AtlasWorkItemStore(store_path))
+            operation = provider.operation_states()[0]
+            self.assertTrue(operation.ready)
+            self.assertEqual(operation.blockers, [])
+            self.assertIsNotNone(provider.claim(operation))
+
+    def test_successful_exit_without_acceptance_evidence_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_path = root / "work-items.json"
+            self.write_store(store_path, [{"id": "WI-1", "status": "ready"}])
+            provider = self.work_items.AtlasWorkItemOperationProvider(self.work_items.AtlasWorkItemStore(store_path))
+            worker = self.work_items.LocalCommandOperationWorker([sys.executable, "-c", "pass"], jobs_dir=root / "jobs")
+            self.work_items.run_worker_daemon_once(provider, worker)
+            item = self.read_items(store_path)[0]
+            self.assertEqual(item["status"], "failed")
+            self.assertIn("acceptance", item["result"]["summary"])
+
+    def test_missing_executable_records_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_path = root / "work-items.json"
+            self.write_store(store_path, [{"id": "WI-1", "status": "ready"}])
+            provider = self.work_items.AtlasWorkItemOperationProvider(self.work_items.AtlasWorkItemStore(store_path))
+            worker = self.work_items.LocalCommandOperationWorker([str(root / "missing-command")], jobs_dir=root / "jobs")
+            self.work_items.run_worker_daemon_once(provider, worker)
+            item = self.read_items(store_path)[0]
+            self.assertEqual(item["status"], "failed")
+            self.assertNotEqual(item["result"]["returncode"], 0)
+
     def test_ready_work_item_projects_to_operation_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store_path = Path(tmp) / "work-items.json"
@@ -446,12 +605,12 @@ class AtlasWorkItemProviderTests(unittest.TestCase):
             item = self.read_items(store_path)[0]
 
         self.assertEqual(processed, 1)
-        self.assertEqual(item["status"], "done")
-        self.assertEqual(item["state"], "done")
+        self.assertEqual(item["status"], "failed")
+        self.assertEqual(item["state"], "failed")
         self.assertEqual(item["claim"]["claimed_by"], "test-worker")
         self.assertEqual([entry["type"] for entry in item["evidence"]], ["claim", "result"])
-        self.assertEqual(item["result"]["returncode"], 0)
-        self.assertEqual(item["result"]["status"], "done")
+        self.assertNotEqual(item["result"]["returncode"], 0)
+        self.assertEqual(item["result"]["status"], "failed")
 
     def test_requeue_stale_claims_previews_and_applies_with_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -550,7 +709,7 @@ class AtlasWorkItemProviderTests(unittest.TestCase):
             item = self.read_items(store_path)[0]
 
         self.assertEqual(processed, 1)
-        self.assertEqual(item["status"], "done")
+        self.assertEqual(item["status"], "failed")
         self.assertEqual(item["evidence"][0]["type"], "claim")
         self.assertEqual(item["evidence"][1]["type"], "result")
 

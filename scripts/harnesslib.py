@@ -74,7 +74,7 @@ def render_generated(relative_source: str, manifest_version: str) -> bytes:
         rendered = first + sep + generated_header(relative_source, manifest_version, checksum, "#") + rest
         return rendered.encode("utf-8")
 
-    if suffix in {".py", ".sh"} or source_path.name.startswith("atlas-agent"):
+    if suffix in {".py", ".sh", ".yaml", ".yml"} or source_path.name.startswith("atlas-agent"):
         return (generated_header(relative_source, manifest_version, checksum, "#") + text).encode("utf-8")
 
     if suffix == ".json":

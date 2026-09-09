@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "provider": "azure-devops",
+  "repository": {
+    "organization": "OWNER",
+    "project": "PROJECT",
+    "name": "REPOSITORY",
+    "url": "https://dev.azure.com/OWNER/PROJECT/_git/REPOSITORY",
+    "base_branch": "develop"
+  },
+  "capabilities": [
+    "read"
+  ],
+  "models": {
+    "planning": {
+      "model": "gpt-6-astra",
+      "reasoning": "max"
+    },
+    "implementation": {
+      "model": "gpt-6-astra",
+      "reasoning": "max"
+    },
+    "review": {
+      "model": "gpt-6-astra",
+      "reasoning": "max"
+    },
+    "repair": {
+      "model": "gpt-6-astra",
+      "reasoning": "max"
+    }
+  },
+  "sandbox": "workspace-write",
+  "approval_policy": "on-request"
+}
