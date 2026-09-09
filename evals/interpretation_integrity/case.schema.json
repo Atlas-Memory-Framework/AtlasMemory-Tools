@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.case.v0",
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["turn_id", "start", "end", "text"],
+      "properties": {
+        "turn_id": {"type": "string", "minLength": 1},
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 1},
+        "text": {"type": "string", "minLength": 1}
+      }
+    },
+    "transformation_kind": {
+      "type": "string",
+      "enum": ["actor_attribution_error", "polarity_inversion", "hypothetical_to_commitment", "quotation_to_commitment", "qualification_loss", "evidence_upgrade", "authority_expansion", "imported_frame_attribution", "correction_laundering", "safety_dismissal", "unsupported_modality_claim", "identity_collapse"]
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit_id", "source_locator", "proposition", "actor", "expression_act", "stance", "modality", "evidence_status", "qualification_kind", "qualification_locator", "frame_origin", "response_requirement", "severity"],
+      "properties": {
+        "unit_id": {"type": "string", "pattern": "^unit-[1-9][0-9]*$"},
+        "source_locator": {"$ref": "#/$defs/locator"},
+        "proposition": {"type": "string", "minLength": 1},
+        "actor": {"type": "string", "minLength": 1},
+        "expression_act": {"type": "string", "enum": ["assertion", "question", "request", "quotation", "counterfactual", "joke_hyperbole", "correction", "rejection", "uncertainty"]},
+        "stance": {"type": "string", "enum": ["endorsed", "rejected", "exploratory", "neutral", "uncertain", "requested"]},
+        "modality": {"type": "string", "enum": ["text", "audio", "video", "image", "structured_record", "tool_trace"]},
+        "evidence_status": {"type": "string", "enum": ["none", "self_report", "quoted_claim", "hypothesis", "observed", "corroborated", "agent_inference"]},
+        "qualification_kind": {"type": "string", "enum": ["none", "conditional", "epistemic", "degree", "temporal", "scope", "other"]},
+        "qualification_locator": {"oneOf": [{"$ref": "#/$defs/locator"}, {"type": "null"}]},
+        "frame_origin": {"type": "string", "enum": ["source_actor", "agent_added", "none"]},
+        "response_requirement": {"type": "string", "enum": ["must_address", "may_address", "must_not_attribute"]},
+        "severity": {"type": "string", "enum": ["minor", "major", "critical"]}
+      },
+      "allOf": [
+        {"if": {"properties": {"qualification_kind": {"const": "none"}}}, "then": {"properties": {"qualification_locator": {"type": "null"}}}},
+        {"if": {"properties": {"qualification_kind": {"not": {"const": "none"}}}}, "then": {"properties": {"qualification_locator": {"$ref": "#/$defs/locator"}}}}
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "case_id", "case_kind", "family", "modality", "synthetic_origin_class", "conversation", "target_turn_id", "expected_intervention", "clarification_posture", "semantic_units", "forbidden_transformations", "expected_advance", "utility_budget", "metamorphic_links"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.case.v0"},
+    "case_id": {"type": "string", "pattern": "^ii-[a-z0-9-]+$"},
+    "case_kind": {"type": "string", "enum": ["difficult", "counter_control"]},
+    "family": {"type": "string", "enum": ["actor_attribution", "quotation", "joke_hyperbole", "counterfactual", "correction_rejection", "qualification", "evidence_status", "agent_added_frame", "clear_request", "underdetermined", "safety", "deliberate_change"]},
+    "modality": {"const": "text"},
+    "synthetic_origin_class": {"type": "string", "enum": ["structurally_equivalent_synthetic", "fully_synthetic"]},
+    "conversation": {
+      "type": "array", "minItems": 1,
+      "items": {"type": "object", "additionalProperties": false, "required": ["turn_id", "actor", "role", "text"], "properties": {"turn_id": {"type": "string", "minLength": 1}, "actor": {"type": "string", "minLength": 1}, "role": {"type": "string", "enum": ["user", "assistant"]}, "text": {"type": "string", "minLength": 1}}}
+    },
+    "target_turn_id": {"type": "string", "minLength": 1},
+    "expected_intervention": {"type": "string", "enum": ["apply", "quiet", "proportionate"]},
+    "clarification_posture": {"type": "string", "enum": ["answer", "clarify", "answer_with_uncertainty"]},
+    "semantic_units": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/unit"}},
+    "forbidden_transformations": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["unit_id", "kind", "rationale"], "properties": {"unit_id": {"type": "string", "minLength": 1}, "kind": {"$ref": "#/$defs/transformation_kind"}, "rationale": {"type": "string", "minLength": 1}}}},
+    "expected_advance": {"type": "object", "additionalProperties": false, "required": ["kind", "description"], "properties": {"kind": {"type": "string", "enum": ["answer", "clarify", "acknowledge_and_answer", "safety_response"]}, "description": {"type": "string", "minLength": 1}}},
+    "utility_budget": {"type": "object", "additionalProperties": false, "required": ["max_words", "max_blocking_questions", "direct_completion"], "properties": {"max_words": {"type": "integer", "minimum": 1, "maximum": 600}, "max_blocking_questions": {"type": "integer", "minimum": 0}, "direct_completion": {"type": "string", "enum": ["required", "not_applicable"]}}},
+    "metamorphic_links": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["case_id", "relation"], "properties": {"case_id": {"type": "string", "minLength": 1}, "relation": {"type": "string", "enum": ["tone_only", "expression_act_pair", "polarity_pair"]}}}}
+  }
+}

@@ -180,6 +180,7 @@ See `templates/local-automation-runtime/README.md` and `templates/local-automati
 ## Documentation Map
 
 - `docs/source-of-truth.md`: canonical source and generated-copy workflow
+- `docs/interpretation-integrity-development.md`: development evaluation harness, private-source boundaries and qualification limits
 - `docs/automation-runtime-operational-layer.md`: operational model for runtime hosts and GitHub state
 - `docs/atlas-workflow-templates.md`: TeamTemplate/TeamRun model for structured agent-role workflows and rollup evidence
 - `docs/github-project-template-views.md`: standard Project fields and view expectations

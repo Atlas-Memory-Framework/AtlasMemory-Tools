@@ -1,0 +1,1977 @@
+{
+  "authority_effect": "none",
+  "max_outputs_per_batch": 8,
+  "reviewer_batches": [
+    {
+      "batch_id": "reviewer-a-batch-01",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "0ae00008b968d0c3",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "438037f538efa1da",
+          "case_id": "ii-quotation-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "d0fb31e216653f60",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "a9d183aef28171ce",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "c0c2e543658f9b46",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "5939999b478ffdcd",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "14a1fc6b5abd6e1f",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "9f3a696e7ba1d392",
+          "case_id": "ii-safety-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-02",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "e715dc86e8be96d5",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "13c86708c9cd1b09",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "e40e6506a119d33c",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "7b841e45124dbb73",
+          "case_id": "ii-qualification-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "77991d947c7cd780",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "96add8e4600dd864",
+          "case_id": "ii-clear-request-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "bf3074a28c8bc3c2",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "ec579d4cac7321f7",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-03",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "5d7178367ff4ba8c",
+          "case_id": "ii-quotation-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "53ef0a08f183ac5a",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "372d2e03bbf262f4",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "3b4620706105d7ba",
+          "case_id": "ii-qualification-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "387751e64ee198b9",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "c6413329f65a703e",
+          "case_id": "ii-clear-request-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "71a2cdd58a407f15",
+          "case_id": "ii-safety-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "821f95b9fe4742ba",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-04",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "7e43457e5969e31f",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "fcf32a9a57964698",
+          "case_id": "ii-quotation-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "d62bd04de83474f5",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "40568e7e1deb1147",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "3ca8c57f51bb53d8",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "fb5bb442c4db6fcb",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a98fbd505cb44eb3",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a95daf642ae997a1",
+          "case_id": "ii-safety-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-05",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "36353a58205226a2",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "619182fc70233016",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "e15fe973365e8c19",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "6b96554d34f1d34c",
+          "case_id": "ii-qualification-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "6c059844c48b4f90",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "dabb3496602ef7f2",
+          "case_id": "ii-clear-request-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "d249e4644afb4ab3",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "29ee8b3293c821ab",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-06",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "0258e953fa34fda9",
+          "case_id": "ii-quotation-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "ee317fd96184ff19",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "131e73683bfac858",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "ec64b8ef49c2bcc1",
+          "case_id": "ii-qualification-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "6a855f4635158003",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "fb993e3491f38f2e",
+          "case_id": "ii-clear-request-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "bcbff90c39804b6b",
+          "case_id": "ii-safety-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "571a9b059091787c",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-07",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "6ee094f1efca1841",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "4bb00c5583cd97b6",
+          "case_id": "ii-quotation-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "374e34ed861f164e",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "a1658ab5e740fed0",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "8f7da33ffd277c2f",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "424bd51d6bcae1cf",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "b79a960fc5035093",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "67c7d5f89d737857",
+          "case_id": "ii-safety-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-08",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "db9c059abbd43f4b",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "9915f15098b4b32b",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "b66a735846ec193c",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "dd046f76e3728f0a",
+          "case_id": "ii-qualification-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "b072ecca7a7386d8",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "9f2dfeb2a2374663",
+          "case_id": "ii-clear-request-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "3af8451713d56cbb",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "eafa71c351230905",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-09",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "8cb7bb6b9d977d16",
+          "case_id": "ii-quotation-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "d9185a8735a8d0e3",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "9197f2e30c758880",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "cbd017c9d9a43d19",
+          "case_id": "ii-qualification-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "ab009fea8166b0e3",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "9801b003c194441b",
+          "case_id": "ii-clear-request-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "006cca0ba91dfe7c",
+          "case_id": "ii-safety-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "3b54e244a55b4106",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-10",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "2d6229473916706b",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "09cfea95bde0a964",
+          "case_id": "ii-quotation-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "dc8eee79d692e3b5",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "69a7083628e51e28",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "82206f6377688b78",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a371f5fea256299d",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "1e80770d77b51c37",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "d481268e84c780a6",
+          "case_id": "ii-safety-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-11",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "51351662fb49adb4",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "d17cbe3b3dd1d593",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "e7c42b7056575d49",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a8cdd3f2f9913f9f",
+          "case_id": "ii-qualification-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "95b53bd130ca3bf2",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "d627a242519b1c3b",
+          "case_id": "ii-clear-request-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "f5d301a146af7ad7",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "71155050244a438a",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-a-batch-12",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "424f7de7d0c637b2",
+          "case_id": "ii-quotation-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "65f3b9eca693e3a8",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "630a99e5a5c291c1",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "b0b5ed69d135836d",
+          "case_id": "ii-qualification-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "5a4200761f0bd43f",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "1bb9256eab4c0692",
+          "case_id": "ii-clear-request-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "51a6d453a72d9293",
+          "case_id": "ii-safety-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a2691a01022c961c",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-a"
+    },
+    {
+      "batch_id": "reviewer-b-batch-01",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "3a8ec1bfcdb71a8e",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "a64460c531b76436",
+          "case_id": "ii-quotation-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "d9316bf794a50992",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "7e468cb275152075",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "15ce89d345c82a22",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "715e448751f1e103",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "aab76122349a5bc1",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "6a9dc233e9101109",
+          "case_id": "ii-safety-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-02",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "ec35b59ad3fcc3b5",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "deb173da7e06182f",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "08f8d32d066853e9",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "3dea1e9e45db5229",
+          "case_id": "ii-qualification-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "8ad6ecae5827a282",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "1de233a080d0c5c0",
+          "case_id": "ii-clear-request-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "b0ffa0b1039e8183",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "77c3097e84247a2b",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-03",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "13a1644e441a59c6",
+          "case_id": "ii-quotation-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "00bc2873bcc9addb",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "f2a02eecdc80de43",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "b6131ad58a9c1f87",
+          "case_id": "ii-qualification-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "4ba28ca22531fa5a",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "bcf1f93d1ac327a1",
+          "case_id": "ii-clear-request-2",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "80d3d6160fe14c49",
+          "case_id": "ii-safety-1",
+          "repetition": 1
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "392e0b8c124e1cba",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-04",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "cd535d88b91519c3",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "e89600f909c792d8",
+          "case_id": "ii-quotation-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "fa8486edca8cf01c",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "91e08e4abf2c27cb",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "0e92618317097c6c",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "3bf06a8151eaac52",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a7b37d68c4006993",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "666743eb8cf85072",
+          "case_id": "ii-safety-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-05",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "dce23b63bdf92afb",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "acfb3eef432ab27d",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "c0920ad6af0559bf",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "99c78aae402295c4",
+          "case_id": "ii-qualification-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "2eaf17d0eb116bbe",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "dd8c459fbe03e322",
+          "case_id": "ii-clear-request-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "10f9a0c3c4379b52",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "4a4873848a732653",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-06",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a4bad23e1acbab9d",
+          "case_id": "ii-quotation-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "83c61391b97f237b",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "787f16bb33ec8644",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "bc84ed4bc2d5bbc9",
+          "case_id": "ii-qualification-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "16f290ba12ece90c",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "ddcec99da6e2e5af",
+          "case_id": "ii-clear-request-2",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "9c1933e9c7861d13",
+          "case_id": "ii-safety-1",
+          "repetition": 1
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "e32bb4e2bd402d11",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 1
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-07",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "af81105f1eae23a1",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "ec3a1df8a3ce04e5",
+          "case_id": "ii-quotation-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "3fb0852954cd7fce",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "25f7099b4b3a27a4",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "0a6dddefb45eadf4",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "dd37df156afaf4ce",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "29aca8d06fb79ad9",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "2a0e724f63e32e25",
+          "case_id": "ii-safety-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-08",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "5c8e1715feca3615",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "1f5e924f9e08a762",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "5eec6329ff76ff0f",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "da991745d1c3c2fa",
+          "case_id": "ii-qualification-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "e908f301b872f3a0",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "f5db6426c2c81cd5",
+          "case_id": "ii-clear-request-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "2c03c2b98d5002ff",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "374174048c519739",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-09",
+      "items": [
+        {
+          "arm": "baseline",
+          "blind_alias": "5092f220fce9ae79",
+          "case_id": "ii-quotation-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "7126c251fde05329",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "d884df566cb42510",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "8f62288129ca0b62",
+          "case_id": "ii-qualification-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "3a3e882c493224b8",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "c1bc194ff3ebcbb1",
+          "case_id": "ii-clear-request-2",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "f5f649841f648e29",
+          "case_id": "ii-safety-1",
+          "repetition": 2
+        },
+        {
+          "arm": "baseline",
+          "blind_alias": "db73b182ba059abc",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-10",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "ef0ef1f795b8a10d",
+          "case_id": "ii-actor-attribution-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "4f55bb904b98376f",
+          "case_id": "ii-quotation-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "7ac54dedfe59b9b4",
+          "case_id": "ii-counterfactual-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "5e4e3173f3d53034",
+          "case_id": "ii-correction-rejection-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "b0b831b6a936fc80",
+          "case_id": "ii-evidence-status-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "f65d8a4ca513c39b",
+          "case_id": "ii-agent-added-frame-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "0727fe3f80624960",
+          "case_id": "ii-underdetermined-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "db9f8bd7f8d97bae",
+          "case_id": "ii-safety-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-11",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "92e89026f461d8c9",
+          "case_id": "ii-actor-attribution-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "8cdd67caf6773d17",
+          "case_id": "ii-joke-hyperbole-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "1bdf940993c7c5b9",
+          "case_id": "ii-counterfactual-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "b35cff810eeb5827",
+          "case_id": "ii-qualification-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "2c05f90c5b34e599",
+          "case_id": "ii-evidence-status-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "37ef69565b92f080",
+          "case_id": "ii-clear-request-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a8ec8c13d61e377a",
+          "case_id": "ii-underdetermined-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "97c1f899ee1314e4",
+          "case_id": "ii-deliberate-change-1",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    },
+    {
+      "batch_id": "reviewer-b-batch-12",
+      "items": [
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "28a1053f3f5665af",
+          "case_id": "ii-quotation-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a19f5008c90d8c43",
+          "case_id": "ii-joke-hyperbole-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "ee5251f3619d5659",
+          "case_id": "ii-correction-rejection-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "e36484d1c9abf3f2",
+          "case_id": "ii-qualification-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "949aadcff76e87fe",
+          "case_id": "ii-agent-added-frame-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "0fbecea44253a462",
+          "case_id": "ii-clear-request-2",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "a3e0abc0dce8e33e",
+          "case_id": "ii-safety-1",
+          "repetition": 2
+        },
+        {
+          "arm": "compact-invariant",
+          "blind_alias": "1b2a0dfff3bd358a",
+          "case_id": "ii-deliberate-change-2",
+          "repetition": 2
+        }
+      ],
+      "reviewer_alias": "reviewer-b"
+    }
+  ],
+  "schema_version": "interpretation-integrity.grader-batches.v0",
+  "seed": 20260801,
+  "worker_schedule": [
+    {
+      "arm": "baseline",
+      "case_id": "ii-actor-attribution-1",
+      "position": 1,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-actor-attribution-1",
+      "position": 2,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-actor-attribution-1",
+      "position": 3,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-actor-attribution-1",
+      "position": 4,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-actor-attribution-2",
+      "position": 5,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-actor-attribution-2",
+      "position": 6,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-actor-attribution-2",
+      "position": 7,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-actor-attribution-2",
+      "position": 8,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-quotation-1",
+      "position": 9,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-quotation-1",
+      "position": 10,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-quotation-1",
+      "position": 11,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-quotation-1",
+      "position": 12,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-quotation-2",
+      "position": 13,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-quotation-2",
+      "position": 14,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-quotation-2",
+      "position": 15,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-quotation-2",
+      "position": 16,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-joke-hyperbole-1",
+      "position": 17,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-joke-hyperbole-1",
+      "position": 18,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-joke-hyperbole-1",
+      "position": 19,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-joke-hyperbole-1",
+      "position": 20,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-joke-hyperbole-2",
+      "position": 21,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-joke-hyperbole-2",
+      "position": 22,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-joke-hyperbole-2",
+      "position": 23,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-joke-hyperbole-2",
+      "position": 24,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-counterfactual-1",
+      "position": 25,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-counterfactual-1",
+      "position": 26,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-counterfactual-1",
+      "position": 27,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-counterfactual-1",
+      "position": 28,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-counterfactual-2",
+      "position": 29,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-counterfactual-2",
+      "position": 30,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-counterfactual-2",
+      "position": 31,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-counterfactual-2",
+      "position": 32,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-correction-rejection-1",
+      "position": 33,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-correction-rejection-1",
+      "position": 34,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-correction-rejection-1",
+      "position": 35,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-correction-rejection-1",
+      "position": 36,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-correction-rejection-2",
+      "position": 37,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-correction-rejection-2",
+      "position": 38,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-correction-rejection-2",
+      "position": 39,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-correction-rejection-2",
+      "position": 40,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-qualification-1",
+      "position": 41,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-qualification-1",
+      "position": 42,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-qualification-1",
+      "position": 43,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-qualification-1",
+      "position": 44,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-qualification-2",
+      "position": 45,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-qualification-2",
+      "position": 46,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-qualification-2",
+      "position": 47,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-qualification-2",
+      "position": 48,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-evidence-status-1",
+      "position": 49,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-evidence-status-1",
+      "position": 50,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-evidence-status-1",
+      "position": 51,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-evidence-status-1",
+      "position": 52,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-evidence-status-2",
+      "position": 53,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-evidence-status-2",
+      "position": 54,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-evidence-status-2",
+      "position": 55,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-evidence-status-2",
+      "position": 56,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-agent-added-frame-1",
+      "position": 57,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-agent-added-frame-1",
+      "position": 58,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-agent-added-frame-1",
+      "position": 59,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-agent-added-frame-1",
+      "position": 60,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-agent-added-frame-2",
+      "position": 61,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-agent-added-frame-2",
+      "position": 62,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-agent-added-frame-2",
+      "position": 63,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-agent-added-frame-2",
+      "position": 64,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-clear-request-1",
+      "position": 65,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-clear-request-1",
+      "position": 66,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-clear-request-1",
+      "position": 67,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-clear-request-1",
+      "position": 68,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-clear-request-2",
+      "position": 69,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-clear-request-2",
+      "position": 70,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-clear-request-2",
+      "position": 71,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-clear-request-2",
+      "position": 72,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-underdetermined-1",
+      "position": 73,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-underdetermined-1",
+      "position": 74,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-underdetermined-1",
+      "position": 75,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-underdetermined-1",
+      "position": 76,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-underdetermined-2",
+      "position": 77,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-underdetermined-2",
+      "position": 78,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-underdetermined-2",
+      "position": 79,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-underdetermined-2",
+      "position": 80,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-safety-1",
+      "position": 81,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-safety-1",
+      "position": 82,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-safety-1",
+      "position": 83,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-safety-1",
+      "position": 84,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-safety-2",
+      "position": 85,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-safety-2",
+      "position": 86,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-safety-2",
+      "position": 87,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-safety-2",
+      "position": 88,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-deliberate-change-1",
+      "position": 89,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-deliberate-change-1",
+      "position": 90,
+      "repetition": 1
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-deliberate-change-1",
+      "position": 91,
+      "repetition": 2
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-deliberate-change-1",
+      "position": 92,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-deliberate-change-2",
+      "position": 93,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-deliberate-change-2",
+      "position": 94,
+      "repetition": 1
+    },
+    {
+      "arm": "baseline",
+      "case_id": "ii-deliberate-change-2",
+      "position": 95,
+      "repetition": 2
+    },
+    {
+      "arm": "compact-invariant",
+      "case_id": "ii-deliberate-change-2",
+      "position": 96,
+      "repetition": 2
+    }
+  ],
+  "artifact_hashes": {
+    "corpus": "sha256:82ffd93e9386732762c729cf680b3251ff1b98e084540df8ddd3477164fa834f",
+    "gold": "sha256:10aaa37ec4d12d1f818bd2391183c0cd7080533eca51db2a84b0b202b04436e2",
+    "rubric": "sha256:6b2e48a899531d950e792cc6cd85b5f1d040ea0ad93898a1866330f4a53308dd",
+    "grader_prompt": "sha256:a2d47bf922b2bc4bac695732dc068aafa3c1efaea385565dd2d662ad8c03303a",
+    "dimension_manifest": "sha256:d016395d75a7eacaee9828ec2b19dbb69f25d35cf096d93ae6791c1a99cae071"
+  },
+  "max_adjudicator_batches": 3,
+  "max_adjudicated_outputs": 24,
+  "gold_batches": [
+    {
+      "batch_id": "gold-reviewer-a-01",
+      "reviewer_alias": "reviewer-a",
+      "gold_ids": [
+        "gold-001",
+        "gold-002",
+        "gold-003",
+        "gold-009",
+        "gold-010",
+        "gold-011",
+        "gold-017",
+        "gold-018"
+      ]
+    },
+    {
+      "batch_id": "gold-reviewer-a-02",
+      "reviewer_alias": "reviewer-a",
+      "gold_ids": [
+        "gold-004",
+        "gold-005",
+        "gold-006",
+        "gold-012",
+        "gold-013",
+        "gold-019",
+        "gold-020",
+        "gold-021"
+      ]
+    },
+    {
+      "batch_id": "gold-reviewer-a-03",
+      "reviewer_alias": "reviewer-a",
+      "gold_ids": [
+        "gold-007",
+        "gold-008",
+        "gold-014",
+        "gold-015",
+        "gold-016",
+        "gold-022",
+        "gold-023",
+        "gold-024"
+      ]
+    },
+    {
+      "batch_id": "gold-reviewer-b-01",
+      "reviewer_alias": "reviewer-b",
+      "gold_ids": [
+        "gold-016",
+        "gold-007",
+        "gold-023",
+        "gold-014",
+        "gold-008",
+        "gold-022",
+        "gold-015",
+        "gold-024"
+      ]
+    },
+    {
+      "batch_id": "gold-reviewer-b-02",
+      "reviewer_alias": "reviewer-b",
+      "gold_ids": [
+        "gold-020",
+        "gold-005",
+        "gold-012",
+        "gold-019",
+        "gold-006",
+        "gold-013",
+        "gold-004",
+        "gold-021"
+      ]
+    },
+    {
+      "batch_id": "gold-reviewer-b-03",
+      "reviewer_alias": "reviewer-b",
+      "gold_ids": [
+        "gold-010",
+        "gold-018",
+        "gold-002",
+        "gold-009",
+        "gold-017",
+        "gold-003",
+        "gold-011",
+        "gold-001"
+      ]
+    }
+  ]
+}
