@@ -6,12 +6,14 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 
 READY_STATES = {"ready", "queued"}
@@ -150,13 +152,39 @@ def write_scopes_overlap(left: list[str], right: list[str]) -> bool:
     return False
 
 
+def _has_azure_repository_origin(execution_repo: str) -> bool:
+    """Recognize the remote authority, never Azure text inside another URL.
+
+    This is a legacy-worker exclusion gate, not endpoint authorization. Known
+    Azure hosts remain excluded even with unsupported schemes, ports or userinfo;
+    the Azure worker separately validates its permitted transport and target.
+    """
+    try:
+        parsed = urlsplit(execution_repo)
+        if not parsed.netloc:
+            # Git's SCP-style SSH form has no URI authority. A slash before
+            # the colon instead identifies a local path, so it cannot match.
+            scp = re.fullmatch(r"((?:[^/@:\s]+@)?[^/@:\s]+):(.+)", execution_repo)
+            if scp is None:
+                return False
+            parsed = urlsplit("ssh://" + scp.group(1) + "/" + scp.group(2))
+        host = (parsed.hostname or "").lower().removesuffix(".")
+    except ValueError:
+        return False
+    labels = host.split(".")
+    return host in {"dev.azure.com", "ssh.dev.azure.com"} or (
+        len(labels) > 2
+        and labels[-2:] == ["visualstudio", "com"]
+        and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels[:-2])
+    )
+
+
 def is_azure_operation(source_id: str, metadata: dict[str, Any], execution_repo: str = "") -> bool:
     provider = str(metadata.get("provider", "")).lower().replace("_", "-")
     return (
         source_id.lower().startswith(("azdo:", "azure:"))
         or provider in {"azure-devops", "azure"}
-        or "dev.azure.com/" in execution_repo.lower()
-        or ".visualstudio.com/" in execution_repo.lower()
+        or _has_azure_repository_origin(execution_repo)
     )
 
 
