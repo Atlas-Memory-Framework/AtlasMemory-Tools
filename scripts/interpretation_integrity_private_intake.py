@@ -672,7 +672,7 @@ def validate_exact_files(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = integrity.PrivateArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate")
     validate.add_argument("--source-file", required=True)
@@ -684,8 +684,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
     try:
+        args = build_parser().parse_args(argv)
         receipt = validate_exact_files(
             Path(args.source_file), Path(args.selection_file), Path(args.run_receipt), args.receipt_name,
             source_root=Path(args.source_root),

@@ -885,3 +885,66 @@ def test_private_reconstruction_cli_and_api_errors_never_echo_private_input(tmp_
     assert captured.err.strip() == "interpretation-integrity private operation rejected"
     assert marker not in captured.err and str(source) not in captured.err
     assert not (root / "raw/reconstruction-packet.json").exists()
+
+
+@pytest.mark.parametrize("command", ["intake", "prepare", "review"])
+@pytest.mark.parametrize("malformation", ["unknown_option", "missing_value", "unknown_command"])
+def test_private_cli_parse_errors_are_content_free_before_file_open(monkeypatch, capsys, command, malformation):
+    marker = "synthetic-private-diagnostic-marker"
+    if command == "intake":
+        module = intake
+        arguments = ["validate", "--source-file", marker, "--source-root", marker,
+                     "--selection-file", marker, "--run-receipt", marker, "--receipt-name", marker]
+        expected = "interpretation-integrity private intake rejected"
+    elif command == "prepare":
+        module = ev
+        arguments = ["prepare-private-reconstruction", "--source", marker, "--source-root", marker,
+                     "--selection", marker, "--derivation-manifest", marker, "--assignment", marker,
+                     "--run-receipt", marker, "--output-name", marker]
+        expected = "interpretation-integrity private operation rejected"
+    else:
+        module = ev
+        arguments = ["validate-private-reconstruction", "--run-receipt", marker, "--packet-name", marker,
+                     "--assignment-name", marker, "--review-name", marker, "--packet-schema", marker,
+                     "--assignment-schema", marker, "--review-schema", marker, "--receipt", marker]
+        expected = "interpretation-integrity private operation rejected"
+    if malformation == "unknown_option":
+        arguments.extend(["--unexpected", marker])
+    elif malformation == "missing_value":
+        arguments.append(arguments[1])
+    else:
+        arguments[0] = marker
+    monkeypatch.setattr(os, "open", lambda *_a, **_k: pytest.fail("malformed private argv must not open files"))
+    assert module.main(arguments) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.strip() == expected
+    assert marker not in captured.err
+
+
+def test_private_cli_choice_errors_do_not_echo_supplied_value(monkeypatch, capsys):
+    marker = "synthetic-private-choice-marker"
+    monkeypatch.setattr(os, "open", lambda *_a, **_k: pytest.fail("malformed private argv must not open files"))
+    assert ev.main(["cleanup", "--run-receipt", marker, "--stage-id", marker, "--mode", marker,
+                    "--policy", marker, "--receipt-name", marker]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.strip() == "interpretation-integrity private operation rejected"
+    assert marker not in captured.err
+
+
+@pytest.mark.parametrize("module,command", [(intake, "validate"), (ev, "prepare-private-reconstruction")])
+def test_private_cli_help_is_available_without_opening_files(monkeypatch, capsys, module, command):
+    monkeypatch.setattr(os, "open", lambda *_a, **_k: pytest.fail("help must not open private files"))
+    with pytest.raises(SystemExit) as exited:
+        module.main([command, "--help"])
+    captured = capsys.readouterr()
+    assert exited.value.code == 0 and "--source-root" in captured.out and captured.err == ""
+
+
+def test_public_cli_keeps_detailed_argument_errors(monkeypatch, capsys):
+    marker = "synthetic-public-argument-marker"
+    monkeypatch.setattr(os, "open", lambda *_a, **_k: pytest.fail("malformed public argv must not open files"))
+    with pytest.raises(SystemExit) as exited:
+        ev.main(["validate-harness-delta", "--harness", "synthetic", "--target", "synthetic",
+                 "--allow-prefix", "synthetic", "--unexpected", marker])
+    captured = capsys.readouterr()
+    assert exited.value.code == 2 and marker in captured.err and "unrecognized arguments" in captured.err

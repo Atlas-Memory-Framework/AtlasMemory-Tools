@@ -4192,8 +4192,25 @@ def trial_lock_at(directory: HeldPrivateDirectory, name: str) -> Iterator[None]:
         os.close(descriptor)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+class PrivateArgumentParser(argparse.ArgumentParser):
+    """Reject malformed private argv without argparse echoing its values."""
+
+    def error(self, _message: str) -> None:
+        raise IntegrityError("private command arguments rejected") from None
+
+
+# Opt in only known public commands to detailed argument diagnostics. New or
+# malformed command names stay content-free until explicitly classified.
+PUBLIC_CLI_COMMANDS = frozenset({
+    "validate-contract", "validate-fixtures", "validate-fixture-label-review",
+    "validate-gold-label-review", "e2-admission", "disposition", "validate-skill",
+    "validate-harness-delta", "validate-owned-diff",
+})
+
+
+def build_parser(*, private_errors: bool = False) -> argparse.ArgumentParser:
+    parser_type = PrivateArgumentParser if private_errors else argparse.ArgumentParser
+    parser = parser_type(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     contract = commands.add_parser("validate-contract")
     for flag in ("schema", "contract", "case-schema", "cases", "annotation-rubric", "annotation-packet", "fixture-review", "reconstruction-receipt", "e3-cases", "gold", "gold-review", "batch-manifest", "receipt"):
@@ -4298,8 +4315,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    private_command = not arguments or arguments[0] not in PUBLIC_CLI_COMMANDS
+    args = None
     try:
+        args = build_parser(private_errors=private_command).parse_args(arguments)
         if args.command == "validate-contract":
             receipt = validate_contract(args)
             print(json.dumps(receipt, sort_keys=True))
@@ -4451,7 +4471,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             write_json_atomic(Path(args.receipt), receipt); print(json.dumps(receipt, sort_keys=True))
         return 0
     except (IntegrityError, OSError, ValueError, TypeError, KeyError, IndexError) as exc:
-        if hasattr(args, "run_receipt") or args.command == "init-private-run":
+        if private_command or (args is not None and (hasattr(args, "run_receipt") or args.command == "init-private-run")):
             print("interpretation-integrity private operation rejected", file=sys.stderr)
         elif isinstance(exc, IntegrityError):
             print(f"interpretation-integrity error: {exc}", file=sys.stderr)
