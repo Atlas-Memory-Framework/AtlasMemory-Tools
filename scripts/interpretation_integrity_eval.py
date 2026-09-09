@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import functools
 import hashlib
 import json
 import math
@@ -3437,140 +3438,208 @@ def deterministic_reconstruction_screen(
     }
 
 
+def _private_error_boundary(function):
+    """Private input diagnostics must not escape through API or CLI errors."""
+    @functools.wraps(function)
+    def guarded(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (IntegrityError, OSError, ValueError, TypeError, KeyError, IndexError):
+            raise IntegrityError("private reconstruction rejected") from None
+    return guarded
+
+
+def _canonical_private_schema(filename: str, supplied: Path | None = None) -> Path:
+    allowed = {
+        "private_crosswalk.schema.json", "private_derivation_manifest.schema.json",
+        "private_review_assignment.schema.json", "private_reconstruction_packet.schema.json",
+        "private_reconstruction_review.schema.json",
+    }
+    if filename not in allowed:
+        raise IntegrityError("private reconstruction schema rejected")
+    canonical = ROOT / "evals/interpretation_integrity" / filename
+    # Compare the lexical path without opening or resolving caller-controlled
+    # schema paths. Relative canonical CLI paths remain supported.
+    if supplied is not None and (".." in supplied.parts or Path(os.path.abspath(supplied)) != canonical):
+        raise IntegrityError("private reconstruction requires canonical schemas")
+    return canonical
+
+
+def _validate_private_document(document: Any, filename: str) -> None:
+    try:
+        validate_document(document, _canonical_private_schema(filename))
+    except (IntegrityError, OSError, ValueError, TypeError, KeyError, IndexError):
+        raise IntegrityError("private reconstruction document rejected") from None
+
+
+_RECONSTRUCTION_LEAKAGE_CHECKS = frozenset({
+    "verbatim_near_verbatim", "unique_names_entities", "distinctive_numbers_dates",
+    "distinctive_analogy_narrative",
+})
+_RECONSTRUCTION_SCREEN_FLAGS = frozenset({
+    "exact_overlap_flags", "normalized_overlap_flags", "distinctive_name_flags",
+    "distinctive_number_date_flags", "analogy_narrative_flags", "mosaic_flags",
+})
+
+
+def _validate_private_pass_checks(packet: Mapping[str, Any], review: Mapping[str, Any]) -> None:
+    screen = packet.get("deterministic_screen")
+    leakage = review.get("leakage_checks")
+    if (
+        packet.get("source_content_persisted") is not False
+        or type(screen) is not dict
+        or set(screen) != _RECONSTRUCTION_SCREEN_FLAGS | {"screen_version"}
+        or any(type(screen[key]) is not int or screen[key] != 0 for key in _RECONSTRUCTION_SCREEN_FLAGS)
+        or type(leakage) is not dict or set(leakage) != _RECONSTRUCTION_LEAKAGE_CHECKS
+        or any(leakage[key] != "pass" for key in _RECONSTRUCTION_LEAKAGE_CHECKS)
+        or review.get("complete_coverage") is not True
+    ):
+        raise IntegrityError("private reconstruction required checks rejected")
+
+
+@_private_error_boundary
 def prepare_private_reconstruction(
     source: Path, selection: Path, derivation_manifest: Path, assignment: Path,
-    run_receipt: Path, output_name: str,
+    run_receipt: Path, output_name: str, *, source_root: Path,
 ) -> Mapping[str, Any]:
-    # Descriptor-bound reads reuse intake without discovering or persisting source text.
-    import interpretation_integrity_private_intake as intake
-    with PrivateRunAuthority(run_receipt) as authority:
-        raw = authority.directory("raw")
-        expected = {
-            selection: authority.root_path / "raw/selection.json",
-            derivation_manifest: authority.root_path / "raw/derivation-manifest.json",
-            assignment: authority.root_path / "raw/reconstruction-assignment.json",
+    with contextlib.ExitStack() as resources:
+        # Descriptor-bound reads reuse intake without discovering or persisting source text.
+        import interpretation_integrity_private_intake as intake
+        intake.source_location(source, source_root)
+        with PrivateRunAuthority(run_receipt) as authority:
+            raw = authority.directory("raw")
+            resources.callback(raw.close)
+            expected = {
+                selection: authority.root_path / "raw/selection.json",
+                derivation_manifest: authority.root_path / "raw/derivation-manifest.json",
+                assignment: authority.root_path / "raw/reconstruction-assignment.json",
+            }
+            if any(not path.is_absolute() or path != expected[path] for path in expected):
+                raw.close()
+                raise IntegrityError("private reconstruction inputs must be exact receipt-derived originals")
+            held_source = intake.HeldSource(source, source_root=source_root)
+            resources.callback(held_source.close)
+            held_selection = intake.HeldFile(selection, exact_mode=0o600, parent_fd=raw.fd, leaf_name="selection.json")
+            resources.callback(held_selection.close)
+            held_manifest = intake.HeldFile(derivation_manifest, exact_mode=0o600, parent_fd=raw.fd, leaf_name="derivation-manifest.json")
+            resources.callback(held_manifest.close)
+            held_assignment = intake.HeldFile(assignment, exact_mode=0o600, parent_fd=raw.fd, leaf_name="reconstruction-assignment.json")
+            resources.callback(held_assignment.close)
+            held_crosswalk = intake.HeldFile(authority.root_path / "raw/source-crosswalk.json", exact_mode=0o600, parent_fd=raw.fd, leaf_name="source-crosswalk.json")
+            resources.callback(held_crosswalk.close)
+            try:
+                source_data, selection_data = held_source.read_initial(), held_selection.read_initial()
+                manifest_data, assignment_data, crosswalk_data = held_manifest.read_initial(), held_assignment.read_initial(), held_crosswalk.read_initial()
+                manifest = json.loads(manifest_data.decode("utf-8", "strict"), object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
+                assignment_doc = json.loads(assignment_data.decode("utf-8", "strict"), object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
+                crosswalk_doc = json.loads(crosswalk_data.decode("utf-8", "strict"), object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
+                prefix = intake.stable_complete_prefix(source_data)
+                records = intake.parse_jsonl(prefix)
+                selection_doc = intake._load_selection(selection_data)
+                admitted, _, _ = intake.validate_records(records, selection_doc, prefix=prefix)
+                selected_keys = {tuple(item["identity"]) for item in admitted}
+                selected_text: dict[tuple[str, str, str], str] = {}
+                root_session_id = records[0]["payload"]["id"]
+                for index, record in enumerate(records[1:], 1):
+                    if record.get("type") == "event_msg" and isinstance(record.get("payload"), dict) and record["payload"].get("type") == "user_message":
+                        turn_id, message_id, _, envelope = intake._validate_pair(records[index - 1], record)
+                        key = (root_session_id, turn_id, message_id)
+                        if key in selected_keys:
+                            selected_text[key] = envelope["event_msg"]["payload"]["message"]
+                held_source.assert_stable_source(prefix)
+                held_selection.assert_immutable(selection_data)
+                held_manifest.assert_immutable(manifest_data)
+                held_assignment.assert_immutable(assignment_data)
+                held_crosswalk.assert_immutable(crosswalk_data)
+                raw.assert_bound()
+                # The raw descriptor remains the publication authority after the
+                # receipt/root descriptors close; publication cannot escape even
+                # if the pathname is swapped concurrently.
+                raw.parent_fd = None
+            except (IntegrityError, UnicodeError, json.JSONDecodeError):
+                raise IntegrityError("private reconstruction JSON rejected") from None
+            finally:
+                for held in (held_source, held_selection, held_manifest, held_assignment, held_crosswalk):
+                    held.close()
+        _validate_private_document(crosswalk_doc, "private_crosswalk.schema.json")
+        _validate_private_document(manifest, "private_derivation_manifest.schema.json")
+        _validate_private_document(assignment_doc, "private_review_assignment.schema.json")
+        now = int(time.time())
+        expiry = min(manifest["expires_at_epoch"], assignment_doc["expires_at_epoch"], crosswalk_doc["expires_at_epoch"])
+        if now >= expiry or expiry - now > 3600:
+            raise IntegrityError("private reconstruction TTL is expired or exceeds one hour")
+        public_bindings = {
+            "corpus_hash": sha256_file(ROOT / "tests/fixtures/interpretation_integrity/cases.v0.json"),
+            "case_schema_hash": sha256_file(ROOT / "evals/interpretation_integrity/case.schema.json"),
+            "rubric_hash": sha256_file(ROOT / "evals/interpretation_integrity/annotation_rubric.v0.json"),
+            "policy_hash": sha256_file(ROOT / "evals/interpretation_integrity/privacy_policy.v0.json"),
+            "candidate_state_hash": candidate_state_digest(),
         }
-        if any(not path.is_absolute() or path != expected[path] for path in expected):
+        for key, value in public_bindings.items():
+            if manifest[key] != value or (key == "candidate_state_hash" and assignment_doc[key] != value):
+                raise IntegrityError(f"private reconstruction binding mismatch: {key}")
+        if manifest["crosswalk_hash"] != sha256_bytes(crosswalk_data) or manifest["selection_count"] != len(admitted):
+            raise IntegrityError("private derivation manifest crosswalk/selection binding mismatch")
+        if assignment_doc["producer_identity"] != manifest["producer_identity"] or assignment_doc["fixture_author_identity"] != manifest["fixture_author_identity"]:
+            raise IntegrityError("private assignment producer/author binding mismatch")
+        principals = [assignment_doc[key] for key in ("reviewer_identity", "producer_identity", "fixture_author_identity")]
+        if len({(item["principal_id"], item["session_id"]) for item in principals}) != 3:
+            raise IntegrityError("private reconstruction reviewer is not procedurally independent")
+        aliases = sorted(item["source_alias"] for item in manifest["sources"])
+        if len(aliases) != len(set(aliases)) or len(aliases) != len(admitted):
+            raise IntegrityError("every selected source requires one unique packet-local alias")
+        alias_text = dict(zip(aliases, (selected_text[key] for key in sorted(selected_text)), strict=True))
+        corpus = load_json(ROOT / "tests/fixtures/interpretation_integrity/cases.v0.json")
+        expected_cases = {case["case_id"]: case for case in corpus["cases"]}
+        case_map = _unique_index(manifest["cases"], ("case_id",), "private case derivation")
+        if set(key[0] for key in case_map) != set(expected_cases):
+            raise IntegrityError("private derivation must cover all 24 cases exactly once")
+        referenced_aliases: set[str] = set()
+        for (case_id,), mapping in case_map.items():
+            case = expected_cases[case_id]
+            if mapping["origin_class"] != case["synthetic_origin_class"]:
+                raise IntegrityError("private derivation origin class disagrees with frozen corpus")
+            units = _unique_index(mapping["unit_mappings"], ("unit_id",), "private unit derivation")
+            expected_units = {item["unit_id"] for item in case["semantic_units"]}
+            if mapping["origin_class"] == "fully_synthetic":
+                if units:
+                    raise IntegrityError("fully synthetic control must be explicitly unmapped")
+                continue
+            if set(key[0] for key in units) != expected_units:
+                raise IntegrityError("structurally equivalent case must map every semantic unit exactly once")
+            for unit in units.values():
+                if not unit["source_units"] or set(unit["preserved_dimensions"]) & set(unit["deliberately_changed_dimensions"]):
+                    raise IntegrityError("private unit derivation is empty or has overlapping dimension declarations")
+                for source_unit in unit["source_units"]:
+                    alias = source_unit["source_alias"]; referenced_aliases.add(alias)
+                    if alias not in alias_text:
+                        raise IntegrityError("private unit derivation references an unknown source alias")
+                    start, end = source_unit["locator"]["start"], source_unit["locator"]["end"]
+                    if not (0 <= start < end <= len(alias_text[alias])):
+                        raise IntegrityError("private source-unit locator is out of bounds")
+        used = {item["source_alias"] for item in manifest["sources"] if item["disposition"] == "used"}
+        if used != referenced_aliases:
+            raise IntegrityError("private source dispositions do not equal mapping references")
+        deterministic_screen = deterministic_reconstruction_screen(list(alias_text.values()), corpus["cases"])
+        if any(value != 0 for key, value in deterministic_screen.items() if key.endswith("_flags")):
+            raise IntegrityError("private reconstruction deterministic screen found possible source leakage")
+        packet = {
+            "schema_version": "interpretation-integrity.private-reconstruction-packet.v0",
+            "expires_at_epoch": expiry, "assignment_hash": sha256_bytes(assignment_data),
+            "derivation_manifest_hash": sha256_bytes(manifest_data), "crosswalk_hash": sha256_bytes(crosswalk_data),
+            "selection_count": len(admitted), **public_bindings, "source_aliases": aliases,
+            "derivation_manifest": manifest,
+            "deterministic_screen": deterministic_screen,
+            "source_content_persisted": False,
+            "authority_effect": "none",
+        }
+        _validate_private_document(packet, "private_reconstruction_packet.schema.json")
+        if output_name != "raw/reconstruction-packet.json":
             raw.close()
-            raise IntegrityError("private reconstruction inputs must be exact receipt-derived originals")
-        held_source = intake.HeldFile(source)
-        held_selection = intake.HeldFile(selection, exact_mode=0o600, parent_fd=raw.fd, leaf_name="selection.json")
-        held_manifest = intake.HeldFile(derivation_manifest, exact_mode=0o600, parent_fd=raw.fd, leaf_name="derivation-manifest.json")
-        held_assignment = intake.HeldFile(assignment, exact_mode=0o600, parent_fd=raw.fd, leaf_name="reconstruction-assignment.json")
-        held_crosswalk = intake.HeldFile(authority.root_path / "raw/source-crosswalk.json", exact_mode=0o600, parent_fd=raw.fd, leaf_name="source-crosswalk.json")
-        try:
-            source_data, selection_data = held_source.read_initial(), held_selection.read_initial()
-            manifest_data, assignment_data, crosswalk_data = held_manifest.read_initial(), held_assignment.read_initial(), held_crosswalk.read_initial()
-            manifest = json.loads(manifest_data.decode("utf-8", "strict"), object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
-            assignment_doc = json.loads(assignment_data.decode("utf-8", "strict"), object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
-            crosswalk_doc = json.loads(crosswalk_data.decode("utf-8", "strict"), object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_json_constant)
-            prefix = intake.stable_complete_prefix(source_data)
-            records = intake.parse_jsonl(prefix)
-            selection_doc = intake._load_selection(selection_data)
-            admitted, _, _ = intake.validate_records(records, selection_doc, prefix=prefix)
-            selected_keys = {tuple(item["identity"]) for item in admitted}
-            selected_text: dict[tuple[str, str, str], str] = {}
-            root_session_id = records[0]["payload"]["id"]
-            for index, record in enumerate(records[1:], 1):
-                if record.get("type") == "event_msg" and isinstance(record.get("payload"), dict) and record["payload"].get("type") == "user_message":
-                    turn_id, message_id, _, envelope = intake._validate_pair(records[index - 1], record)
-                    key = (root_session_id, turn_id, message_id)
-                    if key in selected_keys:
-                        selected_text[key] = envelope["event_msg"]["payload"]["message"]
-            held_source.assert_stable_source(prefix)
-            held_selection.assert_immutable(selection_data)
-            held_manifest.assert_immutable(manifest_data)
-            held_assignment.assert_immutable(assignment_data)
-            held_crosswalk.assert_immutable(crosswalk_data)
-            raw.assert_bound()
-            # The raw descriptor remains the publication authority after the
-            # receipt/root descriptors close; publication cannot escape even
-            # if the pathname is swapped concurrently.
-            raw.parent_fd = None
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise IntegrityError("private reconstruction JSON rejected") from exc
-        finally:
-            for held in (held_source, held_selection, held_manifest, held_assignment, held_crosswalk):
-                held.close()
-    validate_document(crosswalk_doc, ROOT / "evals/interpretation_integrity/private_crosswalk.schema.json")
-    validate_document(manifest, ROOT / "evals/interpretation_integrity/private_derivation_manifest.schema.json")
-    validate_document(assignment_doc, ROOT / "evals/interpretation_integrity/private_review_assignment.schema.json")
-    now = int(time.time())
-    expiry = min(manifest["expires_at_epoch"], assignment_doc["expires_at_epoch"], crosswalk_doc["expires_at_epoch"])
-    if now >= expiry or expiry - now > 3600:
-        raise IntegrityError("private reconstruction TTL is expired or exceeds one hour")
-    public_bindings = {
-        "corpus_hash": sha256_file(ROOT / "tests/fixtures/interpretation_integrity/cases.v0.json"),
-        "case_schema_hash": sha256_file(ROOT / "evals/interpretation_integrity/case.schema.json"),
-        "rubric_hash": sha256_file(ROOT / "evals/interpretation_integrity/annotation_rubric.v0.json"),
-        "policy_hash": sha256_file(ROOT / "evals/interpretation_integrity/privacy_policy.v0.json"),
-        "candidate_state_hash": candidate_state_digest(),
-    }
-    for key, value in public_bindings.items():
-        if manifest[key] != value or (key == "candidate_state_hash" and assignment_doc[key] != value):
-            raise IntegrityError(f"private reconstruction binding mismatch: {key}")
-    if manifest["crosswalk_hash"] != sha256_bytes(crosswalk_data) or manifest["selection_count"] != len(admitted):
-        raise IntegrityError("private derivation manifest crosswalk/selection binding mismatch")
-    if assignment_doc["producer_identity"] != manifest["producer_identity"] or assignment_doc["fixture_author_identity"] != manifest["fixture_author_identity"]:
-        raise IntegrityError("private assignment producer/author binding mismatch")
-    principals = [assignment_doc[key] for key in ("reviewer_identity", "producer_identity", "fixture_author_identity")]
-    if len({(item["principal_id"], item["session_id"]) for item in principals}) != 3:
-        raise IntegrityError("private reconstruction reviewer is not procedurally independent")
-    aliases = sorted(item["source_alias"] for item in manifest["sources"])
-    if len(aliases) != len(set(aliases)) or len(aliases) != len(admitted):
-        raise IntegrityError("every selected source requires one unique packet-local alias")
-    alias_text = dict(zip(aliases, (selected_text[key] for key in sorted(selected_text)), strict=True))
-    corpus = load_json(ROOT / "tests/fixtures/interpretation_integrity/cases.v0.json")
-    expected_cases = {case["case_id"]: case for case in corpus["cases"]}
-    case_map = _unique_index(manifest["cases"], ("case_id",), "private case derivation")
-    if set(key[0] for key in case_map) != set(expected_cases):
-        raise IntegrityError("private derivation must cover all 24 cases exactly once")
-    referenced_aliases: set[str] = set()
-    for (case_id,), mapping in case_map.items():
-        case = expected_cases[case_id]
-        if mapping["origin_class"] != case["synthetic_origin_class"]:
-            raise IntegrityError("private derivation origin class disagrees with frozen corpus")
-        units = _unique_index(mapping["unit_mappings"], ("unit_id",), "private unit derivation")
-        expected_units = {item["unit_id"] for item in case["semantic_units"]}
-        if mapping["origin_class"] == "fully_synthetic":
-            if units:
-                raise IntegrityError("fully synthetic control must be explicitly unmapped")
-            continue
-        if set(key[0] for key in units) != expected_units:
-            raise IntegrityError("structurally equivalent case must map every semantic unit exactly once")
-        for unit in units.values():
-            if not unit["source_units"] or set(unit["preserved_dimensions"]) & set(unit["deliberately_changed_dimensions"]):
-                raise IntegrityError("private unit derivation is empty or has overlapping dimension declarations")
-            for source_unit in unit["source_units"]:
-                alias = source_unit["source_alias"]; referenced_aliases.add(alias)
-                if alias not in alias_text:
-                    raise IntegrityError("private unit derivation references an unknown source alias")
-                start, end = source_unit["locator"]["start"], source_unit["locator"]["end"]
-                if not (0 <= start < end <= len(alias_text[alias])):
-                    raise IntegrityError("private source-unit locator is out of bounds")
-    used = {item["source_alias"] for item in manifest["sources"] if item["disposition"] == "used"}
-    if used != referenced_aliases:
-        raise IntegrityError("private source dispositions do not equal mapping references")
-    deterministic_screen = deterministic_reconstruction_screen(list(alias_text.values()), corpus["cases"])
-    if any(value != 0 for key, value in deterministic_screen.items() if key.endswith("_flags")):
-        raise IntegrityError("private reconstruction deterministic screen found possible source leakage")
-    packet = {
-        "schema_version": "interpretation-integrity.private-reconstruction-packet.v0",
-        "expires_at_epoch": expiry, "assignment_hash": sha256_bytes(assignment_data),
-        "derivation_manifest_hash": sha256_bytes(manifest_data), "crosswalk_hash": sha256_bytes(crosswalk_data),
-        "selection_count": len(admitted), **public_bindings, "source_aliases": aliases,
-        "derivation_manifest": manifest,
-        "deterministic_screen": deterministic_screen,
-        "source_content_persisted": False,
-        "authority_effect": "none",
-    }
-    validate_document(packet, ROOT / "evals/interpretation_integrity/private_reconstruction_packet.schema.json")
-    if output_name != "raw/reconstruction-packet.json":
+            raise IntegrityError("private reconstruction output must use the exact frozen raw child")
+        raw.write_json_new("reconstruction-packet.json", packet)
         raw.close()
-        raise IntegrityError("private reconstruction output must use the exact frozen raw child")
-    raw.write_json_new("reconstruction-packet.json", packet)
-    raw.close()
-    return packet
+        return packet
 
 
 def read_bound_private_json(
@@ -3596,17 +3665,21 @@ def read_private_json_at(
                 data.decode("utf-8", "strict"), object_pairs_hook=_reject_duplicate_keys,
                 parse_constant=_reject_json_constant,
             )
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise IntegrityError("private reconstruction JSON rejected") from exc
+        except (IntegrityError, UnicodeError, json.JSONDecodeError):
+            raise IntegrityError("private reconstruction JSON rejected") from None
         if not isinstance(document, dict):
             raise IntegrityError("private reconstruction evidence must be an object")
         return document, data
 
 
+@_private_error_boundary
 def validate_private_reconstruction(
     run_receipt: Path, packet_name: str, assignment_name: str, review_name: str,
     packet_schema: Path, assignment_schema: Path, review_schema: Path, receipt_path: Path,
 ) -> Mapping[str, Any]:
+    _canonical_private_schema("private_reconstruction_packet.schema.json", packet_schema)
+    _canonical_private_schema("private_review_assignment.schema.json", assignment_schema)
+    _canonical_private_schema("private_reconstruction_review.schema.json", review_schema)
     with PrivateRunAuthority(run_receipt) as authority:
         names = [PurePosixPath(value) for value in (packet_name, assignment_name, review_name)]
         if any(path.is_absolute() or len(path.parts) != 2 or path.parts[0] != "raw" for path in names):
@@ -3618,16 +3691,30 @@ def validate_private_reconstruction(
             review, _review_data = read_private_json_at(raw, names[2].parts[1])
         finally:
             raw.close()
-    validate_document(packet, packet_schema); validate_document(assignment, assignment_schema); validate_document(review, review_schema)
+    _validate_private_document(packet, "private_reconstruction_packet.schema.json")
+    _validate_private_document(assignment, "private_review_assignment.schema.json")
+    _validate_private_document(review, "private_reconstruction_review.schema.json")
+    _validate_private_pass_checks(packet, review)
     if int(time.time()) >= packet["expires_at_epoch"] or packet["candidate_state_hash"] != candidate_state_digest():
         raise IntegrityError("private reconstruction packet expired or candidate state changed")
-    if review["assignment_hash"] != sha256_bytes(assignment_data) or review["packet_hash"] != sha256_bytes(packet_data):
+    if (
+        review["assignment_hash"] != sha256_bytes(assignment_data)
+        or packet["assignment_hash"] != sha256_bytes(assignment_data)
+        or review["packet_hash"] != sha256_bytes(packet_data)
+    ):
         raise IntegrityError("reconstruction review binding mismatch")
-    if any(value != 0 for key, value in packet["deterministic_screen"].items() if key.endswith("_flags")):
-        raise IntegrityError("private reconstruction deterministic screen found possible source leakage")
     if review["reviewer_session_binding"] != sha256_json(assignment["reviewer_identity"]):
         raise IntegrityError("reconstruction review was not produced by the assigned session")
     manifest = packet["derivation_manifest"]
+    principals = [assignment[key] for key in ("reviewer_identity", "producer_identity", "fixture_author_identity")]
+    if (
+        len({(item["principal_id"], item["session_id"]) for item in principals}) != 3
+        or assignment["producer_identity"] != manifest["producer_identity"]
+        or assignment["fixture_author_identity"] != manifest["fixture_author_identity"]
+        or assignment["candidate_state_hash"] != packet["candidate_state_hash"]
+        or not assignment["issued_at_epoch"] <= int(time.time()) < assignment["expires_at_epoch"]
+    ):
+        raise IntegrityError("private reconstruction assignment rejected")
     source_aliases = set(packet["source_aliases"])
     source_results = _unique_index(review["source_results"], ("source_alias",), "reconstruction source result")
     if set(key[0] for key in source_results) != source_aliases:
@@ -3645,7 +3732,7 @@ def validate_private_reconstruction(
     result_values += [value for item in case_results.values() for value in (item["origin_result"], item["failure_family_result"])]
     result_values += [item[field] for item in unit_results.values() for field in ("actor", "expression_act", "stance", "modality", "evidence_status", "qualification", "frame_origin", "response_requirement", "severity")]
     result_values += list(review["leakage_checks"].values()) + [review["mosaic_result"], review["structural_fidelity"]]
-    if any(value != "pass" for value in result_values) or not review["complete_coverage"] or review["reconstructability"] != "not_reconstructive":
+    if any(value != "pass" for value in result_values) or review["complete_coverage"] is not True or review["reconstructability"] != "not_reconstructive":
         raise IntegrityError("reconstruction review did not pass fail-closed criteria")
     origins = Counter(item["origin_class"] for item in manifest["cases"])
     if origins != {"structurally_equivalent_synthetic": 16, "fully_synthetic": 8}:
@@ -4142,6 +4229,7 @@ def build_parser() -> argparse.ArgumentParser:
     privacy.add_argument("--receipt-name")
     reconstruction = commands.add_parser("prepare-private-reconstruction")
     reconstruction.add_argument("--source", required=True)
+    reconstruction.add_argument("--source-root", required=True)
     reconstruction.add_argument("--selection", required=True)
     reconstruction.add_argument("--derivation-manifest", required=True)
     reconstruction.add_argument("--assignment", required=True)
@@ -4280,6 +4368,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             packet = prepare_private_reconstruction(
                 Path(args.source), Path(args.selection), Path(args.derivation_manifest),
                 Path(args.assignment), Path(args.run_receipt), args.output_name,
+                source_root=Path(args.source_root),
             )
             print(json.dumps({"selection_count": packet["selection_count"], "case_count": len(packet["derivation_manifest"]["cases"]), "authority_effect": "none"}, sort_keys=True))
         elif args.command == "validate-private-reconstruction":
@@ -4361,8 +4450,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = validate_e3_stage(Path(args.run_receipt), args.stage_id)
             write_json_atomic(Path(args.receipt), receipt); print(json.dumps(receipt, sort_keys=True))
         return 0
-    except IntegrityError as exc:
-        print(f"interpretation-integrity error: {exc}", file=sys.stderr)
+    except (IntegrityError, OSError, ValueError, TypeError, KeyError, IndexError) as exc:
+        if hasattr(args, "run_receipt") or args.command == "init-private-run":
+            print("interpretation-integrity private operation rejected", file=sys.stderr)
+        elif isinstance(exc, IntegrityError):
+            print(f"interpretation-integrity error: {exc}", file=sys.stderr)
+        else:
+            raise
         return 2
 
 

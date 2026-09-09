@@ -20,7 +20,7 @@ PlanTier: Full
 AutomationTarget: none
 DeliveryMode: DevOnly
 ContextMode: UserProvided
-LastUpdated: 2026-08-01
+LastUpdated: 2026-09-09
 PrimaryOwner: root coordinator
 BaseBranch: main
 BaseCommit: 01f0a605768601f8744f2dbd9fc19d5bb94f21a9
@@ -195,6 +195,17 @@ PlanningReviewsComplete: Pass
   - C) Treat hashes, counts, or a full-history agent fork as independent semantic/privacy review.
 - Why chosen: A or an explicitly authorized B can inspect the evidence required for fidelity and reconstruction-risk judgment. C cannot establish the claim: hashes contain no mapping semantics, and a full-history fork is neither blind nor independent and creates additional inherited private copies.
 - Consequences / follow-ups: Code/schema/test repair may continue without the user choice. G-Private-Reconstruction and MP1 remain blocked until A or B is chosen. Personal-intent disputes route to the user pre-freeze, but no user can waive a reconstructability, leakage, or reviewer-independence failure.
+- Status: Accepted
+- Revisit trigger (if not Accepted): none
+
+### DR-012: Development-source integration and bounded safety repairs
+- Stage: Integration
+- Date: 2026-09-09
+- ScopeAffected: GitHub PR #12, trial evidence validation, private source readers, repository verification
+- Decision: The user explicitly authorized merging the reviewed AtlasMemory-Tools branches into `main`. Integrate this development-only harness after normal repository CI and independent code review, preserving its outstanding experimental and private-review gates. This updates DR-006's merge boundary for this source integration only.
+- Repairs: Require an explicit current-account `--source-root` and descriptor-bound, bounded private reads; suppress private diagnostic content; bind private reconstruction validation to canonical schemas and required checks. Require complete measured terminal evidence for successful calls, deterministic multi-item grader ordering and fresh grader output on retries.
+- Consequences / follow-ups: See [the development operating notes](../docs/interpretation-integrity-development.md) for the source-reader interface. Existing `BaseCommit`, E0 state, fixture/gold reviews and E1–E3 evidence remain historical or outstanding. Requalify the source baseline before a future E0 run; do not broaden the frozen owned-change allowlist to claim unrelated Azure changes. Source integration does not authorize private review, provider trials, installation, runtime dispatch, promotion or deployment.
+- Validation: Run the combined `scripts/verify_repo.py` gate in GitHub Verify with its declared pytest dependencies; keep synthetic local repro evidence separate from full CI results. No real private sources or model trials are needed for this integration.
 - Status: Accepted
 - Revisit trigger (if not Accepted): none
 

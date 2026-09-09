@@ -134,6 +134,25 @@ def trace_usage(lines: Sequence[Mapping[str, Any]]) -> Mapping[str, int]:
     return totals
 
 
+def success_trace_violations(lines: Sequence[Mapping[str, Any]]) -> list[str]:
+    """A zero exit needs provider completion and measured usage to be evidence.
+
+    Failure/timeout traces may be partial; their reported usage and bounded
+    retry rules are handled separately. Never turn absent success telemetry
+    into a measured zero or accept an earlier completion before a partial turn.
+    """
+    completions = [item for item in lines if item.get("type") == "turn.completed"]
+    violations = []
+    if not completions or lines[-1].get("type") != "turn.completed":
+        violations.append("missing_completion")
+    if any(not isinstance(item.get("usage"), Mapping) or any(
+        type(item["usage"].get(key)) is not int or item["usage"][key] < 0
+        for key in ("input_tokens", "output_tokens")
+    ) for item in completions):
+        violations.append("invalid_usage")
+    return violations
+
+
 def instruction_inventory(lines: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
     """Extract only content-free loaded instruction/skill identities from a trace."""
     identities: set[str] = set()
@@ -543,6 +562,8 @@ def execute_trial(
                 violations = classify_trace(records)
                 usage = trace_usage(records)
                 inventory = instruction_inventory(records)
+                if returncode == 0:
+                    violations = sorted(set(violations + success_trace_violations(records)))
             except integrity.IntegrityError:
                 records, violations = [], ["malformed_trace"]
                 usage = {"input_tokens": 0, "output_tokens": 0}
@@ -710,10 +731,10 @@ def execute_grade_batch(
                 raise integrity.IntegrityError("grade batch resume identity mismatch")
             return packet
         grade_kind = "adjudication" if adjudication else "gold_reviewer" if calibration else "live"
-        subject_digest = integrity.sha256_json(sorted(
+        subject_digest = integrity.sha256_json(sorted((
             {"blind_alias": alias, "trial_key": worker["trial_key"], "case_id": case["case_id"]}
             for alias, worker, case in blind_items
-        ))
+        ), key=lambda value: (value["blind_alias"], value["trial_key"], value["case_id"])))
         work_identity = {
             "schema_version": "interpretation-integrity.grader-work.v0", "work_kind": "grader",
             "batch_id": batch_id, "stage_id": stage_id, "reviewer_id": reviewer_id,
@@ -752,6 +773,8 @@ def execute_grade_batch(
                 if attempt_number == 2:
                     raise integrity.IntegrityError("grader batch exhausted after ambiguous crash-resident attempts")
                 continue
+            if "grades.json" in work.names():
+                work.unlink_file("grades.json")
             returncode, stdout, _stderr = run_attempt(
                 argv, prompt, timeout=contract["budgets"]["grader_timeout_seconds"], pass_fds=[work.fd],
             )
@@ -760,6 +783,8 @@ def execute_grade_batch(
                 trace = parse_jsonl(stdout)
                 violations = classify_trace(trace)
                 usage = trace_usage(trace)
+                if returncode == 0:
+                    violations = sorted(set(violations + success_trace_violations(trace)))
             except integrity.IntegrityError:
                 trace, violations, usage = [], ["malformed_trace"], {"input_tokens": 0, "output_tokens": 0}
             for key in total_usage:
@@ -771,7 +796,7 @@ def execute_grade_batch(
                 "violation_codes": violations, "usage": usage,
             })
             if violations:
-                raise integrity.IntegrityError("grade trace crossed the frozen no-tool boundary")
+                raise integrity.IntegrityError("grade trace failed the frozen completion, usage or no-tool contract")
             if returncode == 0 and "grades.json" in work.names():
                 response = work.read_json("grades.json")
                 if set(response) != {"grades"} or not isinstance(response["grades"], list):

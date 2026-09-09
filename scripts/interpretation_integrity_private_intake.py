@@ -13,6 +13,8 @@ import contextlib
 import hashlib
 import json
 import os
+import pwd
+import re
 import secrets
 import stat
 import sys
@@ -38,6 +40,46 @@ SELECTION_FIELDS = {
     "selections",
 }
 SELECTION_ITEM_FIELDS = {"turn_id", "message_id", "envelope_digest"}
+# Bound the complete selected file, including any unfinished final record,
+# before allocating or reading source bytes. This is not a discovery budget.
+MAX_SOURCE_BYTES = 64 * 1024 * 1024
+_CREDENTIAL_COMPONENTS = {
+    "auth", "credential", "credentials", "secret", "secrets", "token", "tokens",
+    "password", "passwords", "passwd", "shadow", "keyring", "keyrings",
+}
+
+
+def source_location(source: Path, source_root: Path) -> tuple[Path, Path, Path]:
+    """Validate explicit source scope lexically, before opening any source path.
+
+    Identity comes from the account database, never HOME or a caller's claimed
+    identity. Hidden application state is excluded; the sole supported exception
+    is an explicitly selected directory at or below this identity's Codex sessions.
+    """
+    if not isinstance(source, Path) or not isinstance(source_root, Path):
+        raise integrity.IntegrityError("private source scope rejected")
+    try:
+        identity_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (KeyError, OSError, TypeError) as exc:
+        raise integrity.IntegrityError("private source identity rejected") from exc
+    if identity_home == Path("/") or any(not path.is_absolute() or ".." in path.parts for path in (identity_home, source, source_root)):
+        raise integrity.IntegrityError("private source scope rejected")
+    try:
+        root_parts = source_root.relative_to(identity_home).parts
+        source_parts = source.relative_to(identity_home).parts
+        child_parts = source.relative_to(source_root).parts
+    except ValueError as exc:
+        raise integrity.IntegrityError("private source scope rejected") from exc
+    if not root_parts or not child_parts or source.suffix != ".jsonl":
+        raise integrity.IntegrityError("private source scope rejected")
+    codex_sessions = root_parts[:2] == (".codex", "sessions")
+    for index, component in enumerate(source_parts):
+        if component.startswith(".") and not (codex_sessions and index == 0 and component == ".codex"):
+            raise integrity.IntegrityError("private source credential scope rejected")
+        words = set(re.split(r"[^a-z0-9]+", component.lower()))
+        if words & _CREDENTIAL_COMPONENTS or component.lower().startswith(("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa")):
+            raise integrity.IntegrityError("private source credential scope rejected")
+    return source, source_root, identity_home
 
 
 class HeldFile:
@@ -55,9 +97,11 @@ class HeldFile:
         self.before = os.fstat(self.fd)
         if not stat.S_ISREG(self.before.st_mode) or self.before.st_uid != os.getuid():
             os.close(self.fd)
+            self.fd = -1
             raise integrity.IntegrityError("private input type or owner rejected")
         if exact_mode is not None and stat.S_IMODE(self.before.st_mode) != exact_mode:
             os.close(self.fd)
+            self.fd = -1
             raise integrity.IntegrityError("private input mode rejected")
 
     def read_initial(self) -> bytes:
@@ -108,7 +152,93 @@ class HeldFile:
             raise integrity.IntegrityError("private source prefix changed during intake")
 
     def close(self) -> None:
-        os.close(self.fd)
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+
+class HeldSource(HeldFile):
+    """A bounded source under an explicit current-identity directory capability."""
+
+    def __init__(self, path: Path, *, source_root: Path):
+        path, self.source_root, identity_home = source_location(path, source_root)
+        self._ancestors: list[tuple[int, int | None, str, os.stat_result]] = []
+        self.fd = -1
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_DIRECTORY
+        try:
+            parent_fd = None
+            walked = Path("/")
+            # Open root-to-leaf by descriptor, never lstat a descendant through
+            # an unchecked ancestor. Hold each binding for the final recheck.
+            for name in ("/", *path.parent.parts[1:]):
+                descriptor = os.open(name, flags, dir_fd=parent_fd)
+                item = os.fstat(descriptor)
+                self._ancestors.append((descriptor, parent_fd, name, item))
+                if name != "/":
+                    walked = walked / name
+                in_identity = walked == identity_home or identity_home in walked.parents
+                if not stat.S_ISDIR(item.st_mode):
+                    raise integrity.IntegrityError("private source ancestor rejected")
+                if in_identity:
+                    if item.st_uid != os.getuid() or stat.S_IMODE(item.st_mode) & 0o022:
+                        raise integrity.IntegrityError("private source ancestor rejected")
+                else:
+                    root_owner = self._ancestors[0][3].st_uid
+                    if item.st_uid not in {root_owner, os.getuid()}:
+                        raise integrity.IntegrityError("private source ancestor rejected")
+                    # A system-owned sticky directory (e.g. /tmp in synthetic
+                    # tests) protects an identity-owned child from replacement.
+                    if stat.S_IMODE(item.st_mode) & 0o022 and not (item.st_mode & stat.S_ISVTX and item.st_uid == root_owner):
+                        raise integrity.IntegrityError("private source ancestor rejected")
+                parent_fd = descriptor
+            self._assert_ancestors()
+            super().__init__(path, parent_fd=parent_fd, leaf_name=path.name)
+            self._assert_source_metadata(self.before)
+        except Exception as exc:
+            self.close()
+            if isinstance(exc, integrity.IntegrityError):
+                raise
+            raise integrity.IntegrityError("private source open rejected") from exc
+
+    def _assert_ancestors(self) -> None:
+        for descriptor, parent_fd, name, before in self._ancestors:
+            after = os.fstat(descriptor)
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            fields = ("st_dev", "st_ino", "st_mode", "st_uid")
+            if any(getattr(before, field) != getattr(after, field) or getattr(before, field) != getattr(current, field) for field in fields):
+                raise integrity.IntegrityError("private source ancestor changed")
+
+    @staticmethod
+    def _assert_source_metadata(item: os.stat_result) -> None:
+        if item.st_nlink != 1 or stat.S_IMODE(item.st_mode) & 0o022:
+            raise integrity.IntegrityError("private source mode or alias rejected")
+        if item.st_size > MAX_SOURCE_BYTES:
+            raise integrity.IntegrityError("private source size rejected")
+
+    def assert_path_identity(self) -> os.stat_result:
+        try:
+            self._assert_ancestors()
+            after = super().assert_path_identity()
+            self._assert_source_metadata(after)
+            return after
+        except OSError as exc:
+            raise integrity.IntegrityError("private source path changed") from exc
+
+    def read_prefix(self, length: int) -> bytes:
+        if type(length) is not int or not 0 <= length <= MAX_SOURCE_BYTES:
+            raise integrity.IntegrityError("private source size rejected")
+        self.assert_path_identity()
+        return super().read_prefix(length)
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            # HeldFile can reject and close its descriptor during construction.
+            with contextlib.suppress(OSError):
+                os.close(self.fd)
+            self.fd = -1
+        for descriptor, _parent_fd, _name, _before in reversed(self._ancestors):
+            os.close(descriptor)
+        self._ancestors.clear()
 
 
 class HeldDirectory:
@@ -444,7 +574,10 @@ def _load_selection(data: bytes) -> Mapping[str, Any]:
     return value
 
 
-def validate_exact_files(source_path: Path, selection_path: Path, run_receipt: Path, receipt_name: str) -> Mapping[str, Any]:
+def validate_exact_files(
+    source_path: Path, selection_path: Path, run_receipt: Path, receipt_name: str, *, source_root: Path,
+) -> Mapping[str, Any]:
+    source_location(source_path, source_root)
     run_root = integrity.resolve_run_root(run_receipt)
     expected_selection = integrity.resolve_private_child(run_root, "raw/selection.json")
     if not selection_path.is_absolute() or ".." in selection_path.parts or selection_path != expected_selection:
@@ -469,7 +602,7 @@ def validate_exact_files(source_path: Path, selection_path: Path, run_receipt: P
         sanitized_directory = HeldDirectory(run_root / "sanitized", parent_fd=root_directory.fd, leaf_name="sanitized")
         if raw_directory.before.st_dev != root_directory.before.st_dev or sanitized_directory.before.st_dev != root_directory.before.st_dev:
             raise integrity.IntegrityError("private run directory device rejected")
-        source = HeldFile(source_path)
+        source = HeldSource(source_path, source_root=source_root)
         selection_file = HeldFile(selection_path, exact_mode=0o600, parent_fd=raw_directory.fd, leaf_name="selection.json")
         if selection_file.before.st_dev != root_directory.before.st_dev:
             raise integrity.IntegrityError("private selection device rejected")
@@ -543,6 +676,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate")
     validate.add_argument("--source-file", required=True)
+    validate.add_argument("--source-root", required=True)
     validate.add_argument("--selection-file", required=True)
     validate.add_argument("--run-receipt", required=True)
     validate.add_argument("--receipt-name", required=True)
@@ -552,7 +686,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        receipt = validate_exact_files(Path(args.source_file), Path(args.selection_file), Path(args.run_receipt), args.receipt_name)
+        receipt = validate_exact_files(
+            Path(args.source_file), Path(args.selection_file), Path(args.run_receipt), args.receipt_name,
+            source_root=Path(args.source_root),
+        )
         print(json.dumps(receipt, sort_keys=True))
         return 0
     except (integrity.IntegrityError, OSError):

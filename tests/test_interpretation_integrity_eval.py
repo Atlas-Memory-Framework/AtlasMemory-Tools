@@ -154,11 +154,11 @@ def test_reconstruction_screen_detects_all_named_signal_classes():
 
 
 def test_prepare_private_reconstruction_cli_reports_manifest_case_count(monkeypatch, capsys):
-    monkeypatch.setattr(ev, "prepare_private_reconstruction", lambda *_args: {
+    monkeypatch.setattr(ev, "prepare_private_reconstruction", lambda *_args, **_kwargs: {
         "selection_count": 2, "derivation_manifest": {"cases": [{"case_id": "a"}, {"case_id": "b"}]},
     })
     result = ev.main([
-        "prepare-private-reconstruction", "--source", "s", "--selection", "x",
+        "prepare-private-reconstruction", "--source", "s", "--source-root", "synthetic-source-root", "--selection", "x",
         "--derivation-manifest", "m", "--assignment", "a", "--run-receipt", "r",
         "--output-name", "raw/reconstruction-packet.json",
     ])
@@ -1308,6 +1308,189 @@ def _worker_execution_kwargs(authority, stage_name):
         "stage_identity_hash": identity["identity_hash"],
     }
     return kwargs, (workers, output, stage, locks, sanitized, stages, raw)
+
+
+def _grader_execution_kwargs(authority, *, count=1):
+    contract = ev.load_json(EVAL / "evaluation_contract.v0.json")
+    corpus = ev.load_json(FIX / "cases.v0.json")
+    gold = ev.load_json(FIX / "grader_calibration.v0.json")["outputs"]
+    blind_items, grades = [], []
+    for index, case in enumerate(corpus["cases"][:count]):
+        expected = next(item for item in gold if item["case_id"] == case["case_id"])
+        alias = f"blind-{index + 1:03d}"
+        worker = {"trial_key": ev.sha256_json({"trial": index}), "case_id": case["case_id"],
+                  "response_text": expected["response_text"]}
+        grade = copy.deepcopy(expected["expected_grade"])
+        grade.update({"grade_kind": "live", "reviewer_id": "reviewer-a", "reviewer_kind": "independent_agent",
+                      "reviewer_model": contract["system"]["grader_model"], "reviewer_version": "v0",
+                      "subject_id": alias, "blind_alias": alias})
+        blind_items.append((alias, worker, case))
+        grades.append(grade)
+    raw = authority.directory("raw")
+    stages = authority.directory("stages")
+    sanitized = authority.directory("sanitized")
+    locks = stages.child(".locks", create=True)
+    work = stages.child("grade-work", create=True)
+    output = sanitized.child("grade-output", create=True)
+    kwargs = dict(batch_id="batch-01", reviewer_id="reviewer-a", blind_items=blind_items, contract=contract,
+                  contract_hash=ev.sha256_file(EVAL / "evaluation_contract.v0.json"),
+                  batch_manifest_hash=contract["artifact_hashes"]["batch_manifest"], stage_id="grade-output",
+                  work_parent=work, output_dir=output, raw_dir=raw, locks_dir=locks,
+                  rubric_prompt=(EVAL / "grader_prompt.v0.txt").read_text(), worker_stage="e1-pilot")
+    return kwargs, grades, (output, work, locks, sanitized, stages, raw)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_multi_item_grade_batch_executes_with_stable_subject_digest(tmp_path, monkeypatch, reverse):
+    _, receipt, _ = create_test_private_run(tmp_path)
+    calls = []
+    with ev.PrivateRunAuthority(receipt) as authority:
+        kwargs, grades, directories = _grader_execution_kwargs(authority, count=8)
+        original_subjects = [{"blind_alias": alias, "trial_key": worker["trial_key"], "case_id": case["case_id"]}
+                             for alias, worker, case in kwargs["blind_items"]]
+        if reverse:
+            kwargs["blind_items"].reverse()
+        def fake_attempt(argv, prompt, **_kwargs):
+            calls.append((argv, prompt))
+            path = Path(argv[argv.index("--output-last-message") + 1])
+            path.write_text(json.dumps({"grades": grades}), encoding="utf-8")
+            os.chmod(path, 0o600)
+            return 0, json.dumps({"type": "turn.completed", "usage": {"input_tokens": 17, "output_tokens": 6}}), ""
+        monkeypatch.setattr(runner, "run_attempt", fake_attempt)
+        try:
+            packet = runner.execute_grade_batch(**kwargs)
+            assert len(calls) == 1 and len(packet["grades"]) == 8
+            assert {row["subject_id"] for row in packet["grades"]} == {row["trial_key"] for row in original_subjects}
+            assert kwargs["output_dir"].read_json("batch-01.json") == packet
+            work = kwargs["work_parent"].child("batch-01")
+            try:
+                assert work.read_json(".work.json")["subject_digest"] == ev.sha256_json(original_subjects)
+            finally:
+                work.close()
+            assert packet["proof_class"] == "development_only" and packet["authority_effect"] == "none"
+            assert packet["usage"] == {"input_tokens": 17, "output_tokens": 6}
+        finally:
+            for directory in directories:
+                directory.close()
+
+
+INVALID_SUCCESS_TRACES = [
+    ([{"type": "turn.started"}], "missing_completion"),
+    ([{"type": "item.completed", "item": {"type": "agent_message", "text": "An output is present."},
+       "usage": {"input_tokens": 9, "output_tokens": 4}}], "missing_completion"),
+    ([{"type": "turn.completed"}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": None}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": []}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": {"input_tokens": 9}}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": {"input_tokens": True, "output_tokens": 4}}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": {"input_tokens": 9, "output_tokens": "4"}}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": {"input_tokens": -1, "output_tokens": 4}}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": {"input_tokens": 9, "output_tokens": 4.0}}], "invalid_usage"),
+    ([{"type": "turn.completed", "metadata": {"usage": {"input_tokens": 9, "output_tokens": 4}}}], "invalid_usage"),
+    ([{"type": "turn.completed", "usage": {"input_tokens": 9, "output_tokens": 4}}, {"type": "turn.started"}], "missing_completion"),
+]
+
+
+@pytest.mark.parametrize("kind", ["worker", "grader"])
+@pytest.mark.parametrize("trace,violation", INVALID_SUCCESS_TRACES)
+def test_incomplete_success_telemetry_cannot_publish_evidence(tmp_path, monkeypatch, kind, trace, violation):
+    _, receipt, _ = create_test_private_run(tmp_path)
+    calls = []
+    with ev.PrivateRunAuthority(receipt) as authority:
+        if kind == "worker":
+            kwargs, directories = _worker_execution_kwargs(authority, "e1-invalid-success")
+            payload = "A bounded synthetic response."
+        else:
+            kwargs, grades, directories = _grader_execution_kwargs(authority)
+            payload = json.dumps({"grades": grades})
+        def fake_attempt(argv, _prompt, **_kwargs):
+            calls.append(True)
+            path = Path(argv[argv.index("--output-last-message") + 1])
+            path.write_text(payload, encoding="utf-8")
+            os.chmod(path, 0o600)
+            return 0, "\n".join(json.dumps(row) for row in trace), ""
+        monkeypatch.setattr(runner, "run_attempt", fake_attempt)
+        try:
+            if kind == "worker":
+                packet = runner.execute_trial(**kwargs)
+                assert packet["terminal_state"] == "invalid" and packet["terminal_reason"] == violation
+                assert packet["attempts"][0]["returncode"] == 0
+                assert violation in packet["attempts"][0]["violation_codes"]
+                assert kwargs["workers_dir"].names() == []
+                # Invalid success still preserves real partial measurements.
+                if trace == [{"type": "turn.completed", "usage": {"input_tokens": 9}}]:
+                    assert packet["usage"] == {"input_tokens": 9, "output_tokens": 0}
+            else:
+                with pytest.raises(ev.IntegrityError, match="completion, usage"):
+                    runner.execute_grade_batch(**kwargs)
+                assert kwargs["output_dir"].names() == []
+            assert len(calls) == 1  # Incomplete success is invalid, not a transport retry.
+        finally:
+            for directory in directories:
+                directory.close()
+
+
+@pytest.mark.parametrize("kind", ["worker", "grader"])
+@pytest.mark.parametrize("returncode", [1, 124])
+def test_partial_failure_usage_survives_the_existing_bounded_retry(tmp_path, monkeypatch, kind, returncode):
+    _, receipt, _ = create_test_private_run(tmp_path)
+    calls = []
+    reason = "provider_timeout" if returncode == 124 else "provider_transport"
+    with ev.PrivateRunAuthority(receipt) as authority:
+        if kind == "worker":
+            kwargs, directories = _worker_execution_kwargs(authority, "e1-partial-retry")
+            payload = "The retried synthetic response."
+        else:
+            kwargs, grades, directories = _grader_execution_kwargs(authority)
+            payload = json.dumps({"grades": grades})
+        def fake_attempt(argv, _prompt, **_kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                return returncode, json.dumps({"type": "error", "error_kind": reason,
+                    "usage": {"input_tokens": 7, "output_tokens": 2}}), reason
+            path = Path(argv[argv.index("--output-last-message") + 1])
+            path.write_text(payload, encoding="utf-8")
+            os.chmod(path, 0o600)
+            return 0, json.dumps({"type": "turn.completed", "usage": {"input_tokens": 11, "output_tokens": 5}}), ""
+        monkeypatch.setattr(runner, "run_attempt", fake_attempt)
+        try:
+            packet = runner.execute_trial(**kwargs) if kind == "worker" else runner.execute_grade_batch(**kwargs)
+            assert len(calls) == 2 and len(packet["attempts"]) == 2
+            assert packet["attempts"][0]["terminal_reason"] == reason
+            assert packet["attempts"][0]["usage"] == {"input_tokens": 7, "output_tokens": 2}
+            assert packet["usage"] == {"input_tokens": 18, "output_tokens": 7}
+            assert packet["attempts"][1]["reason"] == reason
+            assert packet["proof_class"] == "development_only" and packet["authority_effect"] == "none"
+        finally:
+            for directory in directories:
+                directory.close()
+
+
+def test_grader_retry_cannot_publish_an_earlier_failed_attempt_response(tmp_path, monkeypatch):
+    _, receipt, _ = create_test_private_run(tmp_path)
+    calls = []
+    with ev.PrivateRunAuthority(receipt) as authority:
+        kwargs, grades, directories = _grader_execution_kwargs(authority)
+        def fake_attempt(argv, _prompt, **_kwargs):
+            calls.append(True)
+            path = Path(argv[argv.index("--output-last-message") + 1])
+            if len(calls) == 1:
+                path.write_text(json.dumps({"grades": grades}), encoding="utf-8")
+                os.chmod(path, 0o600)
+                return 1, json.dumps({"type": "error", "error_kind": "provider_transport",
+                    "usage": {"input_tokens": 7, "output_tokens": 2}}), "provider_transport"
+            assert not path.exists()
+            return 0, json.dumps({"type": "turn.completed", "usage": {"input_tokens": 11, "output_tokens": 5}}), ""
+        monkeypatch.setattr(runner, "run_attempt", fake_attempt)
+        try:
+            with pytest.raises(ev.IntegrityError, match="exhausted"):
+                runner.execute_grade_batch(**kwargs)
+            assert len(calls) == 2 and kwargs["output_dir"].names() == []
+            assert set(kwargs["raw_dir"].names()) == {
+                "grade-output.batch-01.attempt-1.jsonl", "grade-output.batch-01.attempt-2.jsonl"}
+        finally:
+            for directory in directories:
+                directory.close()
 
 
 def test_worker_crash_reservation_advances_once_and_attempt2_crash_blocks(tmp_path, monkeypatch):
