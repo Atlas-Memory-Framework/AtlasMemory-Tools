@@ -11,6 +11,13 @@ jobs/
 logs/
 repos/
 state/
+/authority/
+/.azure-api/
+/.azure-dispatch/
+/.azure-supervisor/
+/approval-inbox/
+/azure-reconcile/
+/worktrees/
 __pycache__/
 .pytest_cache/
 .ruff_cache/

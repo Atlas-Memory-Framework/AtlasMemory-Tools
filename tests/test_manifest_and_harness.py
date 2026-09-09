@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -146,8 +147,9 @@ class ManifestAndHarnessTests(unittest.TestCase):
         manifest = deepcopy(self.manifest)
         manifest["skills"] = [{"name": "invalid", "path": "skills/invalid"}]
         manifest["aliases"] = {}
-        with tempfile.TemporaryDirectory(dir=ROOT / "skills") as tmp:
-            skill_dir = Path(tmp)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(sys.modules[__name__], "ROOT", Path(tmp)):
+            skill_dir = ROOT / "skills" / "invalid"
+            skill_dir.mkdir(parents=True)
             skill_file = skill_dir / "SKILL.md"
             skill_file.write_text("---\nname: []\ndescription: null\n---\n", encoding="utf-8")
             manifest["skills"][0]["path"] = skill_dir.relative_to(ROOT).as_posix()

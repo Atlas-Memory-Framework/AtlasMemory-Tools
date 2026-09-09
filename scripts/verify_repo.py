@@ -62,6 +62,13 @@ LOCAL_ARTIFACT_DIR_NAMES = {
 }
 
 RUNTIME_LOCAL_ARTIFACT_DIRS = (
+    "templates/local-automation-runtime/authority",
+    "templates/local-automation-runtime/.azure-api",
+    "templates/local-automation-runtime/.azure-dispatch",
+    "templates/local-automation-runtime/.azure-supervisor",
+    "templates/local-automation-runtime/approval-inbox",
+    "templates/local-automation-runtime/azure-reconcile",
+    "templates/local-automation-runtime/worktrees",
     "templates/local-automation-runtime/codex-home",
     "templates/local-automation-runtime/repo-env",
     "templates/local-automation-runtime/jobs",
@@ -105,6 +112,16 @@ JSON_FILES = (
     "templates/local-automation-runtime/config/required-checks.example.json",
     "templates/local-automation-runtime/config/local-validation.example.json",
     "templates/local-automation-runtime/config/deployed-validation.example.json",
+    "templates/local-automation-runtime/config/azure.example.json",
+    "templates/local-automation-runtime/config/routing.example.json",
+    "templates/local-automation-runtime/config/issuer.example.json",
+    "examples/instablinds/local-automation-runtime/config/azure-website.json",
+    "examples/instablinds/local-automation-runtime/config/azure-website-routing.json",
+    "examples/instablinds/local-automation-runtime/routing-intake.example.json",
+    "examples/instablinds/local-automation-runtime/routing-snapshot.example.json",
+    "examples/instablinds/local-automation-runtime/supervisor-definition.example.json",
+    "examples/instablinds/local-automation-runtime/supervisor-queue.example.json",
+    "templates/local-automation-runtime/tests/fixtures/azure-website-dependencies.expected.json",
 )
 
 PY_COMPILE_FILES = (
@@ -120,6 +137,24 @@ PY_COMPILE_FILES = (
     "skills/plan-to-issues/scripts/plan_to_issues.py",
     "skills/plan-to-issues/scripts/test_plan_to_issues.py",
     "templates/local-automation-runtime/atlas_agent_common.py",
+    "templates/local-automation-runtime/atlas_runtime_config.py",
+    "templates/local-automation-runtime/atlas_authority.py",
+    "templates/local-automation-runtime/atlas_routing.py",
+    "templates/local-automation-runtime/atlas_human_gates.py",
+    "templates/local-automation-runtime/atlas_dispatch.py",
+    "templates/local-automation-runtime/atlas_supervisor.py",
+    "templates/local-automation-runtime/atlas_approval.py",
+    "templates/local-automation-runtime/atlas_intake.py",
+    "templates/local-automation-runtime/atlas_azure_devops.py",
+    "templates/local-automation-runtime/atlas_azure_worker.py",
+    "templates/local-automation-runtime/atlas_azure_reconcile.py",
+    "templates/local-automation-runtime/atlas-agent-azure-inspect",
+    "templates/local-automation-runtime/atlas-agent-azure-worker",
+    "templates/local-automation-runtime/atlas-agent-azure-reconcile",
+    "templates/local-automation-runtime/atlas-agent-azure-dispatch",
+    "templates/local-automation-runtime/atlas-agent-azure-supervise",
+    "templates/local-automation-runtime/atlas-agent-azure-approval",
+    "templates/local-automation-runtime/atlas-agent-azure-intake",
 )
 
 class VerificationFailure(Exception):

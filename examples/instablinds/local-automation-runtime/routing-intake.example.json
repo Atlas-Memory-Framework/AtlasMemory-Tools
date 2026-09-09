@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "worker_packet": {
+    "schema_version": 1,
+    "id": "azdo:Instablinds:Instablinds:1",
+    "revision": 1,
+    "repository_url": "https://dev.azure.com/Instablinds/Instablinds/_git/Website",
+    "base_branch": "develop",
+    "base_commit": "0000000000000000000000000000000000000000",
+    "branch": "feature/routing-preview-example",
+    "write_scope": [
+      "src/example.ts"
+    ],
+    "task": "UNAPPROVED SYNTHETIC PREVIEW: replace this packet with a reviewed bounded Board item and fresh repository evidence. This example must never dispatch.",
+    "commands": [
+      {
+        "id": "unit",
+        "argv": [
+          "npm",
+          "run",
+          "test",
+          "--",
+          "example"
+        ],
+        "timeout_seconds": 120
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "unit",
+        "command_id": "unit",
+        "evidence_file": "unit.json"
+      }
+    ],
+    "role_timeout_seconds": 600
+  },
+  "step": {
+    "id": "prepare-example",
+    "kind": "coding",
+    "action": "local_execute",
+    "candidate_sha": null
+  },
+  "evidence": [
+    {
+      "id": "issue",
+      "kind": "issue",
+      "path": null,
+      "content": "{\"example_only\": true, \"id\": \"azdo:Instablinds:Instablinds:1\", \"revision\": 1}",
+      "sha256": "89e5e88e3f7106de4c0a82527bd8f21e6763ee18ee48b66486b243738d2ac9af",
+      "observed_at": 1788897600,
+      "revision": 1
+    },
+    {
+      "id": "dependencies",
+      "kind": "dependencies",
+      "path": null,
+      "content": "{\"applied_dependency_links\":53,\"blockers\":[\"native-dependency-graph-incomplete\",\"execution-authority-not-established\"],\"complete\":false,\"dependencies_satisfied\":false,\"dependency_complete\":false,\"example_only\":true,\"execution_authority_established\":false,\"expected_edges\":71,\"expected_nodes\":37,\"issue_id\":\"azdo:Instablinds:Instablinds:1\",\"issue_revision\":1,\"items\":[{\"blockers\":[\"native-dependency-graph-incomplete\",\"execution-authority-not-established\"],\"dependencies\":[],\"eligible\":false,\"id\":\"azdo:Instablinds:Instablinds:1\",\"revision\":1}],\"observed_at\":\"2026-09-08T20:00:00+00:00\",\"rollout_issues\":21,\"unauthorized_prerequisite_edges\":18}",
+      "sha256": "9dc99680fec3a52c21729ba5e75469ee32c4e57ad4cec6518cb64cdc83b6b156",
+      "observed_at": 1788897600,
+      "revision": 1
+    },
+    {
+      "id": "instructions",
+      "kind": "instructions",
+      "path": "AGENTS.md",
+      "content": "UNAPPROVED EXAMPLE: replace with exact applicable repository instructions. No live execution or publication is authorized.",
+      "sha256": "ed00db6c605f27c488c14b30cf126f6c667a9c6374fc68b63736cb934532b979",
+      "observed_at": 1788897600,
+      "revision": null
+    },
+    {
+      "id": "example-file",
+      "kind": "file_missing",
+      "path": "src/example.ts",
+      "content": "EXAMPLE ONLY: file absence has not been inspected.",
+      "sha256": "e641701f2ff18ab929b7ed65e1c4c6245f35a6b9415fabee7f65832ef34aa914",
+      "observed_at": 1788897600,
+      "revision": null
+    },
+    {
+      "id": "tests",
+      "kind": "tests",
+      "path": null,
+      "content": "EXAMPLE ONLY: no acceptance command or evidence has been verified.",
+      "sha256": "4e51ade4c6510838fc4e142eb3a3806324fe5fcdf56f158f25dd2f9e7c1dcf0f",
+      "observed_at": 1788897600,
+      "revision": null
+    }
+  ],
+  "readiness": {
+    "issue_revision": 1,
+    "observed_at": 1788897600,
+    "complete": false,
+    "dependency_complete": false,
+    "dependencies_satisfied": false,
+    "execution_authority_established": false,
+    "source_sha256": "9dc99680fec3a52c21729ba5e75469ee32c4e57ad4cec6518cb64cdc83b6b156"
+  },
+  "affected_paths": [
+    "src/example.ts"
+  ],
+  "points": 2,
+  "human_gates": [
+    {
+      "id": "scope-input",
+      "kind": "input",
+      "owner": "UNASSIGNED-REQUIRES-HUMAN-OWNER",
+      "question": "Which actual Board issue, scope and acceptance criteria may this bounded job use?",
+      "stage": "before",
+      "action": "local_execute",
+      "artifact_sha256": "186b65371ac92d181002b15d8e0047361380ed05bbb6fb811e4e988dc350784c",
+      "candidate_sha": null,
+      "issue_id": "azdo:Instablinds:Instablinds:1",
+      "issue_revision": 1
+    },
+    {
+      "id": "visual-acceptance",
+      "kind": "taste",
+      "owner": "UNASSIGNED-REQUIRES-HUMAN-OWNER",
+      "question": "Does the exact candidate and rendered artifact satisfy the intended appearance? Replace these placeholder bindings with reviewed evidence before signing.",
+      "stage": "after",
+      "action": "completion",
+      "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "candidate_sha": null,
+      "issue_id": "azdo:Instablinds:Instablinds:1",
+      "issue_revision": 1
+    }
+  ],
+  "attempts": [],
+  "budget": {
+    "max_model_calls": 10,
+    "max_tokens": 120000,
+    "model_calls_used": 0,
+    "tokens_used": 0
+  }
+}

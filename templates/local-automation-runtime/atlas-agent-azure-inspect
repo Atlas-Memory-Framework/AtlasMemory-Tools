@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Preview or inspect Azure Boards and Azure Repos without external mutations."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import pathlib
+import sys
+
+sys.dont_write_bytecode = True
+RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
+if str(RUNTIME_DIR) not in sys.path:
+    sys.path.insert(0, str(RUNTIME_DIR))
+
+from atlas_azure_devops import (AzureBoardsProvider, AzureDevOpsClient, AzureError,
+                               azure_cli_headers, numeric_issue_id, project_snapshot)
+from atlas_runtime_config import RuntimeConfigError, load_runtime_config, require_capability, validate_input_path
+
+
+def _read_json(path):
+    if path is None:
+        return None
+    try:
+        return json.loads(validate_input_path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise AzureError("Cannot read the supplied non-secret inspection JSON input.") from None
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, help="Explicit non-secret provider JSON configuration.")
+    parser.add_argument("--runtime-dir", help="Existing runtime directory within this identity; required for live reads.")
+    parser.add_argument("--ids", help="Comma-separated Azure work-item numbers or namespaced IDs.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--snapshot", help="Offline expanded Azure item snapshot; creates no files and performs no auth/network calls.")
+    mode.add_argument("--live-read", action="store_true", help="Read live Azure evidence using current-identity Azure CLI auth.")
+    mode.add_argument("--dry-run", action="store_true", help="Print the inert inspection plan (the default).")
+    parser.add_argument("--expected-manifest", help="Versioned full expected dependency graph, including unapproved edges.")
+    parser.add_argument("--supplement", help="Versioned exact dependency supplement; never assumed approved.")
+    parser.add_argument("--authority", help="Separately approved digest-pinned graph/authority packet; omitted by default.")
+    parser.add_argument("--build-ids", help="Optional comma-separated build IDs whose timelines must be read.")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON (also the default).")
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    try:
+        config = load_runtime_config(args.config, runtime_dir=args.runtime_dir, require_runtime=args.live_read)
+        if config.provider != "azure-devops":
+            raise AzureError("Azure inspection requires the explicit azure-devops provider.")
+        require_capability(config, "read")
+        repository = config.repository
+        manifest, supplement, authority = (_read_json(args.expected_manifest), _read_json(args.supplement), _read_json(args.authority))
+        requested = args.ids.split(",") if args.ids else list((manifest or {}).get("dependencies", {}))
+        ids = sorted({numeric_issue_id(repository["organization"], repository["project"], value.strip()) for value in requested})
+        if not ids:
+            raise AzureError("Provide explicit work-item IDs or a versioned dependency manifest.")
+        if args.snapshot:
+            report = project_snapshot(_read_json(args.snapshot), organization=repository["organization"],
+                                      project=repository["project"], expected_manifest=manifest,
+                                      supplement=supplement, authority=authority)
+            report["inspection_mode"] = "offline-snapshot"
+        elif args.live_read:
+            client = AzureDevOpsClient(repository["organization"], repository["project"], config.runtime_dir,
+                                       headers=azure_cli_headers(), capabilities={"read"})
+            provider = AzureBoardsProvider(client)
+            report = provider.inspect(ids, expected_manifest=manifest, supplement=supplement, authority=authority, fresh=True)
+            builds = [int(value) for value in args.build_ids.split(",")] if args.build_ids else []
+            report["repository_evidence"] = provider.repository_evidence(repository["name"],
+                base_branch="refs/heads/" + repository["base_branch"].removeprefix("refs/heads/"), build_ids=builds)
+            report["inspection_mode"] = "live-read-only"
+        else:
+            report = {"inspection_mode": "dry-run", "ids": ids, "eligible_count": 0,
+                      "complete": False, "dependency_complete": False,
+                      "blockers": ["inspection-not-executed", "execution-authority-not-established"],
+                      "effects": [], "planned_reads": ["expanded-work-item-closure", "fresh-revision-recheck",
+                          "repository", "base-ref", "pull-requests", "policies", "builds", "timelines"]}
+        report["effective_configuration"] = config.report()
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    except (AzureError, RuntimeConfigError) as error:
+        print(json.dumps({"error": str(error), "complete": False, "eligible_count": 0}), file=sys.stderr)
+        return 2
+    except (ValueError, TypeError, AttributeError):
+        # Remote bodies, input text and credential subprocess output are never echoed.
+        print(json.dumps({"error": "Azure inspection failed validation or could not complete; no mutation was attempted.",
+                          "complete": False, "eligible_count": 0}), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

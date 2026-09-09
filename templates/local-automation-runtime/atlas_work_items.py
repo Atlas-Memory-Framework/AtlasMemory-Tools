@@ -129,7 +129,35 @@ def unknown_or_equal(left: str, right: str) -> bool:
 def write_scopes_overlap(left: list[str], right: list[str]) -> bool:
     if not left or not right:
         return True
-    return bool(set(left) & set(right))
+
+    def prefix(scope: str) -> str:
+        # Globs reserve their entire fixed directory prefix. Ambiguous scopes
+        # reserve the repository rather than guessing they are disjoint.
+        if not scope or "\\" in scope or scope.startswith("/") or ".." in scope.split("/"):
+            return ""
+        parts = [part for part in scope.split("/") if part and part != "."]
+        fixed = []
+        for part in parts:
+            if any(char in part for char in "*?[{"):
+                break
+            fixed.append(part)
+        return "/".join(fixed)
+
+    for a in map(prefix, left):
+        for b in map(prefix, right):
+            if not a or not b or a == b or a.startswith(b + "/") or b.startswith(a + "/"):
+                return True
+    return False
+
+
+def is_azure_operation(source_id: str, metadata: dict[str, Any], execution_repo: str = "") -> bool:
+    provider = str(metadata.get("provider", "")).lower().replace("_", "-")
+    return (
+        source_id.lower().startswith(("azdo:", "azure:"))
+        or provider in {"azure-devops", "azure"}
+        or "dev.azure.com/" in execution_repo.lower()
+        or ".visualstudio.com/" in execution_repo.lower()
+    )
 
 
 def active_scope_conflict(item: dict[str, Any], active_item: dict[str, Any]) -> bool:
@@ -391,6 +419,10 @@ class AtlasWorkItemOperationProvider:
         )
 
     def blockers(self, item: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> list[str]:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        execution_repo, _, _ = scheduler_fields(item)
+        if is_azure_operation(item_id(item), {**item, **metadata}, execution_repo):
+            return ["Azure records require the Azure worker and its authority gates"]
         state = item_state(item)
         if state in ACTIVE_STATES:
             return ["already claimed"]
@@ -565,6 +597,11 @@ class LocalCommandOperationWorker:
         return atlas_workflows.load_agent_registry(self.agent_registry_path)
 
     def run(self, operation: OperationState, store_path: pathlib.Path) -> OperationResult:
+        if is_azure_operation(operation.source_id, operation.metadata, operation.execution_repo):
+            return OperationResult(
+                status="failed", returncode=2,
+                summary="Azure records require the Azure worker and its authority gates",
+            )
         job_id = now_rfc3339().replace(":", "").replace(".", "")
         job_dir = self.jobs_dir / f"atlas-work-item-{safe_id(operation.source_id)}-{job_id}"
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -574,13 +611,13 @@ class LocalCommandOperationWorker:
         role_results_path = job_dir / "team-role-results.json"
         if not self.command:
             return OperationResult(
-                status="done",
-                returncode=0,
-                summary="No local work-item command configured; claim recorded.",
+                status="failed",
+                returncode=2,
+                summary="No local work-item command configured; execution and acceptance are missing.",
                 evidence={
                     "job_dir": str(job_dir),
                     "operation_path": str(operation_path),
-                    "mode": "claim-only",
+                    "mode": "missing-command",
                     **workflow_evidence,
                 },
             )
@@ -605,20 +642,30 @@ class LocalCommandOperationWorker:
         if workflow_evidence.get("team_template"):
             env["ATLAS_TEAM_TEMPLATE"] = str(workflow_evidence["team_template"])
         start = time.monotonic()
-        proc = subprocess.run(
-            self.command,
-            cwd=str(job_dir),
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                self.command,
+                cwd=str(job_dir),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        except OSError:
+            return OperationResult(
+                status="failed", returncode=127,
+                summary="Local work-item command could not be started; acceptance is missing.",
+                evidence={"job_dir": str(job_dir), "operation_path": str(operation_path)},
+            )
         duration_ms = int((time.monotonic() - start) * 1000)
         output_path = job_dir / "worker-output.txt"
         output_path.write_text(proc.stdout or "", encoding="utf-8")
         workflow_evidence = self.apply_workflow_role_results(workflow_evidence, role_results_path)
         status = "done" if proc.returncode == 0 else "failed"
+        acceptance_missing = workflow_evidence.get("team_run_status") != "complete"
+        if acceptance_missing:
+            status = "failed"
         if workflow_evidence.get("team_run_status") == "running":
             if workflow_evidence.get("completed_roles"):
                 status = "ready"
@@ -635,7 +682,11 @@ class LocalCommandOperationWorker:
         return OperationResult(
             status=status,
             returncode=proc.returncode,
-            summary=(proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else "worker exited",
+            summary=(
+                "Worker exited without complete acceptance evidence"
+                if acceptance_missing else
+                ((proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else "worker exited")
+            ),
             evidence={
                 "job_dir": str(job_dir),
                 "operation_path": str(operation_path),
