@@ -43,6 +43,19 @@ STATE_CATEGORIES = {
 }
 
 
+def validate_task_branch(branch: Any) -> str:
+    """Accept only the runtime's two reviewed create-only task branch forms."""
+    if not isinstance(branch, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,180}", branch):
+        raise AzureError("An explicit safe task branch is required.")
+    if (".." in branch or "//" in branch or branch.endswith(("/", ".", ".lock"))
+            or any(part.startswith(".") for part in branch.split("/"))):
+        raise AzureError("Invalid task branch name.")
+    if not ((branch.startswith("feature/") and len(branch) > len("feature/"))
+            or (branch.startswith("develop-") and len(branch) > len("develop-"))):
+        raise AzureError("Only feature/ and develop-* task branches are permitted.")
+    return branch
+
+
 def timestamp(now: float | None = None) -> str:
     return datetime.fromtimestamp(time.time() if now is None else now, timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
@@ -302,11 +315,14 @@ class AzureDevOpsClient:
                 raise AzureError("Only creation of a draft pull request is permitted.")
             if push:
                 refs = data.get("refUpdates") if isinstance(data, dict) else None
-                if (not isinstance(refs, list) or len(refs) != 1
-                        or not str(refs[0].get("name", "")).startswith("refs/heads/feature/")
-                        or refs[0].get("oldObjectId") != "0" * 40
-                        or refs[0].get("newObjectId") == "0" * 40):
-                    raise AzureError("Only creation of a new feature branch is permitted.")
+                if not isinstance(refs, list) or len(refs) != 1:
+                    raise AzureError("Only creation of one task branch is permitted.")
+                ref_name = refs[0].get("name")
+                if not isinstance(ref_name, str) or not ref_name.startswith("refs/heads/"):
+                    raise AzureError("Only creation of one task branch is permitted.")
+                validate_task_branch(ref_name.removeprefix("refs/heads/"))
+                if refs[0].get("oldObjectId") != "0" * 40 or refs[0].get("newObjectId") == "0" * 40:
+                    raise AzureError("Only creation of a new task branch is permitted.")
         return writing
 
     def request(self, method: str, path: str, **kwargs) -> Any:

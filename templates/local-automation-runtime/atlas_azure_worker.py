@@ -26,7 +26,7 @@ from urllib.parse import quote
 import uuid
 
 from atlas_authority import AuthorityError, canonical_digest, verify_grant
-from atlas_azure_devops import AzureError
+from atlas_azure_devops import AzureError, validate_task_branch
 from atlas_runtime_config import (
     ROLES, RuntimeConfig, RuntimeConfigError, build_codex_command,
     load_runtime_config, require_capability, validate_input_path, validate_runtime_path,
@@ -136,8 +136,11 @@ def _safe_branch(branch: Any, *, feature: bool = False) -> str:
         raise WorkerBlocked("an explicit safe branch is required")
     if ".." in branch or "//" in branch or branch.endswith(("/", ".", ".lock")) or any(p.startswith(".") for p in branch.split("/")):
         raise WorkerBlocked("invalid branch name")
-    if feature and (not branch.startswith("feature/") or branch in {"main", "develop"}):
-        raise WorkerBlocked("publication and local work require a feature/ branch")
+    if feature:
+        try:
+            validate_task_branch(branch)
+        except AzureError as exc:
+            raise WorkerBlocked("publication and local work require a reviewed task branch") from exc
     return branch
 
 

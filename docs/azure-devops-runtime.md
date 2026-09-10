@@ -190,7 +190,7 @@ of reporting a completed preview.
 
 Prepare one reviewed worker packet with: schema version; namespaced `id` and
 current `revision`; exact `repository_url`, `base_branch`, `base_commit` and
-`feature/*` branch; reviewed `write_scope`; bounded task; role timeout; nonempty
+`feature/*` or `develop-*` task branch; reviewed `write_scope`; bounded task; role timeout; nonempty
 acceptance `commands` with IDs, argv and per-command timeout; and acceptance
 IDs mapped to command IDs and distinct JSON evidence filenames. Include the
 expected dependency manifest and its separate inspection authority.

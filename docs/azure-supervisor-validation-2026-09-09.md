@@ -219,3 +219,26 @@ does not establish what change should be made or what evidence accepts it.
 Live model assessment, worker dispatch, PR publication, Board changes,
 installation and issuer enrollment remain separate authorizations. The user
 retains the immediate staging blocker and all excluded release actions.
+
+## Develop task-branch compatibility candidate
+
+SR-02 adds `develop-*` task branches to the Azure DevOps adapter without
+widening protected refs or publication authority. The shared validator accepts
+only `feature/<nonempty>` and `develop-<nonempty>`. Existing safe-ref checks
+still reject `main`, `develop`, empty suffixes, traversal, colons/refspecs,
+double separators, hidden path components and `.lock` endings.
+
+Both the REST push boundary and worker push command use the shared validator.
+Pushes remain absent-ref compare-and-swap creations; existing-ref update or
+deletion, uncertain-write retry, non-draft PR creation and protected-branch
+publication remain blocked.
+
+The isolated `fix/develop-task-branches` candidate passed:
+
+- `python3 -m unittest discover -s templates/local-automation-runtime/tests -p 'test_azure_devops.py'`: 41 tests.
+- `python3 -m unittest discover -s templates/local-automation-runtime/tests -p 'test_azure_worker.py'`: 63 tests.
+- `python3 -m unittest discover -s templates/local-automation-runtime/tests`: 854 tests.
+- `git diff --check`.
+
+No runtime was installed, issuer enrolled, grant created, Website ref published
+or Azure DevOps item changed by this validation.
