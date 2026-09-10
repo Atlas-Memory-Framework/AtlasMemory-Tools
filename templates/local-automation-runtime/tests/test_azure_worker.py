@@ -576,9 +576,15 @@ class AzureWorkerTests(unittest.TestCase):
                      ["python3", "-c", "eval('untrusted')"], ["git", "push", "origin", "main"], ["npm", "test", "--add-dir", "/"]):
             with self.subTest(argv=argv), self.assertRaises(worker.WorkerBlocked):
                 worker.validate_command(argv)
-        for branch in ("main", "develop", "feature/../main", "feature/x:main", "+feature/x"):
+        for branch in ("main", "develop", "feature/", "develop-", "develop/x",
+                       "feature/../main", "feature/x:main", "+feature/x"):
             with self.subTest(branch=branch), self.assertRaises(worker.WorkerBlocked):
                 worker.create_only_push_command(self.workspace, HEAD, branch, URL)
+        for branch in ("feature/atlas-17", "develop-staging-sr04-evidence"):
+            with self.subTest(branch=branch):
+                command = worker.create_only_push_command(self.workspace, HEAD, branch, URL)
+                self.assertIn("--force-with-lease=refs/heads/" + branch + ":", command)
+                self.assertEqual(command[-1], HEAD + ":refs/heads/" + branch)
 
     def test_other_identity_and_model_environment_overrides_are_not_inherited(self):
         with mock.patch.dict(os.environ, {"CODEX_HOME": "/home/other/.codex"}):

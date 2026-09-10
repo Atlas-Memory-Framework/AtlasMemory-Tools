@@ -254,6 +254,40 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(opener.calls, [])
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_push_authorization_accepts_only_strict_create_only_task_branches(self):
+        for branch in ("feature/test", "develop-staging-sr04-evidence"):
+            with self.subTest(branch=branch):
+                client, opener = self.client([Response({})], capabilities={"read", "draft_pr"})
+                client.request(
+                    "POST",
+                    "_apis/git/repositories/Website/pushes",
+                    capability="draft_pr",
+                    data={"refUpdates": [{
+                        "name": "refs/heads/" + branch,
+                        "oldObjectId": "0" * 40,
+                        "newObjectId": "1" * 40,
+                    }]},
+                    before_write=lambda: None,
+                )
+                self.assertEqual(len(opener.calls), 1)
+        for branch in ("main", "develop", "feature/", "develop-", "develop/x", "develop-../main",
+                       "develop-x:main", "+develop-x", "feature/x//y"):
+            with self.subTest(branch=branch):
+                client, opener = self.client([], capabilities={"read", "draft_pr"})
+                with self.assertRaises(az.AzureError):
+                    client.request(
+                        "POST",
+                        "_apis/git/repositories/Website/pushes",
+                        capability="draft_pr",
+                        data={"refUpdates": [{
+                            "name": "refs/heads/" + branch,
+                            "oldObjectId": "0" * 40,
+                            "newObjectId": "1" * 40,
+                        }]},
+                        before_write=lambda: None,
+                    )
+                self.assertEqual(opener.calls, [])
+
     def test_pagination_continuation_and_skip_have_complete_explicit_queries(self):
         client, opener = self.client([Response({"count": 1, "value": [{"id": 1}]}, headers={"x-ms-continuationtoken": "abc"}),
                                      Response({"count": 1, "value": [{"id": 2}]})])
