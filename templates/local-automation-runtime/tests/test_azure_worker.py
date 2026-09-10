@@ -139,7 +139,7 @@ class FakeRunner:
                     raise subprocess.TimeoutExpired(argv, 120)
             return result
         if "--help" in argv:
-            result.stdout = "--sandbox --model --output-last-message --json --ephemeral --config --cd"
+            result.stdout = "--sandbox --model --output-last-message --json --ephemeral --permission-profile --config --cd"
             result.returncode = int(self.fail_help)
             return result
         if "--version" in argv:
@@ -376,6 +376,7 @@ class AzureWorkerTests(unittest.TestCase):
         self.assertEqual(len(validators), 1)
         argv, kwargs = validators[0]
         self.assertEqual(argv[argv.index("--") + 1:], self.packet["commands"][0]["argv"])
+        self.assertEqual(argv[2:4], ["--permission-profile", ":workspace"])
         self.assertIn("sandbox_workspace_write.writable_roots=[]", argv)
         self.assertIn("sandbox_workspace_write.network_access=false", argv)
         self.assertNotIn("shell", kwargs)

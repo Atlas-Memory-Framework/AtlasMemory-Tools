@@ -177,7 +177,8 @@ def validate_command(argv: Any) -> list[str]:
 
 
 def validator_command(workspace: Path, argv: list[str]) -> list[str]:
-    return ["codex", "sandbox", "-c", 'sandbox_mode="workspace-write"',
+    return ["codex", "sandbox", "--permission-profile", ":workspace",
+            "-c", 'sandbox_mode="workspace-write"',
             "-c", 'approval_policy="on-request"', "-c", "sandbox_workspace_write.network_access=false",
             "-c", "sandbox_workspace_write.writable_roots=[]", "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
             "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
@@ -565,7 +566,8 @@ class AzureWorker:
     def _cli_preflight(self, workspace: Path) -> dict[str, Any]:
         checks = [(["codex", "exec", "--ignore-user-config", "--help"],
                    ("--sandbox", "--model", "--output-last-message", "--json", "--ephemeral")),
-                  (validator_command(workspace, ["true"])[:-2] + ["--help"], ("--config", "--cd"))]
+                  (validator_command(workspace, ["true"])[:-2] + ["--help"],
+                   ("--permission-profile", "--config", "--cd"))]
         receipts = []
         for argv, expected in checks:
             result = self._run(argv, workspace, timeout=15)
