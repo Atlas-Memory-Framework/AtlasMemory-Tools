@@ -94,8 +94,11 @@ The worker appends its own bounded output-file location and sends the reviewed
 packet on stdin. Arbitrary command flags, profiles, `--add-dir`, user-config
 overrides and approval/sandbox bypasses are not configuration options. The
 worker sanitizes its process environment and rejects a different identity's
-Codex home. Acceptance commands run through the workspace-write Codex sandbox,
-with shell networking disabled. Do not substitute a model if the configured one
+Codex home. Acceptance commands run through `codex sandbox --permission-profile
+:workspace` with workspace-write semantics and shell networking disabled. The
+explicit built-in permission profile keeps current Codex CLI releases from
+silently selecting a different profile or rejecting the command before the
+validator starts. Do not substitute a model if the configured one
 is unavailable; report the blocker and obtain a reviewed configuration change.
 Previewing argv is not evidence that a live model call or sandbox canary passed.
 

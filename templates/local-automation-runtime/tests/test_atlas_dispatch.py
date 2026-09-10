@@ -80,7 +80,7 @@ class AssessmentRunner:
     def __call__(self, argv, **kwargs):
         self.calls.append((list(argv), kwargs))
         if "--help" in argv:
-            return types.SimpleNamespace(returncode=0, stdout="--sandbox --model --output-last-message --skip-git-repo-check --json --ephemeral --config --cd", stderr="")
+            return types.SimpleNamespace(returncode=0, stdout="--sandbox --model --output-last-message --skip-git-repo-check --json --ephemeral --permission-profile --config --cd", stderr="")
         if "--version" in argv:
             return types.SimpleNamespace(returncode=0, stdout="codex-cli 0.153.4\n", stderr="")
         if self.failure:
