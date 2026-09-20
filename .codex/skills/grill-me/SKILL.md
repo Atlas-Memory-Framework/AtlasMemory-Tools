@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/grill-me/SKILL.md manifest=atlas-tools.v1 checksum=sha256:ae3568e1f61db8d346b2bfddd9d522436fa487ec652ce6f715d1fe6c139ee651
+# atlas-tools-generated: source=skills/grill-me/SKILL.md manifest=atlas-tools.v1 checksum=sha256:d9a09aa74ddca05c7ca4d2a0c1b298e4547c3b16acda591ebb44770676781333
 # atlas-tools-generated-end
 name: grill-me
 description: Interactively uncover and resolve material product, design, scope, and technical decisions before planning or implementation. Use when the user explicitly asks to be grilled, interviewed, or challenged about what should be built.
@@ -36,7 +36,9 @@ Update it after each answer. Show a short checkpoint after a material scope chan
 
 ### Establish the current model
 
-Restate the intended outcome and inspect the available context. Separate:
+Restate the intended outcome and inspect the available context. First, identify whether this interview is being used alongside a named or clearly active workflow such as planning, situation modeling, or a technical review. Read the instructions for only those companion skills that materially affect the interview's inputs, decision criteria, constraints, or handoff. Use them to keep the interview compatible with that workflow; do not run their substantive workflow or expand this interview's read-only boundary.
+
+Separate:
 
 - facts answerable from the repository or existing evidence;
 - consequential decisions that belong to the user;
@@ -59,22 +61,24 @@ chance the answer changes the decision * cost of being wrong
 
 Do not invent numeric precision. Drop questions whose answers would not materially change the proposed specification.
 
-### Ask the highest-value question
+### Ask the highest-value round
 
-Ask one highest-value eligible question at a time unless the user requests a compact round and the questions are genuinely independent.
+Ask a small round of the highest-value eligible questions when they are genuinely independent: the answer to none changes how the others should be answered, framed, or prioritized. Prefer two to four questions in a round, grouped around one decision area and ordered by materiality. Keep each question easy to answer without re-reading a long questionnaire.
 
-For every question provide:
+Ask one question when it resolves a prerequisite, exposes a contradiction, carries unusually high consequence, or a batch would make the user's answer ambiguous. Honor a user's request for a slower one-question interview or a more compact round.
+
+For each question in a round provide:
 
 - why the answer matters;
 - the recommended answer and rationale;
 - the strongest viable alternative;
 - what changes depending on the answer.
 
-Challenge contradictions, unsupported must-haves, and unnecessary scope. When a smaller outcome satisfies the underlying need, recommend deleting the extra scope explicitly.
+Frame the round with its shared decision context. If alternatives or consequences are the same across questions, state them once rather than repeating boilerplate. Challenge contradictions, unsupported must-haves, and unnecessary scope. When a smaller outcome satisfies the underlying need, recommend deleting the extra scope explicitly.
 
 If the user delegates a reversible decision, take the recommended default and record it as an assumption. Preserve user authority over consequential product, policy, value, and risk decisions.
 
-After every answer, update the ledger, remove invalidated branches, recompute dependencies and materiality, and repeat from the highest-value eligible question.
+After every answer, update the ledger, remove invalidated branches, recompute dependencies and materiality, and repeat from the highest-value eligible round.
 
 ### Escalate uncertainty correctly
 

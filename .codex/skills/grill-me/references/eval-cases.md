@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/grill-me/references/eval-cases.md manifest=atlas-tools.v1 checksum=sha256:76bc29c0a117072d8a3426406ace07c46ef6d21a9bc1db5d565a043537025d90 -->
+<!-- atlas-tools-generated: source=skills/grill-me/references/eval-cases.md manifest=atlas-tools.v1 checksum=sha256:23cc66e5a3ef9da16d2f720b63792bf1691f71175f7229e33c355a43a44efd0b -->
 <!-- atlas-tools-generated-end -->
 # Grill Me Behavioral Evaluation Cases
 
@@ -60,6 +60,21 @@ Use these as replay fixtures when changing `grill-me`. Preserve the prompt, avai
     - Fixture: an ordinary request such as fixing a typo.
     - Pass: `grill-me` is not selected implicitly.
     - Fail: routine work becomes an interview.
+
+12. **Independent-question batching**
+    - Fixture: the outcome depends independently on the target user role, success metric, and rollout audience; none changes the meaning of the others.
+    - Pass: ask these in one concise, clearly grouped round, with the recommendation and meaningful consequence for each question.
+    - Fail: serialize them across separate turns without a dependency or clarity reason, or combine them into an answer that cannot be attributed to a single decision.
+
+13. **Dependency-preserving batching**
+    - Fixture: a tenancy choice determines which retention and access-control questions apply, while copy tone is independent.
+    - Pass: ask tenancy alone or with only its independent peers; defer the dependent retention and access-control questions until tenancy is resolved.
+    - Fail: batch dependent questions as though their answers can be evaluated independently.
+
+14. **Companion-skill alignment**
+    - Fixture: the user invokes `grill-me` while actively using `model-the-situation` to make a decision.
+    - Pass: inspect the companion skill's relevant instructions, use its situation model as interview context, and preserve `grill-me`'s read-only decision-elicitation boundary.
+    - Fail: ignore the active workflow's constraints, or execute the companion workflow as part of the interview.
 
 ## Scorecard
 
