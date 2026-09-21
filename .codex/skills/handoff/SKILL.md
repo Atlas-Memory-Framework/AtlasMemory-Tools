@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/handoff/SKILL.md manifest=atlas-tools.v1 checksum=sha256:c0defe704ff6cff44c61ea68140fd69d7d219949dacd7dbc4eea105ba5efe8d8
+# atlas-tools-generated: source=skills/handoff/SKILL.md manifest=atlas-tools.v1 checksum=sha256:8eec9f4c24c93ed5ae3df4b7348ca79e86403674bf5038f9a506ed0f4f009125
 # atlas-tools-generated-end
 name: handoff
 description: Create, resume from, or update focused handoff notes for AI coding sessions. Use when the user asks to hand off, save state, pause, resume from previous work, switch agents/tools, split out a side task, preserve decisions before context gets stale, or after substantial implementation/debugging/planning work that another fresh agent may need to continue.
@@ -8,6 +8,10 @@ description: Create, resume from, or update focused handoff notes for AI coding 
 # Handoff
 
 Create a compact, actionable context transfer so a fresh agent can continue work without re-reading the whole conversation or trusting stale memory.
+
+For a short everyday progress record or task reminder, use the available `checkpoint` skill. Use this skill when a receiving agent needs execution context, verification details, and resume instructions. For orientation without resuming execution, use `current-state` when available.
+
+If the project already has a work index, preserve its stable task IDs and authoritative links. When saving a handoff as part of a requested checkpoint, link it from the corresponding work entry rather than creating an independent task list. A handoff is evidence from its creation time, not proof of current task or runtime status.
 
 ## Modes
 
@@ -24,7 +28,7 @@ Create a compact, actionable context transfer so a fresh agent can continue work
    - For disposable cross-agent prompts or side quests, use `/tmp/YYYY-MM-DD-HHMM-[slug]-handoff.md` unless the user asks to keep it in the repo.
 4. Redact secrets, tokens, credentials, private keys, and unnecessary personal data.
 5. Validate manually before finalizing: no unresolved placeholders, referenced files exist when local, next steps are concrete, and decisions include rationale.
-6. Tell the user the handoff path, what it captures, and the first next action.
+6. Tell the user the handoff path, what it captures, and the first next action, including who acts and where. Explicitly say whether the user needs to act, an agent can continue, or work is waiting on a dependency.
 
 ## Resume Workflow
 
