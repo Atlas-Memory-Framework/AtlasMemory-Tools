@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.fixture-annotation-review.v0",
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "locator": {"type": "object", "additionalProperties": false, "required": ["turn_id", "start", "end", "text"], "properties": {"turn_id": {"type": "string", "minLength": 1}, "start": {"type": "integer", "minimum": 0}, "end": {"type": "integer", "minimum": 1}, "text": {"type": "string", "minLength": 1}}},
+    "identity": {"type": "object", "additionalProperties": false, "required": ["reviewer_id", "reviewer_kind", "reviewer_version", "assignment_id", "session_id"], "properties": {"reviewer_id": {"type": "string", "minLength": 1}, "reviewer_kind": {"type": "string", "enum": ["independent_agent", "independent_human", "adjudicator"]}, "reviewer_version": {"type": "string", "minLength": 1}, "assignment_id": {"type": "string", "minLength": 1}, "session_id": {"type": "string", "minLength": 1}}},
+    "classification": {"type": "object", "additionalProperties": false, "required": ["case_id", "unit_id", "actor", "expression_act", "stance", "modality", "evidence_status", "qualification_kind", "qualification_locator", "frame_origin", "response_requirement", "severity"], "properties": {"case_id": {"type": "string", "minLength": 1}, "unit_id": {"type": "string", "minLength": 1}, "actor": {"type": "string", "minLength": 1}, "expression_act": {"enum": ["assertion", "question", "request", "quotation", "counterfactual", "joke_hyperbole", "correction", "rejection", "uncertainty"]}, "stance": {"enum": ["endorsed", "rejected", "exploratory", "neutral", "uncertain", "requested"]}, "modality": {"enum": ["text", "audio", "video", "image", "structured_record", "tool_trace"]}, "evidence_status": {"enum": ["none", "self_report", "quoted_claim", "hypothesis", "observed", "corroborated", "agent_inference"]}, "qualification_kind": {"enum": ["none", "conditional", "epistemic", "degree", "temporal", "scope", "other"]}, "qualification_locator": {"oneOf": [{"$ref": "#/$defs/locator"}, {"type": "null"}]}, "frame_origin": {"enum": ["source_actor", "agent_added", "none"]}, "response_requirement": {"enum": ["must_address", "may_address", "must_not_attribute"]}, "severity": {"enum": ["minor", "major", "critical"]}}},
+    "inventory": {"type": "object", "additionalProperties": false, "required": ["case_id", "result", "missing_locator", "missing_dimension"], "properties": {"case_id": {"type": "string", "minLength": 1}, "result": {"enum": ["unit_inventory_complete", "material_unit_missing", "disputed"]}, "missing_locator": {"oneOf": [{"$ref": "#/$defs/locator"}, {"type": "null"}]}, "missing_dimension": {"type": ["string", "null"], "enum": [null, "actor", "expression_act", "stance", "modality", "evidence_status", "qualification", "frame_origin", "response_requirement", "severity", "proposition", "other_material_unit"]}}},
+    "proposition": {"type": "object", "additionalProperties": false, "required": ["case_id", "unit_id", "result"], "properties": {"case_id": {"type": "string", "minLength": 1}, "unit_id": {"type": "string", "minLength": 1}, "result": {"enum": ["source_faithful", "source_distorted", "invented_intent"]}}},
+    "policy": {"type": "object", "additionalProperties": false, "required": ["case_id", "unit_id", "response_requirement_result", "expected_advance_result", "forbidden_transformations_result"], "properties": {"case_id": {"type": "string", "minLength": 1}, "unit_id": {"type": "string", "minLength": 1}, "response_requirement_result": {"enum": ["appropriate", "disputed", "invented"]}, "expected_advance_result": {"enum": ["appropriate", "disputed", "invented"]}, "forbidden_transformations_result": {"enum": ["appropriate", "disputed", "invented"]}}},
+    "resolution": {"type": "object", "additionalProperties": false, "required": ["case_id", "unit_id", "field", "value"], "properties": {"case_id": {"type": "string", "minLength": 1}, "unit_id": {"type": "string", "minLength": 1}, "field": {"enum": ["actor", "expression_act", "stance", "modality", "evidence_status", "qualification_kind", "qualification_locator", "frame_origin", "response_requirement", "severity"]}, "value": {"type": ["string", "object", "null"]}}}
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "packet_kind", "stage", "identity", "corpus_hash", "case_schema_hash", "rubric_hash", "projection_hash", "prior_stage_packet_hash", "locked_at", "inventory_results", "classifications", "proposition_results", "policy_results", "adjudication_resolutions", "blind_to_candidate_labels", "blind_to_other_reviewers", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.fixture-annotation-review.v0"},
+    "packet_kind": {"enum": ["reviewer", "adjudicator"]},
+    "stage": {"enum": ["stage_a", "stage_b", "stage_c", "adjudication"]},
+    "identity": {"$ref": "#/$defs/identity"},
+    "corpus_hash": {"$ref": "#/$defs/hash"},
+    "case_schema_hash": {"$ref": "#/$defs/hash"},
+    "rubric_hash": {"$ref": "#/$defs/hash"},
+    "projection_hash": {"$ref": "#/$defs/hash"},
+    "prior_stage_packet_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "locked_at": {"type": "string", "format": "date-time"},
+    "inventory_results": {"type": "array", "items": {"$ref": "#/$defs/inventory"}},
+    "classifications": {"type": "array", "items": {"$ref": "#/$defs/classification"}},
+    "proposition_results": {"type": "array", "items": {"$ref": "#/$defs/proposition"}},
+    "policy_results": {"type": "array", "items": {"$ref": "#/$defs/policy"}},
+    "adjudication_resolutions": {"type": "array", "items": {"$ref": "#/$defs/resolution"}},
+    "blind_to_candidate_labels": {"type": "boolean"},
+    "blind_to_other_reviewers": {"const": true},
+    "authority_effect": {"const": "none"}
+  },
+  "allOf": [
+    {"if": {"properties": {"stage": {"const": "stage_a"}}}, "then": {"properties": {"prior_stage_packet_hash": {"type": "null"}, "inventory_results": {"minItems": 24}, "classifications": {"minItems": 1}, "proposition_results": {"maxItems": 0}, "policy_results": {"maxItems": 0}, "adjudication_resolutions": {"maxItems": 0}, "blind_to_candidate_labels": {"const": true}}}},
+    {"if": {"properties": {"stage": {"const": "stage_b"}}}, "then": {"properties": {"inventory_results": {"maxItems": 0}, "classifications": {"maxItems": 0}, "proposition_results": {"minItems": 1}, "policy_results": {"maxItems": 0}, "adjudication_resolutions": {"maxItems": 0}, "blind_to_candidate_labels": {"const": false}}}},
+    {"if": {"properties": {"stage": {"const": "stage_c"}}}, "then": {"properties": {"inventory_results": {"maxItems": 0}, "classifications": {"maxItems": 0}, "proposition_results": {"maxItems": 0}, "policy_results": {"minItems": 1}, "adjudication_resolutions": {"maxItems": 0}, "blind_to_candidate_labels": {"const": false}}}},
+    {"if": {"properties": {"stage": {"const": "adjudication"}}}, "then": {"properties": {"inventory_results": {"maxItems": 0}, "classifications": {"maxItems": 0}, "proposition_results": {"maxItems": 0}, "policy_results": {"maxItems": 0}, "adjudication_resolutions": {"minItems": 1}, "blind_to_candidate_labels": {"const": true}}}}
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.gold-label-review.v0",
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "packet_ref": {"type": "object", "additionalProperties": false, "required": ["reviewer_id", "assignment_id", "session_id", "packet_hash"], "properties": {"reviewer_id": {"type": "string", "minLength": 1}, "assignment_id": {"type": "string", "minLength": 1}, "session_id": {"type": "string", "minLength": 1}, "packet_hash": {"$ref": "#/$defs/hash"}}},
+    "disagreement": {"type": "object", "additionalProperties": false, "required": ["gold_id", "field", "reviewer_a_value", "reviewer_b_value", "critical_item", "resolution_source"], "properties": {"gold_id": {"type": "string", "minLength": 1}, "field": {"type": "string", "minLength": 1}, "reviewer_a_value": {}, "reviewer_b_value": {}, "critical_item": {"type": "boolean"}, "resolution_source": {"enum": ["none", "numeric_mean", "third_adjudicator"]}}}
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "packet_kind", "reviewer_id", "reviewer_kind", "reviewer_version", "assignment_id", "session_id", "locked_at", "case_corpus_hash", "case_schema_hash", "gold_hash", "semantic_grade_schema_hash", "rubric_hash", "dimension_manifest_hash", "grader_prompt_hash", "blind_to_gold_answers", "blind_to_other_reviewers", "disjoint_from_gold_author", "disjoint_from_live_graders", "grades", "reviewer_packets", "adjudicator_packets", "original_disagreements", "adjudicated_gold_ids", "pre_adjudication_overall_kappa", "resolved_gold_hash", "dimension_denominators_complete", "categorical_consensus_complete", "numeric_resolution_complete", "citation_validation_complete", "unresolved_disputes", "full_rereview_after_last_repair", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.gold-label-review.v0"},
+    "packet_kind": {"enum": ["reviewer", "adjudicator", "aggregate"]},
+    "reviewer_id": {"type": ["string", "null"]},
+    "reviewer_kind": {"type": ["string", "null"], "enum": [null, "independent_agent", "independent_human", "adjudicator"]},
+    "reviewer_version": {"type": ["string", "null"]},
+    "assignment_id": {"type": ["string", "null"]},
+    "session_id": {"type": ["string", "null"]},
+    "locked_at": {"type": "string", "format": "date-time"},
+    "case_corpus_hash": {"$ref": "#/$defs/hash"},
+    "case_schema_hash": {"$ref": "#/$defs/hash"},
+    "gold_hash": {"$ref": "#/$defs/hash"},
+    "semantic_grade_schema_hash": {"$ref": "#/$defs/hash"},
+    "rubric_hash": {"$ref": "#/$defs/hash"},
+    "dimension_manifest_hash": {"$ref": "#/$defs/hash"},
+    "grader_prompt_hash": {"$ref": "#/$defs/hash"},
+    "blind_to_gold_answers": {"type": "boolean"},
+    "blind_to_other_reviewers": {"type": "boolean"},
+    "disjoint_from_gold_author": {"type": "boolean"},
+    "disjoint_from_live_graders": {"type": "boolean"},
+    "grades": {"type": "array", "items": {"$ref": "semantic_grade.schema.json"}},
+    "reviewer_packets": {"type": "array", "items": {"$ref": "#/$defs/packet_ref"}},
+    "adjudicator_packets": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/packet_ref"}},
+    "original_disagreements": {"type": "array", "items": {"$ref": "#/$defs/disagreement"}},
+    "adjudicated_gold_ids": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "pre_adjudication_overall_kappa": {"type": ["number", "null"], "minimum": 0.8, "maximum": 1},
+    "resolved_gold_hash": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "dimension_denominators_complete": {"type": ["boolean", "null"]},
+    "categorical_consensus_complete": {"type": ["boolean", "null"]},
+    "numeric_resolution_complete": {"type": ["boolean", "null"]},
+    "citation_validation_complete": {"type": ["boolean", "null"]},
+    "unresolved_disputes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "full_rereview_after_last_repair": {"type": ["boolean", "null"]},
+    "authority_effect": {"const": "none"}
+  },
+  "allOf": [
+    {"if": {"properties": {"packet_kind": {"const": "reviewer"}}}, "then": {"properties": {"reviewer_id": {"type": "string", "minLength": 1}, "reviewer_kind": {"enum": ["independent_agent", "independent_human"]}, "reviewer_version": {"type": "string", "minLength": 1}, "assignment_id": {"type": "string", "minLength": 1}, "session_id": {"type": "string", "minLength": 1}, "blind_to_gold_answers": {"const": true}, "blind_to_other_reviewers": {"const": true}, "disjoint_from_gold_author": {"const": true}, "disjoint_from_live_graders": {"const": true}, "grades": {"minItems": 24, "maxItems": 24}, "reviewer_packets": {"maxItems": 0}, "adjudicator_packets": {"maxItems": 0}, "original_disagreements": {"maxItems": 0}, "adjudicated_gold_ids": {"maxItems": 0}, "pre_adjudication_overall_kappa": {"type": "null"}, "resolved_gold_hash": {"type": "null"}, "dimension_denominators_complete": {"type": "null"}, "categorical_consensus_complete": {"type": "null"}, "numeric_resolution_complete": {"type": "null"}, "citation_validation_complete": {"type": "null"}, "unresolved_disputes": {"maxItems": 0}, "full_rereview_after_last_repair": {"type": "null"}}}},
+    {"if": {"properties": {"packet_kind": {"const": "adjudicator"}}}, "then": {"properties": {"reviewer_kind": {"const": "adjudicator"}, "blind_to_gold_answers": {"const": true}, "blind_to_other_reviewers": {"const": true}, "disjoint_from_gold_author": {"const": true}, "disjoint_from_live_graders": {"const": true}, "grades": {"minItems": 1, "maxItems": 8}}}},
+    {"if": {"properties": {"packet_kind": {"const": "aggregate"}}}, "then": {"properties": {"reviewer_id": {"type": "null"}, "reviewer_kind": {"type": "null"}, "reviewer_version": {"type": "null"}, "assignment_id": {"type": "null"}, "session_id": {"type": "null"}, "blind_to_gold_answers": {"const": true}, "blind_to_other_reviewers": {"const": true}, "disjoint_from_gold_author": {"const": true}, "disjoint_from_live_graders": {"const": true}, "grades": {"maxItems": 0}, "reviewer_packets": {"minItems": 2, "maxItems": 2}, "pre_adjudication_overall_kappa": {"type": "number", "minimum": 0.8}, "resolved_gold_hash": {"$ref": "#/$defs/hash"}, "dimension_denominators_complete": {"const": true}, "categorical_consensus_complete": {"const": true}, "numeric_resolution_complete": {"const": true}, "citation_validation_complete": {"const": true}, "unresolved_disputes": {"maxItems": 0}, "full_rereview_after_last_repair": {"const": true}}}}
+  ]
+}

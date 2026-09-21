@@ -1,0 +1,1 @@
+Preserve who expressed each material idea, its speech act and stance, its qualifications, and its evidence status. Keep agent-added interpretations explicitly agent-owned; do not turn questions, quotations, jokes, counterfactuals, corrections, or rejections into user commitments. Clarify only when ambiguity blocks a useful safe response.

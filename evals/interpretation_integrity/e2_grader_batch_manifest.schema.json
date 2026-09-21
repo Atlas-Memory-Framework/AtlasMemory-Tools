@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.grader-batches.e2.v0",
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "arm": {"enum": ["compact-invariant", "procedural-skill"]},
+    "live_item": {"type": "object", "additionalProperties": false, "required": ["case_id", "arm", "repetition", "blind_alias"], "properties": {"case_id": {"type": "string", "minLength": 1}, "arm": {"$ref": "#/$defs/arm"}, "repetition": {"type": "integer", "minimum": 1, "maximum": 2}, "blind_alias": {"type": "string", "pattern": "^[0-9a-f]{16}$"}}},
+    "live_batch": {"type": "object", "additionalProperties": false, "required": ["batch_id", "reviewer_alias", "items"], "properties": {"batch_id": {"type": "string", "pattern": "^e2-"}, "reviewer_alias": {"enum": ["reviewer-a", "reviewer-b"]}, "items": {"type": "array", "minItems": 8, "maxItems": 8, "items": {"$ref": "#/$defs/live_item"}}}},
+    "gold_batch": {"type": "object", "additionalProperties": false, "required": ["batch_id", "reviewer_alias", "gold_ids"], "properties": {"batch_id": {"type": "string", "pattern": "^e2-gold-"}, "reviewer_alias": {"enum": ["reviewer-a", "reviewer-b"]}, "gold_ids": {"type": "array", "minItems": 8, "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^gold-[0-9]{3}$"}}}}
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "seed", "source_e1_manifest_hash", "admission_hash", "compact_invariant_hash", "procedural_skill_hash", "max_outputs_per_batch", "max_adjudicator_batches", "max_adjudicated_outputs", "artifact_hashes", "worker_schedule", "reviewer_batches", "gold_batches", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.grader-batches.e2.v0"},
+    "seed": {"const": 20260801},
+    "source_e1_manifest_hash": {"$ref": "#/$defs/hash"},
+    "admission_hash": {"$ref": "#/$defs/hash"},
+    "compact_invariant_hash": {"$ref": "#/$defs/hash"},
+    "procedural_skill_hash": {"$ref": "#/$defs/hash"},
+    "max_outputs_per_batch": {"const": 8},
+    "max_adjudicator_batches": {"const": 3},
+    "max_adjudicated_outputs": {"const": 24},
+    "artifact_hashes": {"type": "object", "additionalProperties": false, "required": ["corpus", "gold", "rubric", "grader_prompt", "dimension_manifest"], "properties": {"corpus": {"$ref": "#/$defs/hash"}, "gold": {"$ref": "#/$defs/hash"}, "rubric": {"$ref": "#/$defs/hash"}, "grader_prompt": {"$ref": "#/$defs/hash"}, "dimension_manifest": {"$ref": "#/$defs/hash"}}},
+    "worker_schedule": {"type": "array", "minItems": 96, "maxItems": 96, "items": {"type": "object", "additionalProperties": false, "required": ["position", "case_id", "arm", "repetition"], "properties": {"position": {"type": "integer", "minimum": 1, "maximum": 96}, "case_id": {"type": "string", "minLength": 1}, "arm": {"$ref": "#/$defs/arm"}, "repetition": {"type": "integer", "minimum": 1, "maximum": 2}}}},
+    "reviewer_batches": {"type": "array", "minItems": 24, "maxItems": 24, "items": {"$ref": "#/$defs/live_batch"}},
+    "gold_batches": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"$ref": "#/$defs/gold_batch"}},
+    "authority_effect": {"const": "none"}
+  }
+}

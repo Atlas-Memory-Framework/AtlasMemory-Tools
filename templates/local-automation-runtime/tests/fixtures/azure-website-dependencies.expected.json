@@ -1,0 +1,164 @@
+{
+  "applied_board_provenance": {
+    "affected_endpoints": 27,
+    "applied_predecessor_links": 53,
+    "note": "These recorded facts come from the existing applied receipt. This fixture performs no live read and grants no execution or mutation authority.",
+    "path": "Website/docs/devops/staging-production-board-applied-2026-09-08.md",
+    "prerequisite_edges_outside_authorization": 18,
+    "rollout_records": 21,
+    "verified_at": "2026-09-08T20:54:55Z"
+  },
+  "approval_status": "unapproved",
+  "dependencies": {
+    "azdo:Instablinds:Instablinds:132": [],
+    "azdo:Instablinds:Instablinds:134": [
+      "azdo:Instablinds:Instablinds:18",
+      "azdo:Instablinds:Instablinds:45",
+      "azdo:Instablinds:Instablinds:54"
+    ],
+    "azdo:Instablinds:Instablinds:135": [
+      "azdo:Instablinds:Instablinds:134",
+      "azdo:Instablinds:Instablinds:52"
+    ],
+    "azdo:Instablinds:Instablinds:140": [],
+    "azdo:Instablinds:Instablinds:141": [
+      "azdo:Instablinds:Instablinds:132",
+      "azdo:Instablinds:Instablinds:135"
+    ],
+    "azdo:Instablinds:Instablinds:16": [],
+    "azdo:Instablinds:Instablinds:17": [
+      "azdo:Instablinds:Instablinds:16"
+    ],
+    "azdo:Instablinds:Instablinds:18": [
+      "azdo:Instablinds:Instablinds:17"
+    ],
+    "azdo:Instablinds:Instablinds:19": [
+      "azdo:Instablinds:Instablinds:18"
+    ],
+    "azdo:Instablinds:Instablinds:21": [
+      "azdo:Instablinds:Instablinds:18",
+      "azdo:Instablinds:Instablinds:97"
+    ],
+    "azdo:Instablinds:Instablinds:22": [
+      "azdo:Instablinds:Instablinds:18",
+      "azdo:Instablinds:Instablinds:30",
+      "azdo:Instablinds:Instablinds:46"
+    ],
+    "azdo:Instablinds:Instablinds:24": [
+      "azdo:Instablinds:Instablinds:18"
+    ],
+    "azdo:Instablinds:Instablinds:26": [
+      "azdo:Instablinds:Instablinds:18",
+      "azdo:Instablinds:Instablinds:24",
+      "azdo:Instablinds:Instablinds:46"
+    ],
+    "azdo:Instablinds:Instablinds:28": [
+      "azdo:Instablinds:Instablinds:26"
+    ],
+    "azdo:Instablinds:Instablinds:30": [
+      "azdo:Instablinds:Instablinds:18",
+      "azdo:Instablinds:Instablinds:19"
+    ],
+    "azdo:Instablinds:Instablinds:32": [
+      "azdo:Instablinds:Instablinds:19",
+      "azdo:Instablinds:Instablinds:30"
+    ],
+    "azdo:Instablinds:Instablinds:33": [
+      "azdo:Instablinds:Instablinds:28"
+    ],
+    "azdo:Instablinds:Instablinds:34": [
+      "azdo:Instablinds:Instablinds:26",
+      "azdo:Instablinds:Instablinds:28",
+      "azdo:Instablinds:Instablinds:17"
+    ],
+    "azdo:Instablinds:Instablinds:35": [
+      "azdo:Instablinds:Instablinds:26",
+      "azdo:Instablinds:Instablinds:28",
+      "azdo:Instablinds:Instablinds:34"
+    ],
+    "azdo:Instablinds:Instablinds:36": [
+      "azdo:Instablinds:Instablinds:28",
+      "azdo:Instablinds:Instablinds:33"
+    ],
+    "azdo:Instablinds:Instablinds:37": [
+      "azdo:Instablinds:Instablinds:28",
+      "azdo:Instablinds:Instablinds:35",
+      "azdo:Instablinds:Instablinds:36"
+    ],
+    "azdo:Instablinds:Instablinds:38": [
+      "azdo:Instablinds:Instablinds:28",
+      "azdo:Instablinds:Instablinds:34",
+      "azdo:Instablinds:Instablinds:35",
+      "azdo:Instablinds:Instablinds:36",
+      "azdo:Instablinds:Instablinds:37"
+    ],
+    "azdo:Instablinds:Instablinds:39": [
+      "azdo:Instablinds:Instablinds:33",
+      "azdo:Instablinds:Instablinds:34",
+      "azdo:Instablinds:Instablinds:35",
+      "azdo:Instablinds:Instablinds:36",
+      "azdo:Instablinds:Instablinds:37",
+      "azdo:Instablinds:Instablinds:38",
+      "azdo:Instablinds:Instablinds:21"
+    ],
+    "azdo:Instablinds:Instablinds:40": [
+      "azdo:Instablinds:Instablinds:33",
+      "azdo:Instablinds:Instablinds:36",
+      "azdo:Instablinds:Instablinds:39"
+    ],
+    "azdo:Instablinds:Instablinds:41": [
+      "azdo:Instablinds:Instablinds:38",
+      "azdo:Instablinds:Instablinds:39",
+      "azdo:Instablinds:Instablinds:40"
+    ],
+    "azdo:Instablinds:Instablinds:42": [
+      "azdo:Instablinds:Instablinds:39",
+      "azdo:Instablinds:Instablinds:41"
+    ],
+    "azdo:Instablinds:Instablinds:43": [
+      "azdo:Instablinds:Instablinds:42",
+      "azdo:Instablinds:Instablinds:51",
+      "azdo:Instablinds:Instablinds:141",
+      "azdo:Instablinds:Instablinds:140"
+    ],
+    "azdo:Instablinds:Instablinds:44": [
+      "azdo:Instablinds:Instablinds:63"
+    ],
+    "azdo:Instablinds:Instablinds:45": [
+      "azdo:Instablinds:Instablinds:18"
+    ],
+    "azdo:Instablinds:Instablinds:46": [
+      "azdo:Instablinds:Instablinds:18",
+      "azdo:Instablinds:Instablinds:44",
+      "azdo:Instablinds:Instablinds:45"
+    ],
+    "azdo:Instablinds:Instablinds:51": [
+      "azdo:Instablinds:Instablinds:46",
+      "azdo:Instablinds:Instablinds:140"
+    ],
+    "azdo:Instablinds:Instablinds:52": [],
+    "azdo:Instablinds:Instablinds:54": [
+      "azdo:Instablinds:Instablinds:52"
+    ],
+    "azdo:Instablinds:Instablinds:61": [],
+    "azdo:Instablinds:Instablinds:62": [
+      "azdo:Instablinds:Instablinds:61"
+    ],
+    "azdo:Instablinds:Instablinds:63": [
+      "azdo:Instablinds:Instablinds:62"
+    ],
+    "azdo:Instablinds:Instablinds:97": [
+      "azdo:Instablinds:Instablinds:16"
+    ]
+  },
+  "execution_authorized": false,
+  "organization": "Instablinds",
+  "project": "Instablinds",
+  "purpose": "Expected 37-node, 71-edge graph for read-only comparison. The 18 unapplied prerequisite edges require separate authorization; this manifest grants none.",
+  "schema_version": 1,
+  "source_provenance": {
+    "note": "Historical pre-apply planning export supplied the full expected graph; it is not a current native-state snapshot.",
+    "path": "docs/devops/azure-boards-backlog-2026-09-05.json",
+    "sha256": "4171ccb409f4610febafc1cffda60469f5dc1cb3a9f1d2aaba797f28553d1cfb"
+  }
+}

@@ -1,0 +1,190 @@
+{
+  "arms": [
+    {
+      "arm_id": "baseline",
+      "intervention_hash": null,
+      "version": "v0"
+    },
+    {
+      "arm_id": "compact-invariant",
+      "intervention_hash": "sha256:84667ed25ebeec8556d266981d76602f4836f0258b58fb2e2e657efd7277a734",
+      "version": "v0"
+    }
+  ],
+  "artifact_hashes": {
+    "batch_manifest": "sha256:ab03816148a399dfecc58f9937f151e32d1b4fdca1efe1267bf93fce9bac1160",
+    "case_schema": "sha256:acd48279de802c10442c0a763e3fd27c74f476cc8882c19d2f088f240ea28a60",
+    "cases": "sha256:82ffd93e9386732762c729cf680b3251ff1b98e084540df8ddd3477164fa834f",
+    "common_prompt": "sha256:366a992a13dffab975e1102ef912e73772b2a5899194d51e176624f3cb16225b",
+    "compact_invariant": "sha256:84667ed25ebeec8556d266981d76602f4836f0258b58fb2e2e657efd7277a734",
+    "e2_grader_batch_manifest_schema": "sha256:c61121a91cb341c12b0609b0c275f40166d1f7629fbd547f0dd6fceeff3196ae",
+    "e3_cases": "sha256:7d5a333ed6b9f7662c66f03b55af5a3b3d5c3f4d0696ec033864389118af1839",
+    "evaluation_contract_schema": "sha256:d31544c6487a19276808b79d1c6015a1acc9e9e43872421446b2ccb12f250f2d",
+    "evidence_receipt_schema": "sha256:b3db9e1fd3a7d2b67e0ffe6a34ba40c270c0340609ac852fe614b8103b37ed18",
+    "fixture_label_review_schema": "sha256:c5e4bb7e347413762a2466095319552d9c630b58321f1acd2c773627f4a5a87f",
+    "fixture_annotation_review_schema": "sha256:f3f9d0aa058a753e28edbd61ba602b8308d8876514929f68575fc03d8c12dc7e",
+    "annotation_rubric": "sha256:6b2e48a899531d950e792cc6cd85b5f1d040ea0ad93898a1866330f4a53308dd",
+    "annotation_packet": "sha256:4aab310b1b5c6007dc7f525eeb7f0a4f8b4838d0936e8d0aa89f7feb7bf261fb",
+    "annotation_packet_schema": "sha256:ea3655024ea79af2af184ffc1ed7e94523fa5afad1730f607b69b0897dced1f3",
+    "gold": "sha256:10aaa37ec4d12d1f818bd2391183c0cd7080533eca51db2a84b0b202b04436e2",
+    "gold_label_review_schema": "sha256:972af0045283d87d590c8dd3630035a6707d0c8b96741d44aa967335eaffc44e",
+    "gold_dimension_manifest": "sha256:d016395d75a7eacaee9828ec2b19dbb69f25d35cf096d93ae6791c1a99cae071",
+    "grader_prompt": "sha256:a2d47bf922b2bc4bac695732dc068aafa3c1efaea385565dd2d662ad8c03303a",
+    "grader_batch_manifest_schema": "sha256:4fc5424030860570a2183a2e652da1dc9e35cd45e456b4a3a2f8480946792410",
+    "privacy_policy": "sha256:b8314db7e3223eab811065e8df079df1b49ac8ddc0cfda2076303ef7c1d61b4a",
+    "private_selection_schema": "sha256:edbd328af04522b583778912dcb00453c197e1c9a64cc46082ccf4f3df08eb76",
+    "private_crosswalk_schema": "sha256:e45c17f372fc6a6cbd93d2c1281bcca84c0682c617feaf88e8dcc4e191cbe923",
+    "private_derivation_manifest_schema": "sha256:2f5251b0cae9b9e8a16102193117c182cb638e70f040aa6b5ed884450e1ad157",
+    "private_reconstruction_packet_schema": "sha256:1cd599ffe018e55c4e2630eda2fabf1d0a94d24c81e16b20588c578cf8a0c569",
+    "private_review_assignment_schema": "sha256:64d4b8daf551cf5b429eb7f63eefac4993277f030e6bd8735542cc8f2f519d30",
+    "private_reconstruction_review_schema": "sha256:5b09144b9a1c021d2d850c2bd1bb20cd4ce023c2d668f411fdc0d59c563e9a5f",
+    "private_run_receipt_schema": "sha256:67eab7cd8d62ddf2e0b5326864dc7eec95e6b29691fd4d1678a437e4d97d9f7f",
+    "private_source_receipt_schema": "sha256:9138c685d11260a6066e289574b1818957d0d65f22d47c20846b0b8cf7449de7",
+    "run_state_schema": "sha256:a219f503835663a0478fb6afc761b8797d1f444d28316970bc26211b32960b78",
+    "scorecard_schema": "sha256:b17b4e63034a79996792c0370223e1a4239f2f967afd4e47909f2cede71ad7e4",
+    "semantic_grade_schema": "sha256:f8aa7ee4e9607c351f128bf3f718898005cf560192cb5a0deb4ddde6d21ad6b3",
+    "worker_output_schema": "sha256:b4831ee0074f552cb33d1501c3b25f55903ac0670d3325990568749b827cd52a"
+  },
+  "authority_effect": "none",
+  "budgets": {
+    "e1_logical_invocations": 131,
+    "e1_max_service_attempts": 262,
+    "grader_timeout_seconds": 600,
+    "input_tokens": 1000000,
+    "max_concurrent_attempts": 3,
+    "output_tokens": 250000,
+    "provider_retries": 1,
+    "response_words": 600,
+    "wall_seconds": 7200,
+    "worker_timeout_seconds": 300,
+    "continuous_loop_cycles": 6,
+    "continuous_loop_wall_seconds": 9000,
+    "e2_logical_invocations_no_reuse": 129,
+    "e2_max_service_attempts_no_reuse": 258,
+    "e2_logical_invocations_with_reuse": 123,
+    "e2_max_service_attempts_with_reuse": 246,
+    "e3_logical_invocations": 37,
+    "e3_max_service_attempts": 74,
+    "max_live_adjudicator_batches": 3,
+    "max_live_adjudicated_outputs": 24
+  },
+  "confirmatory_stub": {
+    "arms": 2,
+    "cases": 72,
+    "labels_present": false,
+    "outputs": 432,
+    "repetitions": 3,
+    "state": "blocked_missing_protected_worker_boundary"
+  },
+  "decision": "compare",
+  "development_design": {
+    "arms": 2,
+    "cases": 24,
+    "repetitions": 2,
+    "seed": 20260801,
+    "worker_outputs": 96
+  },
+  "eval_id": "interpretation-integrity-development-pilot-v0",
+  "invalidation_reasons": [
+    "tool_call",
+    "approval_request",
+    "undeclared_file_access",
+    "malformed_trace",
+    "unexpected_instruction_inventory",
+    "paired_arm_drift",
+    "protected_label_exposure",
+    "pair_start_skew",
+    "schema_violation",
+    "shared_state_contamination",
+    "budget_exhaustion"
+  ],
+  "non_claims": [
+    "not promotion eligible",
+    "not a protected holdout",
+    "not generalization evidence",
+    "not Atlas-native capability",
+    "not installation or deployment authority",
+    "not validated beyond text"
+  ],
+  "proof_class": "development_only",
+  "schema_version": "interpretation-integrity.evaluation-contract.v0",
+  "system": {
+    "adjudicator_reasoning": "high",
+    "authority_policy": "interpretation-integrity.privacy-policy.v0",
+    "code_ref": "1ccb244155e9e50533cf5dca187ace168212a25c",
+    "grader_model": "gpt-5.6-sol",
+    "grader_reasoning": "medium",
+    "tool_boundary": "codex-exec-ephemeral-ignore-config-read-only-no-tools-development",
+    "worker_model": "gpt-5.6-terra",
+    "worker_reasoning": "medium"
+  },
+  "terminal_dispositions": [
+    "development_candidate_pass",
+    "behaviorally_acceptable_no_incremental_evidence",
+    "candidate_fail",
+    "evaluation_inconclusive",
+    "operationally_blocked"
+  ],
+  "thresholds": {
+    "absolute_reduction": 0.125,
+    "actor_fidelity": 0.98,
+    "clarification_recall": 0.9,
+    "gold_accuracy": 0.9,
+    "gold_critical_recall": 1.0,
+    "gold_false_critical_rate": 0.05,
+    "invalid_pair_rate": 0.1,
+    "median_word_ratio": 1.25,
+    "must_address": 0.9,
+    "net_corrected_cases": 3,
+    "other_fidelity": 0.95,
+    "p90_word_ratio": 1.5,
+    "relative_reduction": 0.25,
+    "reviewer_kappa": 0.75,
+    "unnecessary_blocking": 0.05,
+    "utility_lower_bound": -0.25,
+    "fixture_reviewer_kappa": 0.8,
+    "gold_reviewer_kappa": 0.8,
+    "direct_completion_max_drop": 0.03,
+    "unnecessary_blocking_max_baseline_increase": 0.02
+  },
+  "gates": {
+    "fixture_label_review": {
+      "independent_reviewers": 2,
+      "full_case_count": 24,
+      "pooled_noncritical_kappa_minimum": 0.8,
+      "max_noncritical_adjudicated_cases": 8,
+      "critical_disagreements_allowed": 0,
+      "unresolved_fields_allowed": 0,
+      "post_output_relabeling_allowed": false
+    },
+    "gold_label_review": {
+      "independent_reviewers": 2,
+      "gold_count": 24,
+      "overall_correct_minimum": 22,
+      "critical_recall_required": 8,
+      "noncritical_false_critical_allowed": 0,
+      "pre_adjudication_kappa_minimum": 0.8,
+      "max_adjudicated_items": 8,
+      "critical_overall_mismatches_allowed": 0
+    },
+    "live_grading": {
+      "independent_reviewers": 2,
+      "pre_adjudication_kappa_minimum": 0.75,
+      "max_adjudicated_outputs": 24,
+      "max_adjudicator_batches": 3,
+      "personal_intent_adjudication_allowed": false
+    },
+    "e2_admission": {
+      "requires_complete_e1_scorecard": true,
+      "requires_material_cited_failure": true,
+      "requires_procedural_hypothesis": true
+    }
+  },
+  "formulas": {
+    "complete_collection_digest": "sha256(canonical_json(sorted schedule-derived membership tuples plus validated packet sha256))",
+    "fixture_kappa_order": "case_id,unit_id,field; field-prefixed values; exclude units critical by either reviewer",
+    "word_burden": "case medians by arm; 24 case ratios; median and nearest-rank p90 at sorted position 22; both-zero=1; positive-variant/zero-baseline=string sentinel infinite and fails; nonfinite JSON forbidden",
+    "primary_incremental_rule": "net_corrected_cases>=3 and absolute_reduction>=0.125 and relative_reduction>=0.25 and paired_bootstrap_90_lower>0",
+    "terminal_precedence": "deterministic critical failure; resolved matching/adjudicated unit judgments; unresolved required or critical disagreement invalidates pair"
+  }
+}

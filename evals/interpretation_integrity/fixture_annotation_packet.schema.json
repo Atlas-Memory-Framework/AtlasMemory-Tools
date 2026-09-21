@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "interpretation-integrity.fixture-annotation-packet.v0",
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "turn": {"type": "object", "additionalProperties": false, "required": ["turn_id", "actor", "role", "text"], "properties": {"turn_id": {"type": "string", "minLength": 1}, "actor": {"type": "string", "minLength": 1}, "role": {"enum": ["user", "assistant"]}, "text": {"type": "string", "minLength": 1}}},
+    "locator": {"type": "object", "additionalProperties": false, "required": ["turn_id", "start", "end", "text"], "properties": {"turn_id": {"type": "string", "minLength": 1}, "start": {"type": "integer", "minimum": 0}, "end": {"type": "integer", "minimum": 1}, "text": {"type": "string", "minLength": 1}}},
+    "stage_a_unit": {"type": "object", "additionalProperties": false, "required": ["unit_id", "source_locator"], "properties": {"unit_id": {"type": "string", "minLength": 1}, "source_locator": {"$ref": "#/$defs/locator"}}},
+    "stage_a_case": {"type": "object", "additionalProperties": false, "required": ["case_id", "conversation", "target_turn_id", "units"], "properties": {"case_id": {"type": "string", "minLength": 1}, "conversation": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/turn"}}, "target_turn_id": {"type": "string", "minLength": 1}, "units": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stage_a_unit"}}}},
+    "stage_b_unit": {"type": "object", "additionalProperties": false, "required": ["case_id", "unit_id", "proposition"], "properties": {"case_id": {"type": "string", "minLength": 1}, "unit_id": {"type": "string", "minLength": 1}, "proposition": {"type": "string", "minLength": 1}}},
+    "response_requirement": {"type": "object", "additionalProperties": false, "required": ["unit_id", "response_requirement"], "properties": {"unit_id": {"type": "string", "minLength": 1}, "response_requirement": {"enum": ["must_address", "may_address", "must_not_attribute"]}}},
+    "expected_advance": {"type": "object", "additionalProperties": false, "required": ["kind", "description"], "properties": {"kind": {"enum": ["answer", "clarify", "acknowledge_and_answer", "safety_response"]}, "description": {"type": "string", "minLength": 1}}},
+    "transformation": {"type": "object", "additionalProperties": false, "required": ["unit_id", "kind", "rationale"], "properties": {"unit_id": {"type": "string", "minLength": 1}, "kind": {"enum": ["actor_attribution_error", "polarity_inversion", "hypothetical_to_commitment", "quotation_to_commitment", "qualification_loss", "evidence_upgrade", "authority_expansion", "imported_frame_attribution", "correction_laundering", "safety_dismissal", "unsupported_modality_claim", "identity_collapse"]}, "rationale": {"type": "string", "minLength": 1}}},
+    "stage_c_case": {"type": "object", "additionalProperties": false, "required": ["case_id", "response_requirements", "expected_advance", "forbidden_transformations"], "properties": {"case_id": {"type": "string", "minLength": 1}, "response_requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/response_requirement"}}, "expected_advance": {"$ref": "#/$defs/expected_advance"}, "forbidden_transformations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/transformation"}}}}
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "packet_id", "corpus_hash", "case_schema_hash", "rubric_hash", "release_order", "stage_a", "stage_b", "stage_c", "candidate_labels_exposed_in_stage_a", "authority_effect"],
+  "properties": {
+    "schema_version": {"const": "interpretation-integrity.fixture-annotation-packet.v0"},
+    "packet_id": {"const": "fixture-annotation-packet-v0"},
+    "corpus_hash": {"$ref": "#/$defs/hash"}, "case_schema_hash": {"$ref": "#/$defs/hash"}, "rubric_hash": {"$ref": "#/$defs/hash"},
+    "release_order": {"const": ["stage_a", "stage_b", "stage_c"]},
+    "stage_a": {"type": "object", "additionalProperties": false, "required": ["release_condition", "cases"], "properties": {"release_condition": {"const": "initial"}, "cases": {"type": "array", "minItems": 24, "maxItems": 24, "items": {"$ref": "#/$defs/stage_a_case"}}}},
+    "stage_b": {"type": "object", "additionalProperties": false, "required": ["release_condition", "units"], "properties": {"release_condition": {"const": "both_stage_a_outputs_locked"}, "units": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/stage_b_unit"}}}},
+    "stage_c": {"type": "object", "additionalProperties": false, "required": ["release_condition", "cases"], "properties": {"release_condition": {"const": "both_stage_b_outputs_locked"}, "cases": {"type": "array", "minItems": 24, "maxItems": 24, "items": {"$ref": "#/$defs/stage_c_case"}}}},
+    "candidate_labels_exposed_in_stage_a": {"const": false},
+    "authority_effect": {"const": "none"}
+  }
+}
