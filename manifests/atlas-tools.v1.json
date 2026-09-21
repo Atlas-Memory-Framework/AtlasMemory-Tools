@@ -4,6 +4,10 @@
   "description": "Canonical inventory for AtlasMemory Tools skills, agents, templates, aliases, and harness adapter targets.",
   "skills": [
     {
+      "name": "action-plan",
+      "path": "skills/action-plan"
+    },
+    {
       "name": "agent-harness-evals",
       "path": "skills/agent-harness-evals"
     },
@@ -12,12 +16,24 @@
       "path": "skills/automation-decomposition"
     },
     {
+      "name": "checkpoint",
+      "path": "skills/checkpoint"
+    },
+    {
       "name": "continuous-agent-loop",
       "path": "skills/continuous-agent-loop"
     },
     {
       "name": "critical-ideation",
       "path": "skills/critical-ideation"
+    },
+    {
+      "name": "current-state",
+      "path": "skills/current-state"
+    },
+    {
+      "name": "decision-brief",
+      "path": "skills/decision-brief"
     },
     {
       "name": "github-project",
@@ -108,8 +124,28 @@
       "path": "skills/review"
     },
     {
+      "name": "review-open-loops",
+      "path": "skills/review-open-loops"
+    },
+    {
+      "name": "start-day",
+      "path": "skills/start-day"
+    },
+    {
+      "name": "systems-map",
+      "path": "skills/systems-map"
+    },
+    {
       "name": "technical-planning",
       "path": "skills/technical-planning"
+    },
+    {
+      "name": "track-work",
+      "path": "skills/track-work"
+    },
+    {
+      "name": "wrap-up",
+      "path": "skills/wrap-up"
     }
   ],
   "agents": [

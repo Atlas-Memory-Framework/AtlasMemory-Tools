@@ -6,7 +6,7 @@ AtlasMemory Tools is the canonical planning, issue projection, and local issue-t
 
 It owns four surfaces:
 
-- `skills/`: workflow contracts for situation modeling, agent harness evaluation, planning, review, implementation, continuous agent loops, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
+- `skills/`: workflow contracts for everyday work continuity, situation modeling, agent harness evaluation, planning, review, implementation, continuous agent loops, issue projection, runtime setup/operation/upgrade, handoffs, and HTML plan review artifacts
 - `agents/`: reusable specialist role rubrics for planning, implementation, review, validation, data, infra, processing, and testing
 - `templates/local-automation-runtime/`: reusable local automation host with separate GitHub and bounded Azure providers
 - `manifests/atlas-tools.v1.json`: supported harness adapters, canonical skills, agents, templates, and generated-copy inventory
@@ -69,6 +69,20 @@ The verifier also checks committed Codex harness freshness, adapter CLI generati
 `--strict-copy` is intentionally noisy in a dirty local tree; runtime-local files such as `config.env`, `repos.txt`, `projects.txt`, validation JSON, `.venv/`, caches, and generated job state must be excluded from raw copies.
 
 ## Quick Start
+
+For everyday orientation and continuity:
+
+- `$start-day` and `$wrap-up`: choose a manageable starting set and save a dependable stopping point.
+- `$current-state`: show open work, blockers, decisions, source freshness, and the recommended first action.
+- `$checkpoint`: save progress and open items, including where work is happening and how to resume.
+- `$action-plan`: turn a response or situation into concrete next actions with owners, locations, and completion conditions.
+- `$track-work` and `$systems-map`: maintain task records and identify where work happens.
+- `$review-open-loops`: find stalled commitments, unanswered questions, and follow-ups needing attention.
+- `$decision-brief`: compare a concrete choice and explain what each option would trigger.
+
+These skills share project work records and preserve links to existing task authorities. Use `$start-day` when returning and `$wrap-up` when stopping; use `$checkpoint` for a save at any point. They also work with incomplete context and explicitly report coverage gaps. See [Everyday workflows](docs/everyday-workflows.md) for examples and storage conventions.
+
+For planning and execution:
 
 1. Use `grill-me` explicitly when the real design or scope is still in your head. It inspects available context, resolves material decisions, challenges unnecessary scope, and stops before writing or implementation.
 2. Use `plan` to formalize the approved decision record, or start directly with a feature idea or existing plan file.
@@ -179,6 +193,7 @@ See `templates/local-automation-runtime/README.md` and `templates/local-automati
 
 ## Documentation Map
 
+- `docs/everyday-workflows.md`: current-state briefings, checkpoints, action plans, and shared work records
 - `docs/source-of-truth.md`: canonical source and generated-copy workflow
 - `docs/interpretation-integrity-development.md`: development evaluation harness, private-source boundaries and qualification limits
 - `docs/automation-runtime-operational-layer.md`: operational model for runtime hosts and GitHub state
