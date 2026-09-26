@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/handoff/SKILL.md manifest=atlas-tools.v1 checksum=sha256:8eec9f4c24c93ed5ae3df4b7348ca79e86403674bf5038f9a506ed0f4f009125
+# atlas-tools-generated: source=skills/handoff/SKILL.md manifest=atlas-tools.v1 checksum=sha256:a72bff020887f3a0466c8e3518408e977f0fa096342037ad44f4617cb39a7bab
 # atlas-tools-generated-end
 name: handoff
 description: Create, resume from, or update focused handoff notes for AI coding sessions. Use when the user asks to hand off, save state, pause, resume from previous work, switch agents/tools, split out a side task, preserve decisions before context gets stale, or after substantial implementation/debugging/planning work that another fresh agent may need to continue.
@@ -19,16 +19,18 @@ If the project already has a work index, preserve its stable task IDs and author
 - **Resume**: user asks to resume from a handoff, load saved context, continue previous work, or references a handoff file.
 - **Update**: current work extends an existing handoff and the next agent needs the newest state.
 
+For every **Create** or **Update**, the required user-facing deliverable is a paste-ready prompt for the receiving session. Follow the output and brevity rules in the available `draft-copy-paste-prompt` skill; do not silently substitute a saved handoff note, a status summary, or an offer to draft the prompt later. A durable handoff note is an additional artifact when the user asks to save/preserve state or the work needs a persistent record. When one is created, the prompt must point the next agent to that exact note and its first action. If no note is needed, make the prompt self-contained from inspected project state. Do not create a prompt in **Resume** mode unless the user asks to hand work onward again.
+
 ## Create Workflow
 
 1. Identify the receiving session's purpose. If it is unclear and affects scope, ask one concise question; otherwise infer it from the active task.
 2. Inspect durable state before writing: current directory, git branch/status, changed files, recent commits when useful, relevant plan/issues/PRs, and files already known to matter.
-3. Write the smallest useful handoff:
+3. If a persistent record is requested or needed, write the smallest useful handoff:
    - For durable project continuity, save to `.codex/handoffs/YYYY-MM-DD-HHMM-[slug].md`.
-   - For disposable cross-agent prompts or side quests, use `/tmp/YYYY-MM-DD-HHMM-[slug]-handoff.md` unless the user asks to keep it in the repo.
-4. Redact secrets, tokens, credentials, private keys, and unnecessary personal data.
-5. Validate manually before finalizing: no unresolved placeholders, referenced files exist when local, next steps are concrete, and decisions include rationale.
-6. Tell the user the handoff path, what it captures, and the first next action, including who acts and where. Explicitly say whether the user needs to act, an agent can continue, or work is waiting on a dependency.
+   - For a disposable handoff artifact or side quest, use `/tmp/YYYY-MM-DD-HHMM-[slug]-handoff.md` unless the user asks to keep it in the repo.
+4. Draft the receiving-session prompt as the primary deliverable. Make it directly pasteable, include the exact repo/path and first concrete action, and link any durable note created above. Follow `draft-copy-paste-prompt`'s output rules; include the prompt in the response rather than only saving it to a file.
+5. Redact secrets, tokens, credentials, private keys, and unnecessary personal data from both artifacts.
+6. Validate manually: no unresolved placeholders, referenced local files exist, next steps are concrete, and decisions include rationale. Tell the user where any durable note was saved and whether the receiving agent can proceed or is waiting on a dependency.
 
 ## Resume Workflow
 
@@ -37,6 +39,7 @@ If the project already has a work index, preserve its stable task IDs and author
 3. If the handoff links a predecessor, read only the older handoff sections needed to resolve ambiguity.
 4. Start from the first actionable next step unless the user redirects.
 5. If work diverges materially, update the handoff or create a chained successor.
+6. If the user asks to transfer the resumed work onward, use the Create/Update requirement above and include a new paste-ready prompt.
 
 ## What To Capture
 
