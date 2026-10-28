@@ -193,6 +193,9 @@ See `templates/local-automation-runtime/README.md` and `templates/local-automati
 
 ## Documentation Map
 
+- `docs/daily-development.md`: supervised daily development commands, task sizing, review and recovery
+- `docs/task-scoping.md`: connect broad intent to a specific outcome, capability and bounded change or discovery
+
 - `docs/everyday-workflows.md`: current-state briefings, checkpoints, action plans, and shared work records
 - `docs/source-of-truth.md`: canonical source and generated-copy workflow
 - `docs/interpretation-integrity-development.md`: development evaluation harness, private-source boundaries and qualification limits

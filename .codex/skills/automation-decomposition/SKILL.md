@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:7cf9e7095381e3104244a867c4944f5e73c50ede40eaa79cba9bc4a1ebccf2dc
+# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:342609c6c9e1e28de5652eaa710b316d55bd263bf86508000496ba49525e9e55
 # atlas-tools-generated-end
 name: automation-decomposition
 description: Produce the Automation Issue Manifest for /plan when a plan must project into bounded issues or unattended issue-to-PR execution. Use after implementation planning and before planning reviews when AutomationTarget is not none.
@@ -50,7 +50,7 @@ Each leaf issue must include:
 - dependencies that resolve to other leaf issue ids, or external/manual blockers with owner and status
 - required gate ids that exist in the implementation plan and define where/entrypoint/green means
 - acceptance criteria that are executable by command or evidence artifact
-- one-PR contract and source plan sections
+- one-PR contract and source plan sections, preserving the link from the intended outcome and needed capability to the bounded change or discovery
 - scheduler metadata for local automation: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, and validation tier; use `none` only when the field is not applicable
 - sidecar metadata when the leaf needs depth beyond the inline manifest. Use `Spec: sidecar`, `Spec path`, `Spec hash`, `Spec source id`, and `Depth contract`; use `Spec: inline` only when the manifest leaf itself is self-contained.
 
@@ -63,9 +63,10 @@ Allowed dispatch modes:
 ## Risk to dispatch policy
 Convert risk into execution boundaries. Examples:
 - live commerce/payment/checkout, secrets, auth, webhooks, migrations, infra/deploy, public API contracts, data deletion, compliance, or customer-impacting changes default to `manual-review` or `blocked`.
-- uncertain vendor/API behavior becomes a spike leaf issue before production wiring.
+- uncertain vendor/API behavior or a decision needed to implement the intended outcome becomes a bounded spike before dependent production wiring. State the question, evidence to gather, and resulting decision; a completed spike does not itself prove delivered behavior.
 - no frontend or mutation wiring should depend on a risky backend integration until the spike/contract issue closes.
-- merge/integration work must be represented as a leaf issue when it requires code changes or validation beyond tracking.
+- merge/integration work must be represented as a leaf issue when it requires code changes or validation beyond tracking. Identify who owns evidence that the combined work achieves the parent outcome across relevant boundaries, or record the owner and blocker for evidence still missing.
+- Fit the model to the reasoning, uncertainty, coupling, and risk of the work, not file count alone. Use Luna by default for bounded work; use Sol or Terra for sizing, review, or a coherent implementation task when its difficulty warrants it. This choice does not change existing dispatch or approval policy.
 
 ## Validation checklist
 Return `Fail` unless:
@@ -73,6 +74,7 @@ Return `Fail` unless:
 - every dependency resolves to a leaf id, structured external blocker, or structured manual blocker
 - no `G-*`, `MP*`, `DR-*`, `A*`, or `R*` token is used as a dependency unless wrapped as a structured blocker
 - every gate is defined and attached to at least one leaf issue
+- leaf completion and isolated checks are not treated as proof of the parent outcome without relevant integration evidence or an explicit owner and blocker for missing evidence
 - every `agent-ready` issue has bounded write scope, validation command/evidence, dispatch mode, and one-PR contract
 - every `agent-ready` issue has explicit scheduler metadata, with `Blocks: none` when it does not unblock another leaf or issue
 - no `agent-ready` issue exceeds a reasonable budget: more than one repo, broad cross-cutting file ownership, unclear risk, or no focused acceptance criteria

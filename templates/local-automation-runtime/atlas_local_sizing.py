@@ -17,6 +17,10 @@ from typing import Any
 
 POLICY_ID = "local-luna-unit-v1"
 POLICY_VERSION = 1
+REVIEWED_POLICY_ID = "local-reviewed-unit-v2"
+REVIEWED_FIELDS = {"implementation_model", "review_model", "sizing_review"}
+IMPLEMENTATION_MODELS = {"gpt-6-luna": "medium", "gpt-6.1-sol": "high", "gpt-6.1-terra": "high"}
+REVIEW_MODELS = {"gpt-6.1-sol": "high", "gpt-6.1-terra": "high"}
 CONTRACT_FIELDS = {
     "policy_id",
     "role_purposes",
@@ -131,6 +135,48 @@ REVIEWED_SUPERVISOR_PACKETS_V1 = MappingProxyType({
         "review_evidence": _SUPERVISOR_EVIDENCE,
     }),
 })
+
+
+def sizing_subject_sha256(context: dict[str, Any]) -> str:
+    """Hash the complete context except sizing_review; this is not a signature."""
+    if not isinstance(context, dict) or not isinstance(context.get("local_execution_v1"), dict):
+        raise ValueError("work-item context and local_execution_v1 must be objects")
+    subject = dict(context)
+    contract = dict(context["local_execution_v1"])
+    contract.pop("sizing_review", None)
+    subject["local_execution_v1"] = contract
+    try:
+        encoded = json.dumps(subject, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("work-item context must be canonical JSON") from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_sizing_review(context: dict[str, Any], contract: dict[str, Any],
+                            reasons: list[str]) -> None:
+    for field, models in (("implementation_model", IMPLEMENTATION_MODELS),
+                          ("review_model", REVIEW_MODELS)):
+        value = contract.get(field)
+        if not isinstance(value, str) or value not in models:
+            reasons.append(f"{field} must select a supported model")
+    review = contract.get("sizing_review")
+    if not isinstance(review, dict) or set(review) != {"reviewer", "rationale", "subject_sha256"}:
+        reasons.append("sizing_review must contain exactly reviewer, rationale, and subject_sha256")
+        return
+    for field in ("reviewer", "rationale"):
+        value = review[field]
+        if not isinstance(value, str) or not value.strip():
+            reasons.append(f"sizing_review {field} must be a nonblank string")
+        elif field == "rationale" and len(value.strip()) < 12:
+            reasons.append("sizing_review rationale must describe the task-specific sizing decision")
+    try:
+        digest = sizing_subject_sha256(context)
+    except ValueError:
+        reasons.append("sizing_review subject must be canonical JSON")
+        return
+    if not isinstance(review["subject_sha256"], str) or review["subject_sha256"] != digest:
+        reasons.append("sizing_review subject_sha256 does not match the work-item context")
 
 
 def _reviewed_supervisor_packet(context: dict[str, Any]) -> tuple[Any, bool]:
@@ -254,14 +300,19 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
     if reviewed_packet is not None and not reviewed_match:
         reasons.append("reviewed supervisor packet context does not match its frozen metadata")
 
-    unknown = sorted((str(key) for key in set(contract).difference(CONTRACT_FIELDS)))
-    missing = sorted(CONTRACT_FIELDS.difference(contract))
+    policy = contract.get("policy_id")
+    is_v2 = policy == REVIEWED_POLICY_ID
+    fields = CONTRACT_FIELDS | REVIEWED_FIELDS if is_v2 else CONTRACT_FIELDS
+    unknown = sorted((str(key) for key in set(contract).difference(fields)))
+    missing = sorted(fields.difference(contract))
     if unknown:
         reasons.append("unknown local_execution_v1 field(s): " + ", ".join(str(key) for key in unknown))
     if missing:
         reasons.append("missing local_execution_v1 field(s): " + ", ".join(missing))
-    if contract.get("policy_id") != POLICY_ID or not isinstance(contract.get("policy_id"), str):
-        reasons.append(f"unsupported policy_id; expected {POLICY_ID}")
+    if not isinstance(policy, str) or policy not in {POLICY_ID, REVIEWED_POLICY_ID}:
+        reasons.append(f"unsupported policy_id; expected {POLICY_ID} or {REVIEWED_POLICY_ID}")
+    if is_v2:
+        _validate_sizing_review(context, contract, reasons)
 
     raw_purposes = contract.get("role_purposes")
     if not isinstance(raw_purposes, dict) or any(
@@ -325,11 +376,16 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
             if reviewed_match:
                 model, reasoning = "gpt-6.1-sol", "high"
                 route_reason = "exact reviewed supervisor packet uses its bounded stronger source route"
+            elif is_v2:
+                model = contract.get("implementation_model")
+                reasoning = IMPLEMENTATION_MODELS.get(model, "") if isinstance(model, str) else ""
+                route_reason = "bounded coding or validation work uses the reviewed implementation route"
             else:
                 model, reasoning = "gpt-6-luna", "medium"
                 route_reason = "bounded coding or validation work uses the fixed local unit route"
         else:
-            model, reasoning = "gpt-6.1-sol", "high"
+            model = contract.get("review_model") if is_v2 else "gpt-6.1-sol"
+            reasoning = REVIEW_MODELS.get(model, "") if isinstance(model, str) else ""
             route_reason = (
                 "decomposition must produce smaller packets without promoting coding"
                 if purpose == "decomposition"
@@ -346,7 +402,8 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
     flags = _strings(contract.get("complexity_flags"), "complexity_flags", reasons)
     paths = _strings(scope, "write_scope", reasons) if scope is not None else None
     criteria_values = _strings(criteria, "acceptance_criteria", reasons) if criteria is not None else None
-    coding_validation_needed = coding_count > 0 or reviewed_match
+    v2_full_coding = is_v2 and any(p in {"implementation", "validation"} for p in role_purposes.values())
+    coding_validation_needed = coding_count > 0 or reviewed_match or v2_full_coding
     if coding_validation_needed and scope is None:
         reasons.append("write_scope must explicitly name repository-relative files")
     if coding_validation_needed and criteria is None:
@@ -372,7 +429,7 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
 
     # Validate complete reviewed-packet budgets before any caller subset projection.
     full_packet_coding_count = 2 if reviewed_match else coding_count
-    full_packet_coding = reviewed_match
+    full_packet_coding = reviewed_match or v2_full_coding
     counts = {
         "roles": len(records), "coding_or_validation_roles": coding_count,
         "write_scope_files": len(paths) if paths is not None else None,
@@ -382,7 +439,7 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
         "complexity_flags": len(flags) if flags is not None else None,
     }
     if reasons:
-        return {"status": "blocked", "policy_id": POLICY_ID if contract.get("policy_id") == POLICY_ID else None, "policy_version": POLICY_VERSION,
+        return {"status": "blocked", "policy_id": policy if isinstance(policy, str) and policy in (POLICY_ID, REVIEWED_POLICY_ID) else None, "policy_version": 2 if is_v2 else POLICY_VERSION,
                 "reasons": reasons, "assignments": {}, "observed_counts": counts}
 
     budget_coding = full_packet_coding or coding_count > 0
@@ -403,7 +460,7 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
     permitted = assignments if status == "qualified" else {
         role_id: route for role_id, route in assignments.items() if route["purpose"] == "decomposition"
     } if status == "decomposition_required" else {}
-    result = {"status": status, "policy_id": POLICY_ID, "policy_version": POLICY_VERSION,
+    result = {"status": status, "policy_id": policy, "policy_version": 2 if is_v2 else POLICY_VERSION,
               "reasons": reasons, "assignments": permitted,
               "observed_counts": counts}
     if status == "qualified" and reviewed_match:
@@ -458,7 +515,10 @@ def assignment_for_task(task: dict[str, Any]) -> dict[str, str]:
         raise ValueError(f"role {role_id} has no qualified local assignment: {detail}")
     result = qualify(context, roles=[task])
     assignment = result.get("assignments", {}).get(role_id)
-    if result.get("status") != "qualified" or assignment is None:
+    permitted_decomposition = (result.get("status") == "decomposition_required"
+                               and assignment is not None
+                               and assignment.get("purpose") == "decomposition")
+    if (result.get("status") != "qualified" and not permitted_decomposition) or assignment is None:
         detail = "; ".join(result.get("reasons") or []) or result.get("status", "unqualified")
         raise ValueError(f"role {role_id} has no qualified local assignment: {detail}")
     return dict(assignment)

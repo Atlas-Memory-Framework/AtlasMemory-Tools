@@ -1,0 +1,47 @@
+{
+  "purpose": "Human semantic review examples for scoping behavior; these expectations are not deterministic parser rules.",
+  "cases": [
+    {
+      "id": "vision-to-bounded-discovery",
+      "input": "Atlas should help people retain useful context across work. The current workflow and capability needed to do that reliably are uncertain.",
+      "draft": "Target outcome: a person can recover relevant prior context when resuming a task. Needed capability: retrieve relevant context for that task. First investigate where context is stored and evaluate retrieval on representative resumption examples; report evidence and decide the next bounded implementation. The outcome remains unproven until integrated behavior is tested.",
+      "expected_review": "pass",
+      "reason": "The trace connects vision, outcome, capability and bounded discovery, with a decision and an honest evidence boundary."
+    },
+    {
+      "id": "tickets-without-outcome",
+      "input": "Improve Atlas so people can resume their work with useful context.",
+      "draft": "Create storage, add an API, and update the interface. All tickets and their isolated tests passed, so the user outcome is complete.",
+      "expected_review": "fail",
+      "reason": "The work does not establish the needed capability or show that the integrated workflow gives a person useful context. Ticket completion is not outcome evidence."
+    },
+    {
+      "id": "hypothetical-checkout-discovery",
+      "input": "Hypothetical example: a website sends an order code and price to Shopify checkout, and receives payment confirmation and customer details.",
+      "draft": "Before implementation, resolve which system authorizes the price, how payment confirmation is independently verified, and how retries or replay are handled. A bounded investigation records evidence and a decision for each unresolved point. The integration owner then validates the agreed end-to-end payment and failure flows; until that evidence exists the outcome is unproven. Apply the existing checkout risk policy.",
+      "expected_review": "pass",
+      "reason": "The apparently clear example still has consequential unknowns; discovery is separate from implementation and integrated outcome evidence has an owner. This example does not add a requirement to Atlas."
+    },
+    {
+      "id": "hypothetical-checkout-false-confidence",
+      "input": "Hypothetical example: connect a website to Shopify checkout and receive payment confirmation.",
+      "draft": "Trust the price supplied by the browser and treat any browser return as proof of payment. Unit tests for each component pass, so checkout is complete; replay behavior needs no investigation.",
+      "expected_review": "fail",
+      "reason": "Price authority, confirmation verification and replay behavior are assumed without evidence, and isolated tests do not prove the integrated outcome."
+    },
+    {
+      "id": "bounded-change-fits-luna",
+      "input": "A documented local command prints the wrong label. The desired label, affected output, and regression check are already agreed.",
+      "draft": "Use Luna to correct the label in the bounded command output and run the focused regression check. The change has a clear outcome and no unresolved design decision.",
+      "expected_review": "pass",
+      "reason": "A clear, ordinary bounded change fits the default model; escalation solely because it is code would add no useful sizing judgment."
+    },
+    {
+      "id": "hard-protocol-small-file-count",
+      "input": "Implement an agreed concurrent replay protocol with subtle ordering and recovery invariants in two files. The behavior and acceptance evidence are settled, but correctness requires reasoning across coupled failure scenarios.",
+      "draft": "Assign the coherent implementation to Sol or Terra and validate the agreed invariants, including concurrent replay and recovery. Keep the coupled reasoning together when splitting would obscure correctness.",
+      "expected_review": "pass",
+      "reason": "Difficulty and coupling justify a stronger model despite the small file count. Counting files alone or automatically splitting the task would not establish a suitable model or safe boundary."
+    }
+  ]
+}

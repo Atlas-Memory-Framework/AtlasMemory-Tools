@@ -446,9 +446,19 @@ def work_item_context(item: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str) and value.strip():
             context[key] = value.strip()
     if "local_execution_v1" in metadata:
+        import atlas_local_sizing
         contract = metadata["local_execution_v1"]
-        allowed = {"policy_id", "role_purposes", "changed_interfaces", "unresolved_questions", "complexity_flags"}
-        if isinstance(contract, dict) and not set(contract).difference(allowed):
+        allowed = atlas_local_sizing.CONTRACT_FIELDS
+        v2 = isinstance(contract, dict) and contract.get("policy_id") == atlas_local_sizing.REVIEWED_POLICY_ID
+        if v2:
+            allowed = allowed | atlas_local_sizing.REVIEWED_FIELDS
+        review = contract.get("sizing_review") if v2 else None
+        valid_review_shape = (not v2 or (isinstance(review, dict)
+                              and set(review) == {"reviewer", "rationale", "subject_sha256"}
+                              and all(isinstance(value, str) for value in review.values())
+                              and all(isinstance(contract.get(field), str)
+                                      for field in ("implementation_model", "review_model"))))
+        if isinstance(contract, dict) and not set(contract).difference(allowed) and valid_review_shape:
             context["local_execution_v1"] = dict(contract)
         else:
             # Carry an invalid marker, never arbitrary provider/credential fields.
