@@ -475,6 +475,23 @@ purposes. `implementation` and `validation` bind to `gpt-6-luna` with `medium` r
 role maps fail qualification. The local provider requires an independent goal gate and includes resolved routing in its
 resume fingerprint. Scheduling and state remain in the local JSON store.
 
+For an independently reviewed sizing decision, opt in with `policy_id: "local-reviewed-unit-v2"` in the same
+`local_execution_v1` object. Add the required fields `implementation_model`, `review_model`, and `sizing_review`.
+Choose `gpt-6-luna` for ordinary implementation (and validation); it runs at medium reasoning. For a coherent,
+bounded task that needs stronger reasoning, the operator may select `gpt-6.1-sol` or `gpt-6.1-terra` at high reasoning
+for implementation and validation. Choose either `gpt-6.1-sol` or `gpt-6.1-terra` at high reasoning for decomposition
+and review, including goal review. The model choices are explicit; there is no automatic difficulty classifier.
+
+`sizing_review` must contain exactly `reviewer`, `rationale`, and `subject_sha256`: a nonblank reviewer identity,
+a specific rationale for this task and its selected models, and the digest of the complete work-item context. Compute
+the digest with `atlas_local_sizing.sizing_subject_sha256(work_item_context)` after setting the models and all other
+context fields; the helper omits only `local_execution_v1.sizing_review`. Any subsequent context change requires a
+fresh sizing review and digest. These fields provide structural evidence and freshness binding only: strings and a hash
+do not authenticate the reviewer or grant authority. The operator must retain actual independent host review and the
+independent goal gate. The same file, criterion, and interface budgets apply, and a stronger model does not resolve
+open questions or complexity flags; split or decompose those packets first. Existing execution, authority, billing,
+and canonical-runner gates remain in force.
+
 Contracted work must pass through the canonical role runner and Codex wrapper. Raw worker commands and custom role
 executables cannot bypass the binding. The outer runner accepts only the generated command-config and bounded role-count
 arguments; contracted role maps contain only the canonical wrapper executable, with no packet-substitution arguments.

@@ -6,3 +6,6 @@ __pycache__/
 ssot-projects.local.json
 local-automation-runtime-state/
 artifacts/
+
+# Local development runtime and queue locations
+/.atlas-dev.local.json

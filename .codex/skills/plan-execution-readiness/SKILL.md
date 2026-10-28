@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan-execution-readiness/SKILL.md manifest=atlas-tools.v1 checksum=sha256:4bcc31283aebf529609e62f90a5dc8880a845ed5e466547395a6466b93c00701
+# atlas-tools-generated: source=skills/plan-execution-readiness/SKILL.md manifest=atlas-tools.v1 checksum=sha256:b130044dbe1d8b259926d4d861005ccd3b41878ec32f0563c3ef23c3afcad534
 # atlas-tools-generated-end
 name: plan-execution-readiness
 description: Critically review markdown planning artifacts as plans, not handoff documents. Use when the user asks whether a plan is ready, what is missing or silently ignored, whether agents will build the intended system, or wants a zero-context execution-readiness review before approval, projection, dispatch, or implementation.
@@ -56,6 +56,8 @@ Ask:
 - Does `## Intent Model` preserve the user's latent target before problem framing?
 - Does the technical plan over-literalize, genericize, or flatten the user's idea?
 - What plausible wrong implementation would pass the written tasks or tests?
+- Can the reader trace the vision to an outcome, needed capability, and bounded change or discovery? Does discovery resolve a decision before dependent implementation, without claiming the outcome is already delivered?
+- Who owns evidence that integrated work achieves the parent outcome, and what remains unverified? Does the model fit the reasoning, coupling, and risk rather than merely the number of files? Luna is the default; Sol or Terra can handle genuinely harder sizing, review, or coherent implementation work.
 
 ## Required review dimensions
 
@@ -81,7 +83,7 @@ Fail readiness when:
 - The Problem Definition contradicts, genericizes, or omits the latent target.
 - Anti-targets are absent from constraints, scope, invariants, acceptance criteria, or tests where they matter.
 - Expression-state gaps remain open and block Problem, Technical, Implementation, or Automation.
-- Success criteria measure only task completion rather than the latent target.
+- Success criteria measure only task completion rather than the latent target, or combined work lacks relevant integration evidence and an explicit owner and blocker for any missing evidence.
 - A zero-context implementer could build a wrong-but-plausible version that passes the written gates.
 
 ## Output expectations

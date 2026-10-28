@@ -723,5 +723,86 @@ class LocalSizingTests(unittest.TestCase):
         self.assertEqual(task_assignment, result["assignments"]["implementation"])
 
 
+class ReviewedUnitV2Tests(unittest.TestCase):
+    def context(self, implementation="gpt-6-luna", review="gpt-6.1-sol"):
+        context = make_context(purposes={"implementation": "implementation", "test-runner": "validation",
+                                         "code-review": "review", "semantic-alignment": "goal-review"})
+        context["goal"] = "Preserve the local acceptance result."
+        contract = context["local_execution_v1"]
+        contract.update(policy_id="local-reviewed-unit-v2", implementation_model=implementation,
+                        review_model=review)
+        contract["sizing_review"] = {"reviewer": "operator review record", "rationale": "The scoped acceptance change fits this model.",
+                                     "subject_sha256": sizing.sizing_subject_sha256(context)}
+        return context
+
+    def test_v1_stays_fixed_and_v2_models_match_full_and_single_role(self):
+        self.assertEqual(sizing.qualify(make_context())["assignments"]["implementation"]["model"], "gpt-6-luna")
+        for model, effort in (("gpt-6-luna", "medium"), ("gpt-6.1-sol", "high"), ("gpt-6.1-terra", "high")):
+            for review in ("gpt-6.1-sol", "gpt-6.1-terra"):
+                context = self.context(model, review)
+                full = sizing.qualify(context)
+                self.assertEqual(full["status"], "qualified", full["reasons"])
+                for role, expected, reasoning in (("implementation", model, effort), ("test-runner", model, effort),
+                                                   ("code-review", review, "high"), ("semantic-alignment", review, "high")):
+                    single = sizing.qualify(context, roles=[{"role_id": role}])
+                    route = sizing.assignment_for_task({"role_id": role, "work_item_context": context})
+                    self.assertEqual(route, full["assignments"][role])
+                    self.assertEqual(route, single["assignments"][role])
+                    self.assertEqual((route["model"], route["reasoning"]), (expected, reasoning))
+
+    def test_stale_context_is_blocked(self):
+        for field in ("goal", "write_scope", "implementation_model", "review_model"):
+            context = self.context()
+            target = context["local_execution_v1"] if field.endswith("model") else context
+            target[field] = (["src/other.py"] if field == "write_scope" else
+                             "gpt-6.1-terra" if field.endswith("model") else "changed goal")
+            self.assertEqual(sizing.qualify(context)["status"], "blocked", field)
+
+    def test_evidence_and_models_are_strict(self):
+        for evidence in (None, {}, [], {"reviewer": "", "rationale": "", "subject_sha256": ""},
+                         {"reviewer": "x", "rationale": "x", "subject_sha256": "x", "extra": True}):
+            context = self.context()
+            context["local_execution_v1"]["sizing_review"] = evidence
+            self.assertEqual(sizing.qualify(context)["status"], "blocked")
+        for field, value in (("implementation_model", "unknown"), ("review_model", "gpt-6-luna"),
+                             ("implementation_model", []), ("review_model", True)):
+            context = self.context()
+            contract = context["local_execution_v1"]
+            contract[field] = value
+            contract["sizing_review"]["subject_sha256"] = sizing.sizing_subject_sha256(context)
+            self.assertEqual(sizing.qualify(context)["status"], "blocked")
+
+    def test_stronger_model_does_not_waive_decomposition_or_budgets(self):
+        for field, value, status in (("unresolved_questions", ["Which behavior is intended?"], "decomposition_required"),
+                                     ("complexity_flags", ["migration"], "decomposition_required"),
+                                     ("write_scope", ["a.py", "b.py", "c.py", "d.py", "e.py"], "split_required")):
+            context = self.context("gpt-6.1-terra")
+            target = context if field == "write_scope" else context["local_execution_v1"]
+            target[field] = value
+            context["local_execution_v1"]["sizing_review"]["subject_sha256"] = sizing.sizing_subject_sha256(context)
+            self.assertEqual(sizing.qualify(context)["status"], status)
+            self.assertEqual(sizing.qualify(context, roles=[{"role_id": "code-review"}])["status"], status)
+
+    def test_mixed_packet_permits_decomposition_but_not_implementation(self):
+        for field, value in (("unresolved_questions", ["Which behavior is intended?"]),
+                             ("complexity_flags", ["migration"])):
+            context = self.context("gpt-6.1-terra", "gpt-6.1-terra")
+            contract = context["local_execution_v1"]
+            contract["role_purposes"]["architecture"] = "decomposition"
+            contract[field] = value
+            contract["sizing_review"]["subject_sha256"] = sizing.sizing_subject_sha256(context)
+            full = sizing.qualify(context)
+            self.assertEqual(full["status"], "decomposition_required")
+            self.assertNotIn("implementation", full["assignments"])
+            single = sizing.qualify(context, roles=[{"role_id": "architecture"}])
+            self.assertEqual(single["status"], "decomposition_required")
+            route = sizing.assignment_for_task({"role_id": "architecture", "work_item_context": context})
+            self.assertEqual(route, full["assignments"]["architecture"])
+            self.assertEqual(route, single["assignments"]["architecture"])
+            self.assertEqual((route["model"], route["reasoning"]), ("gpt-6.1-terra", "high"))
+            with self.assertRaises(ValueError):
+                sizing.assignment_for_task({"role_id": "implementation", "work_item_context": context})
+
+
 if __name__ == "__main__":
     unittest.main()

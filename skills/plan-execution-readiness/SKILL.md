@@ -54,6 +54,8 @@ Ask:
 - Does `## Intent Model` preserve the user's latent target before problem framing?
 - Does the technical plan over-literalize, genericize, or flatten the user's idea?
 - What plausible wrong implementation would pass the written tasks or tests?
+- Can the reader trace the vision to an outcome, needed capability, and bounded change or discovery? Does discovery resolve a decision before dependent implementation, without claiming the outcome is already delivered?
+- Who owns evidence that integrated work achieves the parent outcome, and what remains unverified? Does the model fit the reasoning, coupling, and risk rather than merely the number of files? Luna is the default; Sol or Terra can handle genuinely harder sizing, review, or coherent implementation work.
 
 ## Required review dimensions
 
@@ -79,7 +81,7 @@ Fail readiness when:
 - The Problem Definition contradicts, genericizes, or omits the latent target.
 - Anti-targets are absent from constraints, scope, invariants, acceptance criteria, or tests where they matter.
 - Expression-state gaps remain open and block Problem, Technical, Implementation, or Automation.
-- Success criteria measure only task completion rather than the latent target.
+- Success criteria measure only task completion rather than the latent target, or combined work lacks relevant integration evidence and an explicit owner and blocker for any missing evidence.
 - A zero-context implementer could build a wrong-but-plausible version that passes the written gates.
 
 ## Output expectations

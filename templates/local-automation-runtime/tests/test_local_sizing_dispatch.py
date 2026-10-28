@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 import atlas_work_items
 import atlas_workflows
+import atlas_local_sizing
 
 
 class LocalSizingDispatchTests(unittest.TestCase):
@@ -170,6 +171,59 @@ class LocalSizingDispatchTests(unittest.TestCase):
         blocked = worker.write_workflow_artifacts(provider.ready_operations()[0], last, "changed", self.store)
         self.assertIn("contract changed", blocked["workflow_error"])
         self.assertFalse((last / "team-role-tasks.json").exists())
+
+    def set_v2(self, implementation="gpt-6-luna", review="gpt-6.1-sol"):
+        contract = self.item["metadata"]["local_execution_v1"]
+        contract.update(policy_id="local-reviewed-unit-v2", implementation_model=implementation,
+                        review_model=review, sizing_review={"reviewer": "operator review record",
+                        "rationale": "This bounded change fits the chosen route.", "subject_sha256": "pending"})
+        projected = atlas_work_items.work_item_context(self.item)
+        contract["sizing_review"]["subject_sha256"] = atlas_local_sizing.sizing_subject_sha256(projected)
+
+    def test_v2_projected_provider_and_role_packets_bind_models(self):
+        for implementation, effort in (("gpt-6-luna", "medium"), ("gpt-6.1-sol", "high"),
+                                       ("gpt-6.1-terra", "high")):
+            for review in ("gpt-6.1-sol", "gpt-6.1-terra"):
+                with self.subTest(implementation=implementation, review=review):
+                    self.set_v2(implementation, review)
+                    self.store.write_text(json.dumps({"version": 1, "work_items": [self.item]}))
+                    provider = atlas_work_items.AtlasWorkItemOperationProvider(atlas_work_items.AtlasWorkItemStore(self.store))
+                    operation = provider.ready_operations()[0]
+                    self.assertEqual(operation.work_item_context, atlas_work_items.work_item_context(self.item))
+                    job = self.root / (implementation + review)
+                    job.mkdir(exist_ok=True)
+                    worker = atlas_work_items.LocalCommandOperationWorker(None, jobs_dir=self.jobs,
+                        templates_dir=ROOT / "team-templates")
+                    evidence = worker.write_workflow_artifacts(operation, job, "preview", self.store)
+                    self.assertEqual(evidence["local_sizing"]["status"], "qualified", evidence)
+                    packets = json.loads((job / "team-role-tasks.json").read_text())["tasks"]
+                    for packet in packets:
+                        self.assertEqual(packet["work_item_context"], operation.work_item_context)
+                        route = atlas_local_sizing.assignment_for_task(packet)
+                        self.assertEqual(route, evidence["local_sizing"]["assignments"][packet["role_id"]])
+                        if route["purpose"] in {"implementation", "validation"}:
+                            self.assertEqual((route["model"], route["reasoning"]), (implementation, effort))
+                        else:
+                            self.assertEqual((route["model"], route["reasoning"]), (review, "high"))
+
+    def test_v2_projection_refuses_stale_and_unknown_fields(self):
+        for mutate in (
+            lambda item: item["scheduler"].update(write_scope=["src/other.py"]),
+            lambda item: item.update(spec_hash="changed-spec-hash"),
+            lambda item: item["metadata"]["local_execution_v1"].update(implementation_model="gpt-6.1-terra"),
+            lambda item: item["metadata"]["local_execution_v1"].update(provider="private-value"),
+            lambda item: item["metadata"]["local_execution_v1"]["sizing_review"].update(provider="private-value"),
+            lambda item: item["metadata"]["local_execution_v1"].update(review_model={"provider": "private-value"}),
+            lambda item: item["metadata"]["local_execution_v1"].update(sizing_review=None),
+        ):
+            original = json.loads(json.dumps(self.item))
+            self.set_v2()
+            mutate(self.item)
+            self.store.write_text(json.dumps({"version": 1, "work_items": [self.item]}))
+            operation = atlas_work_items.AtlasWorkItemOperationProvider(atlas_work_items.AtlasWorkItemStore(self.store)).operation_states()[0]
+            self.assertFalse(operation.ready)
+            self.assertNotIn("private-value", json.dumps(operation.work_item_context))
+            self.item = original
 
 
 if __name__ == "__main__":

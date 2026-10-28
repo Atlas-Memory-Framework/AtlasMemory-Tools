@@ -27,6 +27,7 @@ Turn a vague idea into a crisp, testable, product-grounded problem definition be
 - Decision boundaries (A/B/C if a fork exists)
 - Draft section content for `## Problem Definition`
 - Notes that identify any required updates back to `## Intent Model` when problem framing reveals a new latent-intent gap
+- A concise trace from the user’s vision to an intended outcome, the capability needed, and a bounded change or discovery that advances it; identify what remains unproven
 
 ## Sub-agent output contract
 Return a single block in this shape:
@@ -55,7 +56,8 @@ Notes:
 - At least 3 concrete current-state facts are captured with sources (`file`, `command`, `user`, or `issue`).
 - Problem narrative is specific and not a solution.
 - At least 2 measurable success criteria.
-- Success criteria measure product/system outcomes and verification evidence, not document completeness.
+- Success criteria measure product/system outcomes and verification evidence, not document or ticket completeness. Include evidence for the relevant end-to-end integration, or identify its owner and what remains unverified.
+- The intended outcome, needed capability, and bounded change or discovery remain traceable to the user’s vision without treating the entire vision as one executable task.
 - Explicit scope and anti-scope exist.
 - At least 1 constraint is captured (or "none").
 - Any forks are captured as decision boundaries.
@@ -67,7 +69,7 @@ Notes:
 2) Read `## Intent Model` when present and carry forward latent target, anti-targets, expression-state risks, and blocking open loops.
 3) Interrogate for the product/system reality: current workflow, desired workflow, affected users/agents, why the gap matters, and why now.
 4) Collect at least 3 current-state facts from available repo context and/or user-provided context. Do not invent facts; if a fact is unavailable, ask for it or mark the gate failing.
-5) Propose measurable success criteria tied to behavior, evidence, and verification.
+5) Propose measurable success criteria tied to behavior, evidence, and verification, including integration across relevant boundaries. Where an outcome or approach is uncertain, identify the decision and a bounded discovery to obtain its evidence before implementation; distinguish discovery results from delivered behavior. Reuse settled decisions rather than asking the user to decide them again.
 6) Capture constraints, scope, and anti-scope.
 7) Identify decision boundaries (A/B/C).
 8) Finalize the Problem Definition block.
