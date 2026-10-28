@@ -25,6 +25,8 @@
       "label": "Semantic Review",
       "agent_ref": "agent-registry://semantic-review",
       "skills": ["plan-execution-readiness"],
+      "consumes": ["code-review", "security-review"],
+      "goal_gate": true,
       "must_produce": ["plan_alignment_findings", "scope_drift_findings", "user_intent_questions"],
       "acceptance_criteria": ["Checks behavior against the plan, user intent, and known product constraints."]
     },

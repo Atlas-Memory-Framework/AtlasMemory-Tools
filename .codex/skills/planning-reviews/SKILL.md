@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:f3f80e3be6c37827ac628898bbd73c6bbe36b3f14c7f5c4b6bacb47671f56dff
+# atlas-tools-generated: source=skills/planning-reviews/SKILL.md manifest=atlas-tools.v1 checksum=sha256:b54decf50cabef6667849dca6b58d175ad6dab948738b5028858da7423e930e6
 # atlas-tools-generated-end
 name: planning-reviews
 description: Run required planning-phase reviews, including human readability review, and log dispositions in the current plan artifact. Use after Implementation stage before plan approval.
@@ -86,6 +86,8 @@ If you cannot provide an evidence hook, emit a finding with `Remediation target:
 
 ## Human Readability Review (required)
 Run this review after `TechnicalClarity` and refresh it whenever Intent Model, Problem Definition, Technical Plan intro, Implementation Plan summary, or execution/authority sections materially change.
+
+Apply [plain-technical-english](../plain-technical-english/SKILL.md) to the plan and the report sent to the user. Use its seven meaning criteria within this existing review, keeping the required findings schema and freshness markers. The reviewer must explain what happens, who acts, when, why, and what remains uncertain from the text alone. Route material failures through the existing remediation owner. Do not replace reader judgment with word counts, jargon bans, or a completed checklist. If a separate machine-checked review record is retained, regenerate it after material edits; its CLI checks record validity and freshness, not semantic quality or plan approval.
 
 ### Review questions
 - Can a new engineer explain what is being built and why after reading only `Intent Model`, `Problem Definition`, and `Technical Plan Intro`?

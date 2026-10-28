@@ -40,6 +40,8 @@ Review automation manifest safety, issue projection readiness, dispatch blockers
 
 Check whether a new engineer can explain what is being built, why now, what changes first, and what remains blocked.
 
+Use [plain-technical-english](../../plain-technical-english/SKILL.md) to assess the answer, actors/actions, conditions/reasons, stable terms, reasoning/uncertainty, useful detail, and faithfulness. Cite the unclear passage and what the reader cannot determine. Preserve technical terms when explained, required schemas, exact quotes, and evidence. A record validator can verify source freshness and coverage; it cannot judge meaning.
+
 ## security-privacy-reviewer
 
 Review authentication boundaries, authorization behavior, secrets handling, sensitive data flows, privacy/compliance implications, redaction, logging, and regression gates that keep security assertions true.

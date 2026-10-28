@@ -1,0 +1,32 @@
+[
+  {
+    "id": "clear-technical-reasoning",
+    "text": "The importer prevents duplicate Atlas records when the coordinator retries a worker result.\nIt writes the record and result ID in one Postgres transaction, meaning both writes succeed or neither does.\nIf the response is lost after that transaction commits, the coordinator retries with the same result ID. The importer returns the existing record. This handles a lost response without requiring the coordinator to know whether the first request committed.\n",
+    "expected_reader_result": "pass",
+    "reason": "Technical terms are explained and the actor, condition, action and causal reason are explicit. Length is needed for the retry explanation."
+  },
+  {
+    "id": "unclear-short-report",
+    "text": "Done. It is handled.\nThe lane resolved the envelope. The surface is ready for assimilation.\n",
+    "expected_reader_result": "fail",
+    "reason": "Short sentences hide the target, responsible component, condition, evidence and meaning of ready."
+  },
+  {
+    "id": "clear-uncertainty",
+    "text": "The fixture test passed: the coordinator selected the next eligible work item.\nWe have not tested a real worker launch, so unattended dispatch is still unproven. The runtime worker must test a real launch before reporting that unattended dispatch works.\n",
+    "expected_reader_result": "pass",
+    "reason": "A stated limitation is clear and preserves the evidence boundary, even though the larger capability is unproven."
+  },
+  {
+    "id": "synonyms-hide-ownership",
+    "text": "The worker result is stored.\nThe artifact is retained on the surface. The substrate will absorb the packet when it is ready.\n",
+    "expected_reader_result": "fail",
+    "reason": "Stored lacks a location; it is unclear whether result, artifact and packet are the same object or which component owns import."
+  },
+  {
+    "id": "protected-content",
+    "text": "The checker rejected the review record because its source hash differed from the document.\nThe reviewer must review the current document and create a fresh record; changing only the hash would carry an old judgment forward.\n\nThe exact field is `source_sha256`. The original error and command are retained below.\n\n> review is stale or belongs to different document bytes; review the current text\n\n```json\n{\"source_sha256\": \"example-value\"}\n```\n\n```sh\npython3 check_review.py check report.md review.json\n```\n",
+    "expected_reader_result": "pass",
+    "reason": "The explanation identifies the actor, action and reason while retaining the field, exact quote, schema and command."
+  }
+]

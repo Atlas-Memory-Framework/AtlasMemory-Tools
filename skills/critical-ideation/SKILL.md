@@ -8,6 +8,8 @@ description: Stress-test the defined problem with concrete weaknesses, risks, as
 ## Purpose
 Challenge the idea to surface hidden risks, weak assumptions, and better alternatives before technical design. Run as a sub-agent and return a draft section to the orchestrator; do not write the plan artifact directly.
 
+Before returning the challenge packet or reporting findings, apply [plain-technical-english](../plain-technical-english/SKILL.md). Explain each concrete failure, its condition and consequence, and why the proposed test or alternative addresses it. Preserve uncertainty and the required output fields; do not substitute framework labels for the reasoning.
+
 ## When to use
 - After problem definition is complete
 - Before technical planning

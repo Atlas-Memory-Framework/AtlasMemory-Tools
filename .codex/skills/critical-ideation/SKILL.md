@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/critical-ideation/SKILL.md manifest=atlas-tools.v1 checksum=sha256:f96174dc28fa96ebfb65900ae08385393aac47db56fbf52065dda64321ee4aa1
+# atlas-tools-generated: source=skills/critical-ideation/SKILL.md manifest=atlas-tools.v1 checksum=sha256:3f813fad78afb6150795dfdf7d2e2c2666134659b9ce8bde65e2045c33cdae6b
 # atlas-tools-generated-end
 name: critical-ideation
 description: Stress-test the defined problem with concrete weaknesses, risks, assumptions-to-tests, and alternatives. Use after problem definition and before technical planning.
@@ -9,6 +9,8 @@ description: Stress-test the defined problem with concrete weaknesses, risks, as
 
 ## Purpose
 Challenge the idea to surface hidden risks, weak assumptions, and better alternatives before technical design. Run as a sub-agent and return a draft section to the orchestrator; do not write the plan artifact directly.
+
+Before returning the challenge packet or reporting findings, apply [plain-technical-english](../plain-technical-english/SKILL.md). Explain each concrete failure, its condition and consequence, and why the proposed test or alternative addresses it. Preserve uncertainty and the required output fields; do not substitute framework labels for the reasoning.
 
 ## When to use
 - After problem definition is complete

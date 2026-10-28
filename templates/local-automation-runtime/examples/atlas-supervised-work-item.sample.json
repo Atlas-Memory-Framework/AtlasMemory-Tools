@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "work_items": [
+    {
+      "id": "LOCAL-SUPERVISED-EXAMPLE-001",
+      "status": "draft",
+      "title": "Correct one verified runtime README inaccuracy",
+      "scheduler": {
+        "execution_repo": "REPLACE_WITH_ABSOLUTE_LOCAL_CHECKOUT",
+        "workflow_kind": "work-item",
+        "team_template": "work-item-change-lifecycle",
+        "write_scope": [
+          "templates/local-automation-runtime/README.md"
+        ]
+      },
+      "goal": "Before activation (before setting status to ready), use local runtime source to identify and verify one concrete README inaccuracy; replace the checkout marker with the actual local checkout only after that verification. Then correct that verified inaccuracy in the README. Keep the work local and within the single declared file scope; make no model-result or acceptance claim.",
+      "acceptance_criteria": [
+        "Correct one README inaccuracy confirmed against the local runtime source, within the declared single-file scope.",
+        "Record focused local verification showing the corrected statement agrees with the relevant runtime source.",
+        "Obtain an independent evidenced goal verdict through the maintained lifecycle."
+      ],
+      "evidence": [],
+      "metadata": {
+        "local_execution_v1": {
+          "policy_id": "local-luna-unit-v1",
+          "role_purposes": {
+            "implementation": "implementation",
+            "test-runner": "validation",
+            "code-review": "review",
+            "semantic-alignment": "goal-review",
+            "evidence-rollup": "review"
+          },
+          "changed_interfaces": [
+            "README documentation"
+          ],
+          "unresolved_questions": [],
+          "complexity_flags": []
+        }
+      }
+    }
+  ]
+}

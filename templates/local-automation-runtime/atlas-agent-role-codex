@@ -4,16 +4,32 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import errno
+import hashlib
 import json
 import os
 import pathlib
+import secrets
+import signal
 import shutil
+import stat
 import subprocess
 import sys
+import threading
+import time
 from typing import Any
 
 
 RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
+CONTRACTED_OUTPUT_LIMIT_BYTES = 64 * 1024
+CONTRACTED_RESULT_LIMIT_BYTES = 64 * 1024
+CONTRACTED_TERMINATION_GRACE_SECONDS = 2.0
+CONTRACTED_MAX_TIMEOUT_SECONDS = 3600
+CONTRACTED_RESULT_HANDOFF_ENV = "ATLAS_ROLE_RESULT_HANDOFF_FD"
+SUPERVISOR_EXECUTION_MODE_ENV = "ATLAS_ROLE_CODEX_SUPERVISOR_EXECUTION_MODE"
+SUPERVISOR_EXECUTION_MODE = "contracted-chatgpt-subscription-v1"
+CONTRACTED_ROUTE_VALUE = "chatgpt_subscription"
 if str(RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(RUNTIME_DIR))
 
@@ -28,6 +44,163 @@ def write_json(path: str | pathlib.Path, payload: Any) -> None:
     pathlib.Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def write_bytes_atomically(
+    path: str | pathlib.Path, content: bytes, *, artifacts: "ArtifactDirectory | None" = None,
+) -> None:
+    """Replace a child-writable artifact without following a child-created symlink."""
+    target = pathlib.Path(path)
+    if artifacts is not None:
+        artifacts.write_bytes(target.name, content)
+        return
+    with ArtifactDirectory(target.parent) as artifacts:
+        artifacts.write_bytes(target.name, content)
+
+
+class ArtifactDirectory:
+    """Anchor artifact operations to one already-open directory inode."""
+
+    def __init__(self, directory: str | pathlib.Path):
+        self.directory = pathlib.Path(directory)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+        self.fd = os.open(self.directory, flags)
+        try:
+            info = os.fstat(self.fd)
+            self.identity = (info.st_dev, info.st_ino)
+        except BaseException:
+            os.close(self.fd)
+            self.fd = -1
+            raise
+
+    def __enter__(self) -> "ArtifactDirectory":
+        return self
+
+    def __exit__(self, _type: Any, _value: Any, _traceback: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+    @staticmethod
+    def _name(name: str) -> str:
+        if not name or name in {".", ".."} or pathlib.Path(name).name != name:
+            raise ValueError("artifact name must be one path component")
+        return name
+
+    def entry_exists(self, name: str) -> bool:
+        name = self._name(name)
+        try:
+            os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+            return True
+        except FileNotFoundError:
+            return False
+
+    def path_is_still_bound(self) -> bool:
+        """Reject completion if the child replaced the directory's pathname."""
+        try:
+            info = os.stat(self.directory, follow_symlinks=False)
+            return stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == self.identity
+        except OSError:
+            return False
+
+    def write_bytes(self, name: str, content: bytes) -> None:
+        name = self._name(name)
+        temporary_name = ""
+        fd = -1
+        for _attempt in range(8):
+            temporary_name = f".{name}.{secrets.token_hex(12)}.tmp"
+            try:
+                fd = os.open(
+                    temporary_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                    dir_fd=self.fd,
+                )
+                break
+            except FileExistsError:
+                continue
+        if fd < 0:
+            raise FileExistsError("could not reserve a unique artifact temporary file")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                fd = -1
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_name, name, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(temporary_name, dir_fd=self.fd)
+            except FileNotFoundError:
+                pass
+
+    def write_json(self, name: str, payload: Any) -> None:
+        content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        self.write_bytes(name, content)
+
+    def read_json_regular_file(self, name: str) -> Any:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise OSError(errno.ENOTSUP, "safe no-follow file opening is unavailable", name)
+        flags = os.O_RDONLY | nofollow | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(self._name(name), flags, dir_fd=self.fd)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "result artifact is not a regular file", name)
+            with os.fdopen(fd, "rb") as handle:
+                fd = -1
+                raw = handle.read(CONTRACTED_RESULT_LIMIT_BYTES + 1)
+                if len(raw) > CONTRACTED_RESULT_LIMIT_BYTES:
+                    raise OSError(errno.EFBIG, "result artifact exceeds the contracted byte limit", name)
+                return json.loads(raw.decode("utf-8"))
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+
+def publish_contracted_result_handoff(payload: dict[str, Any]) -> None:
+    """Send the wrapper-validated result to its waiting parent over a private FD."""
+    raw_fd = os.environ.get(CONTRACTED_RESULT_HANDOFF_ENV)
+    if raw_fd is None:
+        return
+    fd = int(raw_fd)
+    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(encoded) > CONTRACTED_RESULT_LIMIT_BYTES:
+        raise ValueError("contracted result exceeds the bounded parent handoff")
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError(errno.EINVAL, "contracted result handoff is not a regular file")
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    view = memoryview(encoded)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.EIO, "contracted result handoff write made no progress")
+        view = view[written:]
+
+
+def write_json_atomically(
+    path: str | pathlib.Path, payload: Any, *, artifacts: ArtifactDirectory | None = None,
+) -> None:
+    content = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    write_bytes_atomically(path, content, artifacts=artifacts)
+
+
+def read_json_regular_file(
+    path: str | pathlib.Path, *, artifacts: ArtifactDirectory | None = None,
+) -> Any:
+    """Read a regular file without following a child-created symlink or FIFO."""
+    target = pathlib.Path(path)
+    if artifacts is not None:
+        return artifacts.read_json_regular_file(target.name)
+    with ArtifactDirectory(target.parent) as artifacts:
+        return artifacts.read_json_regular_file(target.name)
+
+
 def markdown_list(values: list[str]) -> str:
     return "\n".join(f"- {value}" for value in values) if values else "- none"
 
@@ -35,7 +208,25 @@ def markdown_list(values: list[str]) -> str:
 def build_prompt(task: dict[str, Any], result_path: str | pathlib.Path) -> str:
     role_id = str(task.get("role_id") or "")
     outputs = [str(item) for item in task.get("must_produce") or []]
+    goal_review_stub = (
+        ',\n  "goal_review": {"verdict": "pass", "reason": "Why the goal is or is not met", '
+        '"evidence": ["Concrete evidence supporting the verdict"]}'
+        if task.get("goal_gate") is True
+        else ""
+    )
     prompt = f"""You are executing one Atlas workflow role.
+
+Writing instructions apply from the first draft, throughout planning, decomposition,
+task instructions and final outputs. Use plain, direct technical English. State the
+answer first, then explain it. Make clear who does what, under which conditions, and
+why. Use the same term for the same thing. Explain necessary technical terms instead
+of replacing them with vague words. Preserve important reasoning, qualifications,
+uncertainty, technical precision, depth and breadth. Remove filler, repeated
+conclusions and unnecessary introductions. Do not confuse brevity with clarity or
+impose an arbitrary word limit. Name the outcome, owner, action, conditions, reason
+and acceptance where they matter; link detailed specifications when useful. Review
+checks these authoring requirements as a backstop. Field presence alone does not
+prove that a reader understands the content.
 
 Role: {role_id}
 Label: {task.get("label") or role_id}
@@ -51,6 +242,7 @@ Required outputs:
 
 Acceptance criteria:
 {markdown_list([str(item) for item in task.get("acceptance_criteria") or []])}
+{goal_gate_instructions(task)}
 
 Task packet:
 ```json
@@ -69,7 +261,7 @@ The JSON object must have this shape:
 {output_json_stub(outputs)}
   }},
   "evidence": [],
-  "notes": ""
+  "notes": ""{goal_review_stub}
 }}
 ```
 
@@ -79,23 +271,58 @@ If you cannot produce every required output, write status "failed" and explain t
     return prompt
 
 
+def goal_gate_instructions(task: dict[str, Any]) -> str:
+    if task.get("goal_gate") is not True:
+        return ""
+    return '''
+Goal review gate:
+This field is separate from `outputs` and is required for this marked role. Review whether
+the user's underlying goal and acceptance criteria are met. Passing tests alone does not
+mean the goal is accepted; consider the requested behavior, intent, and evidence.
+Use exactly one of `pass`, `fail`, or `inconclusive` for verdict, a nonblank reason,
+and a nonempty list of nonblank evidence strings. Do not add fields.
+
+Required `goal_review` object shape:
+```json
+{
+  "verdict": "pass",
+  "reason": "Why the goal is or is not met",
+  "evidence": ["Concrete evidence supporting the verdict"]
+}
+```
+'''
+
+
 def output_json_stub(outputs: list[str]) -> str:
     if not outputs:
         return ""
     return ",\n".join(f'    "{name}": ""' for name in outputs)
 
 
-def fail_closed_result(task: dict[str, Any], result_path: pathlib.Path, prompt_path: pathlib.Path, notes: str) -> int:
-    write_json(
-        result_path,
-        {
-            "role_id": str(task.get("role_id") or ""),
-            "status": "failed",
-            "outputs": {},
-            "evidence": [str(prompt_path)],
-            "notes": notes,
-        },
-    )
+def fail_closed_result(
+    task: dict[str, Any],
+    result_path: pathlib.Path,
+    prompt_path: pathlib.Path,
+    notes: str,
+    *,
+    evidence: list[str] | None = None,
+    artifacts: ArtifactDirectory | None = None,
+) -> int:
+    payload = {
+        "role_id": str(task.get("role_id") or ""),
+        "status": "failed",
+        "outputs": {},
+        "evidence": evidence or [str(prompt_path)],
+        "notes": notes,
+    }
+    if is_contracted_task(task):
+        publish_contracted_result_handoff(payload)
+    if artifacts is not None:
+        artifacts.write_json(result_path.name, payload)
+    elif is_contracted_task(task):
+        write_json_atomically(result_path, payload)
+    else:
+        write_json(result_path, payload)
     return 2
 
 
@@ -143,6 +370,296 @@ def execute_allowed(args: argparse.Namespace) -> bool:
     return bool(args.allow_execute or config_bool("ATLAS_ROLE_CODEX_ALLOW_EXECUTE", False))
 
 
+def is_contracted_task(task: dict[str, Any]) -> bool:
+    context = task.get("work_item_context")
+    return isinstance(context, dict) and "local_execution_v1" in context
+
+
+def contracted_assignment(task: dict[str, Any]) -> dict[str, Any]:
+    import atlas_local_sizing
+
+    assignment = atlas_local_sizing.assignment_for_task(task)
+    if not isinstance(assignment, dict):
+        raise ValueError("assignment must be an object")
+    required = {"purpose", "model", "reasoning"}
+    if set(assignment) not in (required, required | {"reason"}) or any(
+        not isinstance(assignment.get(key), str) or not assignment[key].strip()
+        for key in required
+    ):
+        raise ValueError("assignment must contain purpose, model, and reasoning only")
+    if "reason" in assignment and not isinstance(assignment["reason"], str):
+        raise ValueError("assignment reason must be a string")
+    return assignment
+
+
+def contracted_argv(assignment: dict[str, Any]) -> list[str]:
+    return [
+        "codex", "exec", "--ignore-user-config", "--sandbox", "workspace-write",
+        "--ephemeral", "--skip-git-repo-check", "--model", str(assignment["model"]),
+        "-c", f'model_reasoning_effort="{assignment["reasoning"]}"', "-",
+    ]
+
+
+def contracted_override_names(
+    args: argparse.Namespace,
+    argv: list[str] | None,
+    unknown_args: list[str] | None = None,
+    launch_env: dict[str, str] | None = None,
+) -> list[str]:
+    names: set[str] = set()
+    supplied_args = list(argv or [])
+    environment = os.environ if launch_env is None else launch_env
+    if unknown_args:
+        names.add("unrecognized command-line override")
+    if args.codex_command is not None:
+        names.add("--codex-command")
+    if any(arg == "--profile-kind" or arg.startswith("--profile-kind=") for arg in supplied_args):
+        names.add("--profile-kind")
+    config = common.read_config()
+    if environment.get("ATLAS_ROLE_CODEX_PROFILE_KIND") or config.get("ATLAS_ROLE_CODEX_PROFILE_KIND"):
+        names.add("ATLAS_ROLE_CODEX_PROFILE_KIND")
+
+    for key in set(environment) | set(config):
+        if key.startswith("AGENT_CODEX_") and key.endswith(("_PROFILE", "_MODEL", "_EXTRA_ARGS")):
+            env_value = environment.get(key)
+            config_value = config.get(key)
+            if (env_value is not None and str(env_value).strip()) or (
+                config_value is not None and str(config_value).strip()
+            ):
+                names.add(key)
+
+    provider_knobs = {
+        "OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_TYPE", "OPENAI_ORGANIZATION",
+        "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_AD_TOKEN",
+        "CODEX_API_KEY", "OPENAI_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_HOME",
+    }
+    for key in provider_knobs:
+        if key in environment or key in config:
+            names.add(key)
+    return sorted(names)
+
+
+def write_invocation_report(
+    result_path: pathlib.Path,
+    *,
+    assignment: dict[str, Any] | None,
+    status: str,
+    reason: str,
+    command_argv: list[str] | None = None,
+    rejected_overrides: list[str] | None = None,
+    artifacts: ArtifactDirectory | None = None,
+) -> pathlib.Path:
+    report_path = result_path.with_suffix(".invocation.json")
+    report = invocation_report_payload(
+        assignment=assignment, status=status, reason=reason,
+        command_argv=command_argv, rejected_overrides=rejected_overrides,
+    )
+    write_json_atomically(report_path, report, artifacts=artifacts)
+    return report_path
+
+
+def invocation_report_payload(
+    *,
+    assignment: dict[str, Any] | None,
+    status: str,
+    reason: str,
+    command_argv: list[str] | None = None,
+    rejected_overrides: list[str] | None = None,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "status": status,
+        "reason": reason,
+        "policy": {"provider_billing_qualified": False},
+    }
+    if assignment is not None:
+        report["assignment"] = assignment
+        report["policy"].update({
+            "binding": "local_execution_v1",
+            "purpose": assignment["purpose"],
+            "model": assignment["model"],
+            "reasoning": assignment["reasoning"],
+        })
+    if command_argv is not None:
+        report["argv"] = command_argv
+    if rejected_overrides:
+        report["rejected_overrides"] = rejected_overrides
+    return report
+
+
+def contracted_route_qualified() -> bool:
+    """Read the supervisor-owned route setting; task data and argv cannot qualify it."""
+    key = "ATLAS_ROLE_CODEX_STANDALONE_ROUTE_QUALIFICATION"
+    if key in os.environ:
+        return False
+    return (
+        common.read_config().get(key) == CONTRACTED_ROUTE_VALUE
+    )
+
+
+@contextlib.contextmanager
+def cancellation_events():
+    """Translate supervisor TERM/INT into a bounded child-cancellation request."""
+    cancelled = threading.Event()
+    previous: dict[int, Any] = {}
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, lambda _signum, _frame: cancelled.set())
+    try:
+        yield cancelled
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def terminate_and_reap(proc: subprocess.Popen[bytes], grace_seconds: float) -> bool:
+    """Stop and wait for the direct child; false means custody is uncertain."""
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=grace_seconds)
+        return proc.poll() is not None
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=grace_seconds)
+            return proc.poll() is not None
+        except (OSError, subprocess.SubprocessError):
+            return False
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def run_contracted_process(
+    command: list[str],
+    prompt: str,
+    env: dict[str, str],
+    timeout_seconds: int,
+    cancel_event: threading.Event,
+) -> dict[str, Any]:
+    """Run the fixed route with bounded combined output and explicit child custody."""
+    if cancel_event.is_set():
+        return {
+            "status": "cancelled_before_launch",
+            "returncode": None,
+            "output": b"",
+            "direct_child_reaped": True,
+            "io_threads_closed": True,
+            "stdout_closed": True,
+            "pid": None,
+        }
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            close_fds=True,
+        )
+    except OSError as exc:
+        return {
+            "status": "launch_failed",
+            "returncode": None,
+            "output": str(exc).encode("utf-8", "replace")[:CONTRACTED_OUTPUT_LIMIT_BYTES],
+            "direct_child_reaped": True,
+            "io_threads_closed": True,
+            "stdout_closed": True,
+            "pid": None,
+        }
+
+    output = bytearray()
+    output_overflow = threading.Event()
+    io_failed = threading.Event()
+
+    def drain_output() -> None:
+        assert proc.stdout is not None
+        try:
+            read_chunk = getattr(proc.stdout, "read1", proc.stdout.read)
+            while True:
+                chunk = read_chunk(4096)
+                if not chunk:
+                    return
+                available = CONTRACTED_OUTPUT_LIMIT_BYTES - len(output)
+                if available > 0:
+                    output.extend(chunk[:available])
+                if len(chunk) > available:
+                    output_overflow.set()
+        except (OSError, ValueError):
+            io_failed.set()
+
+    def send_prompt() -> None:
+        assert proc.stdin is not None
+        try:
+            proc.stdin.write(prompt.encode("utf-8"))
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            io_failed.set()
+        finally:
+            try:
+                proc.stdin.close()
+            except (OSError, ValueError):
+                io_failed.set()
+
+    reader = threading.Thread(target=drain_output, name="atlas-codex-output", daemon=True)
+    writer = threading.Thread(target=send_prompt, name="atlas-codex-input", daemon=True)
+    reader.start()
+    writer.start()
+    deadline = time.monotonic() + timeout_seconds
+    stop_reason: str | None = None
+    while proc.poll() is None:
+        if cancel_event.is_set():
+            stop_reason = "cancelled"
+            break
+        if output_overflow.is_set():
+            stop_reason = "output_limit"
+            break
+        if time.monotonic() >= deadline:
+            stop_reason = "timed_out"
+            break
+        time.sleep(0.02)
+
+    if stop_reason is not None:
+        direct_child_reaped = terminate_and_reap(proc, CONTRACTED_TERMINATION_GRACE_SECONDS)
+    else:
+        try:
+            proc.wait(timeout=CONTRACTED_TERMINATION_GRACE_SECONDS)
+            direct_child_reaped = proc.poll() is not None
+        except (OSError, subprocess.SubprocessError):
+            direct_child_reaped = False
+
+    writer.join(CONTRACTED_TERMINATION_GRACE_SECONDS)
+    reader.join(CONTRACTED_TERMINATION_GRACE_SECONDS)
+    io_threads_closed = not writer.is_alive() and not reader.is_alive()
+    stdout_closed = False
+    if not reader.is_alive() and proc.stdout is not None:
+        try:
+            proc.stdout.close()
+            stdout_closed = bool(getattr(proc.stdout, "closed", False))
+        except Exception:
+            io_failed.set()
+    if not direct_child_reaped or not io_threads_closed or not stdout_closed:
+        status = "cleanup_uncertain"
+    elif stop_reason is not None:
+        status = stop_reason
+    elif output_overflow.is_set():
+        status = "output_limit"
+    elif io_failed.is_set():
+        status = "io_failed"
+    else:
+        status = "completed"
+    return {
+        "status": status,
+        "returncode": proc.poll(),
+        "output": bytes(output),
+        "direct_child_reaped": direct_child_reaped,
+        "io_threads_closed": io_threads_closed,
+        "stdout_closed": stdout_closed,
+        "output_overflow": output_overflow.is_set(),
+        "pid": proc.pid,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", default=os.environ.get("ATLAS_ROLE_TASK_FILE"))
@@ -160,8 +677,137 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def execute_contracted_invocation(
+    task: dict[str, Any],
+    result_path: pathlib.Path,
+    prompt_path: pathlib.Path,
+    prompt: str,
+    assignment: dict[str, Any],
+    invocation_argv: list[str],
+    timeout_seconds: int,
+    env: dict[str, str],
+) -> int:
+    """Run one contracted invocation with all artifacts confined to an opened directory."""
+    with ArtifactDirectory(result_path.parent) as artifacts:
+        log_path = result_path.with_suffix(".codex.log")
+        invocation_path = result_path.with_suffix(".invocation.json")
+        if artifacts.entry_exists(result_path.name) or artifacts.entry_exists(log_path.name):
+            write_invocation_report(
+                result_path, assignment=assignment, status="blocked",
+                reason="contracted result or log path already exists; choose fresh output paths",
+                command_argv=invocation_argv, artifacts=artifacts,
+            )
+            return 2
+        reason = "supervisor-configured ChatGPT subscription route; bounded direct-child custody active"
+        trusted_report = invocation_report_payload(
+            assignment=assignment, status="running", reason=reason,
+            command_argv=invocation_argv,
+        )
+        artifacts.write_json(invocation_path.name, trusted_report)
+        with cancellation_events() as cancelled:
+            outcome = run_contracted_process(
+                invocation_argv, prompt, env, timeout_seconds, cancelled,
+            )
+        artifact_directory_unchanged = artifacts.path_is_still_bound()
+        output = outcome["output"]
+        artifacts.write_bytes(log_path.name, output)
+        report = trusted_report
+        report["status"] = outcome["status"]
+        report["reason"] = outcome["status"]
+        report["custody"] = {
+            "pid": outcome["pid"],
+            "returncode": outcome["returncode"],
+            "direct_child_reaped": outcome["direct_child_reaped"],
+            "io_threads_closed": outcome["io_threads_closed"],
+            "stdout_closed": outcome["stdout_closed"],
+            "custody_uncertain": outcome["status"] == "cleanup_uncertain",
+            "output_bytes": len(output),
+            "output_sha256": hashlib.sha256(output).hexdigest(),
+            "output_limit_bytes": CONTRACTED_OUTPUT_LIMIT_BYTES,
+            "timeout_seconds": timeout_seconds,
+            "termination_grace_seconds": CONTRACTED_TERMINATION_GRACE_SECONDS,
+            "output_overflow": bool(outcome.get("output_overflow")),
+            "process_group_scope": "inherited outer worker group; group cleanup is parent-owned",
+        }
+        report["policy"]["provider_billing_qualified"] = True
+        report["policy"]["qualification_source"] = "runtime config.env"
+        artifacts.write_json(invocation_path.name, report)
+        if outcome["status"] == "cleanup_uncertain":
+            artifacts.write_json(result_path.name, {
+                "role_id": str(task.get("role_id") or ""),
+                "status": "blocked",
+                "outputs": {},
+                "evidence": [str(prompt_path), str(log_path), str(invocation_path)],
+                "notes": "Direct-child or output-pipe cleanup is uncertain; retain this item and do not retry until reconciled.",
+            })
+            publish_contracted_result_handoff({
+                "role_id": str(task.get("role_id") or ""),
+                "status": "blocked",
+                "outputs": {},
+                "evidence": [str(prompt_path), str(log_path), str(invocation_path)],
+                "notes": "Direct-child or output-pipe cleanup is uncertain; retain this item and do not retry until reconciled.",
+            })
+            return 2
+        if outcome["status"] != "completed" or outcome["returncode"] != 0:
+            reason = f"Contracted Codex invocation ended with {outcome['status']} (exit {outcome['returncode']})."
+            return fail_closed_result(
+                task, result_path, prompt_path, reason,
+                evidence=[str(prompt_path), str(log_path), str(invocation_path)],
+                artifacts=artifacts,
+            )
+        if not artifact_directory_unchanged:
+            return fail_closed_result(
+                task, result_path, prompt_path,
+                "Contracted artifact directory changed during execution; result was not accepted.",
+                evidence=[str(prompt_path), str(log_path), str(invocation_path)],
+                artifacts=artifacts,
+            )
+        if not artifacts.entry_exists(result_path.name):
+            return fail_closed_result(
+                task, result_path, prompt_path,
+                f"Codex exited 0 without writing the required result file. Log: {log_path}",
+                evidence=[str(prompt_path), str(log_path), str(invocation_path)],
+                artifacts=artifacts,
+            )
+        try:
+            result = artifacts.read_json_regular_file(result_path.name)
+        except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+            return fail_closed_result(
+                task, result_path, prompt_path,
+                f"Codex wrote an invalid result: {exc}. Log: {log_path}",
+                evidence=[str(prompt_path), str(log_path), str(invocation_path)],
+                artifacts=artifacts,
+            )
+        if not isinstance(result, dict) or str(result.get("role_id") or "") != str(task.get("role_id") or ""):
+            return fail_closed_result(
+                task, result_path, prompt_path,
+                "Codex result must be an object bound to the requested role id.",
+                evidence=[str(prompt_path), str(log_path), str(invocation_path)],
+                artifacts=artifacts,
+            )
+        evidence = result.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = []
+        for path in (str(prompt_path), str(log_path), str(invocation_path)):
+            if path not in evidence:
+                evidence.append(path)
+        result["evidence"] = evidence
+        if result.get("status") != "complete" or not isinstance(result.get("outputs"), dict):
+            return fail_closed_result(
+                task, result_path, prompt_path,
+                "Codex returned a non-complete or malformed contracted result.",
+                evidence=[str(prompt_path), str(log_path), str(invocation_path)],
+                artifacts=artifacts,
+            )
+        artifacts.write_json(result_path.name, result)
+        publish_contracted_result_handoff(result)
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    parser = build_parser()
+    args, unknown_args = parser.parse_known_args(argv)
     if not args.task:
         raise SystemExit("--task or ATLAS_ROLE_TASK_FILE is required")
     if not args.result:
@@ -172,8 +818,136 @@ def main(argv: list[str] | None = None) -> int:
     task = read_json(task_path)
     if not isinstance(task, dict):
         raise SystemExit("role task must be a JSON object")
+    contracted = is_contracted_task(task)
+    if contracted and os.environ.get(SUPERVISOR_EXECUTION_MODE_ENV) == SUPERVISOR_EXECUTION_MODE:
+        # The canonical role runner supplies this only from its trusted command
+        # configuration. Route qualification and the second execute gate below
+        # remain mandatory; task data cannot request this mode.
+        args.execute = True
+    if unknown_args and not contracted:
+        parser.error("unrecognized arguments: " + " ".join(unknown_args))
+    assignment: dict[str, Any] | None = None
+    invocation_path: pathlib.Path | None = None
+    invocation_argv: list[str] | None = None
+    if contracted:
+        try:
+            assignment = contracted_assignment(task)
+            invocation_argv = contracted_argv(assignment)
+        except (ImportError, ValueError, KeyError, TypeError) as exc:
+            prompt = build_prompt(task, result_path)
+            prompt_path.write_text(prompt, encoding="utf-8")
+            invocation_path = write_invocation_report(
+                result_path,
+                assignment=None,
+                status="blocked",
+                reason="invalid local_execution_v1 assignment",
+            )
+            return fail_closed_result(
+                task,
+                result_path,
+                prompt_path,
+                f"Invalid contracted local_execution_v1 assignment: {exc}",
+                evidence=[str(prompt_path), str(invocation_path)],
+            )
     prompt = build_prompt(task, result_path)
     prompt_path.write_text(prompt, encoding="utf-8")
+    if contracted:
+        assert assignment is not None
+        assert invocation_argv is not None
+        launch_env = os.environ.copy()
+        overrides = contracted_override_names(args, raw_argv, unknown_args, launch_env)
+        if overrides:
+            invocation_path = write_invocation_report(
+                result_path,
+                assignment=assignment,
+                status="blocked",
+                reason="contracted model/provider overrides are not permitted",
+                command_argv=invocation_argv,
+                rejected_overrides=overrides,
+            )
+            return fail_closed_result(
+                task,
+                result_path,
+                prompt_path,
+                "Contracted role rejected model/profile/raw-command or provider override settings.",
+                evidence=[str(prompt_path), str(invocation_path)],
+            )
+        if not args.execute:
+            invocation_path = write_invocation_report(
+                result_path,
+                assignment=assignment,
+                status="prepared",
+                reason="prepare only; provider and billing qualification is false",
+                command_argv=invocation_argv,
+            )
+            return fail_closed_result(
+                task,
+                result_path,
+                prompt_path,
+                "Contracted invocation preview prepared; execution is not enabled.",
+                evidence=[str(prompt_path), str(invocation_path)],
+            )
+        if not contracted_route_qualified():
+            invocation_path = write_invocation_report(
+                result_path,
+                assignment=assignment,
+                status="blocked",
+                reason="standalone provider/billing/startup not qualified",
+                command_argv=invocation_argv,
+            )
+            return fail_closed_result(
+                task,
+                result_path,
+                prompt_path,
+                "standalone provider/billing/startup not qualified",
+                evidence=[str(prompt_path), str(invocation_path)],
+            )
+        if not execute_allowed(args):
+            invocation_path = write_invocation_report(
+                result_path,
+                assignment=assignment,
+                status="blocked",
+                reason="contracted execution requires the existing supervisor execute gate",
+                command_argv=invocation_argv,
+            )
+            return fail_closed_result(
+                task,
+                result_path,
+                prompt_path,
+                "Contracted execution requires the existing supervisor execute gate.",
+                evidence=[str(prompt_path), str(invocation_path)],
+            )
+        timeout_seconds = args.timeout_seconds
+        if timeout_seconds is None:
+            timeout_seconds = config_int(
+                "AGENT_CODEX_WORKFLOW_ROLE_TIMEOUT_SECONDS",
+                config_int("AGENT_CODEX_TIMEOUT_SECONDS", 1800),
+            )
+        if timeout_seconds <= 0:
+            invocation_path = write_invocation_report(
+                result_path, assignment=assignment, status="blocked",
+                reason="contracted execution requires a positive timeout",
+                command_argv=invocation_argv,
+            )
+            return fail_closed_result(
+                task, result_path, prompt_path,
+                "Contracted execution requires a positive timeout.",
+                evidence=[str(prompt_path), str(invocation_path)],
+            )
+        timeout_seconds = min(timeout_seconds, CONTRACTED_MAX_TIMEOUT_SECONDS)
+        env = launch_env
+        env.pop(CONTRACTED_RESULT_HANDOFF_ENV, None)
+        env.update({
+            "ATLAS_ROLE_TASK_FILE": str(task_path),
+            "ATLAS_ROLE_RESULT_FILE": str(result_path),
+            "ATLAS_ROLE_PROMPT_FILE": str(prompt_path),
+            "ATLAS_ROLE_ID": str(task.get("role_id") or ""),
+            "ATLAS_AGENT_REF": str(task.get("agent_ref") or ""),
+        })
+        return execute_contracted_invocation(
+            task, result_path, prompt_path, prompt, assignment,
+            invocation_argv, timeout_seconds, env,
+        )
     if not args.execute:
         return fail_closed_result(
             task,
@@ -239,6 +1013,10 @@ def main(argv: list[str] | None = None) -> int:
     result.setdefault("role_id", str(task.get("role_id") or ""))
     result.setdefault("outputs", {})
     result.setdefault("status", "complete" if proc.returncode == 0 else "failed")
+    if proc.returncode != 0 and result.get("status") == "complete":
+        result["status"] = "failed"
+        result["notes"] = (str(result.get("notes") or "").strip() + "\n" +
+                           f"Rejected complete result because Codex exited {proc.returncode}.").strip()
     write_json(result_path, result)
     return 0 if proc.returncode == 0 and result.get("status") == "complete" else 2
 

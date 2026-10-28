@@ -4,16 +4,24 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import pathlib
+import secrets
 import shlex
+import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
 RUNTIME_DIR = pathlib.Path(__file__).resolve().parent
+CONTRACTED_RESULT_LIMIT_BYTES = 64 * 1024
+CONTRACTED_RESULT_HANDOFF_ENV = "ATLAS_ROLE_RESULT_HANDOFF_FD"
+SUPERVISOR_CODEX_EXECUTION_MODE_ENV = "ATLAS_ROLE_CODEX_SUPERVISOR_EXECUTION_MODE"
+SUPERVISOR_CODEX_EXECUTION_MODE = "contracted-chatgpt-subscription-v1"
 if str(RUNTIME_DIR) not in sys.path:
     sys.path.insert(0, str(RUNTIME_DIR))
 
@@ -45,11 +53,15 @@ def task_dependency_blockers(task: dict[str, Any]) -> list[str]:
 
 
 def task_is_complete(task: dict[str, Any]) -> bool:
+    gate_review = task.get("goal_review")
+    gate_issues = atlas_workflows.goal_review_issues(gate_review) if task.get("goal_gate") is True else []
     return (
         task.get("status") == "complete"
         and not any(task.get("missing_outputs") or [])
         and not task_contract_issues(task)
         and not task_dependency_blockers(task)
+        and not gate_issues
+        and (task.get("goal_gate") is not True or gate_review.get("verdict") == "pass")
     )
 
 
@@ -79,11 +91,25 @@ def apply_result_to_tasks(tasks: list[dict[str, Any]], result: dict[str, Any]) -
         outputs = result.get("outputs") if isinstance(result.get("outputs"), dict) else {}
         missing = [output for output in task.get("must_produce") or [] if not outputs.get(output)]
         task["contract_issues"] = [str(issue) for issue in result.get("contract_issues") or []]
+        task["goal_review"] = result.get("goal_review")
+        goal_issues = (
+            atlas_workflows.goal_review_issues(result.get("goal_review"))
+            if task.get("goal_gate") is True
+            else []
+        )
+        task["goal_review_issues"] = goal_issues
         task["dependency_blockers"] = [
             str(blocker)
             for blocker in result.get("dependency_blockers") or []
         ]
-        if task["status"] == "complete" and (missing or task["contract_issues"] or task["dependency_blockers"]):
+        if task.get("goal_gate") is True and isinstance(result.get("goal_review"), dict):
+            verdict = result["goal_review"].get("verdict")
+            if verdict != "pass" and not goal_issues:
+                goal_issues = [f"goal review verdict: {verdict}"]
+                task["goal_review_issues"] = goal_issues
+        if task["status"] == "complete" and (
+            missing or task["contract_issues"] or task["dependency_blockers"] or goal_issues
+        ):
             task["status"] = "incomplete"
         task["missing_outputs"] = missing
         task["result"] = result
@@ -111,6 +137,7 @@ def task_blockers(task: dict[str, Any], tasks: list[dict[str, Any]]) -> list[str
     elif task.get("status") != "complete" and missing:
         blockers.append("incomplete output(s): " + ", ".join(missing))
     blockers.extend("contract issue: " + issue for issue in task_contract_issues(task))
+    blockers.extend("goal review issue: " + str(issue) for issue in task.get("goal_review_issues") or [])
     if task.get("status") in {"failed", "blocked", "incomplete"}:
         blockers.append(f"status: {task.get('status')}")
     return blockers
@@ -125,6 +152,8 @@ def incomplete_task_summary(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]
             "missing_outputs": task.get("missing_outputs") or [],
             "contract_issues": task_contract_issues(task),
             "dependency_blockers": task_dependency_blockers(task),
+            "goal_review": task.get("goal_review"),
+            "goal_review_issues": task.get("goal_review_issues") or [],
             "blockers": task_blockers(task, tasks),
         }
         for task in incomplete_tasks(tasks)
@@ -151,11 +180,22 @@ def results_by_role_from_file(path: str | pathlib.Path) -> dict[str, dict[str, A
 
 def attach_consumed_role_results(task: dict[str, Any], results_by_role: dict[str, dict[str, Any]]) -> dict[str, Any]:
     hydrated = dict(task)
-    consumed = {
-        str(role_id): results_by_role[str(role_id)]
-        for role_id in hydrated.get("consumes") or []
-        if str(role_id) in results_by_role
-    }
+    declared = [str(role_id) for role_id in hydrated.get("consumes") or []]
+    prepopulated = hydrated.get("consumed_role_results")
+    prepopulated = prepopulated if isinstance(prepopulated, dict) else {}
+    consumed: dict[str, dict[str, Any]] = {}
+    for role_id in declared:
+        # Resumed workflow packets can carry dependency results from earlier
+        # jobs. Retain those unless this job has a well-formed newer result.
+        for source in (prepopulated, results_by_role):
+            result = source.get(role_id)
+            if (
+                isinstance(result, dict)
+                and str(result.get("role_id") or "") == role_id
+                and isinstance(result.get("status"), str)
+                and isinstance(result.get("outputs"), dict)
+            ):
+                consumed[role_id] = result
     hydrated["consumed_role_results"] = consumed
     return hydrated
 
@@ -178,6 +218,32 @@ def task_agent_id(task: dict[str, Any]) -> str:
 def task_execution_profile(task: dict[str, Any]) -> str:
     definition = task_agent_definition(task)
     return str(definition.get("execution_profile") or definition.get("profile") or "")
+
+
+def is_contracted_task(task: dict[str, Any]) -> bool:
+    context = task.get("work_item_context")
+    return isinstance(context, dict) and "local_execution_v1" in context
+
+
+def validate_contracted_task(task: dict[str, Any]) -> str | None:
+    if not is_contracted_task(task):
+        return None
+    try:
+        import atlas_local_sizing
+
+        atlas_local_sizing.assignment_for_task(task)
+    except (ImportError, ValueError, KeyError, TypeError) as exc:
+        return f"invalid local_execution_v1 assignment: {exc}"
+    return None
+
+
+def contracted_command_allowed(command: list[str] | None) -> bool:
+    if command is None:
+        return False
+    return command in (
+        ["./atlas-agent-role-codex"],
+        [str(RUNTIME_DIR / "atlas-agent-role-codex")],
+    )
 
 
 def command_from_config(task: dict[str, Any], config: dict[str, Any]) -> list[str] | None:
@@ -228,6 +294,106 @@ def role_result_path(results_dir: pathlib.Path, task: dict[str, Any]) -> pathlib
     return results_dir / f"{safe or 'role'}.json"
 
 
+class ContractedResultDirectory:
+    """Keep contracted role artifacts anchored while the child process runs."""
+
+    def __init__(self, path: pathlib.Path):
+        self.path = path
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise OSError(errno.ENOTSUP, "safe result-directory opening is unavailable", str(path))
+        self.fd = os.open(path, flags | nofollow)
+        try:
+            info = os.fstat(self.fd)
+            if not stat.S_ISDIR(info.st_mode):
+                raise OSError(errno.ENOTDIR, "contracted results path is not a directory", str(path))
+            self.identity = (info.st_dev, info.st_ino)
+        except BaseException:
+            os.close(self.fd)
+            self.fd = -1
+            raise
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+    def __enter__(self) -> "ContractedResultDirectory":
+        return self
+
+    def __exit__(self, _type: Any, _value: Any, _traceback: Any) -> None:
+        self.close()
+
+    @staticmethod
+    def _name(name: str) -> str:
+        if not name or name in {".", ".."} or pathlib.Path(name).name != name:
+            raise ValueError("role artifact name must be one path component")
+        return name
+
+    def unlink(self, name: str) -> None:
+        try:
+            os.unlink(self._name(name), dir_fd=self.fd)
+        except FileNotFoundError:
+            pass
+
+    def path_is_still_bound(self) -> bool:
+        try:
+            info = os.stat(self.path, follow_symlinks=False)
+            return stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == self.identity
+        except OSError:
+            return False
+
+    def write_bytes(self, name: str, content: bytes) -> None:
+        name = self._name(name)
+        temporary = ""
+        fd = -1
+        for _attempt in range(8):
+            temporary = f".{name}.{secrets.token_hex(12)}.tmp"
+            try:
+                fd = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                    dir_fd=self.fd,
+                )
+                break
+            except FileExistsError:
+                continue
+        if fd < 0:
+            raise FileExistsError("could not reserve a unique role artifact temporary file")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                fd = -1
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, name, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(temporary, dir_fd=self.fd)
+            except FileNotFoundError:
+                pass
+
+    def write_json(self, name: str, payload: Any) -> None:
+        self.write_bytes(name, (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+    def read_handoff_json(self, handle: Any) -> Any:
+        handle.seek(0)
+        raw = handle.read(CONTRACTED_RESULT_LIMIT_BYTES + 1)
+        if len(raw) > CONTRACTED_RESULT_LIMIT_BYTES:
+            raise OSError(errno.EFBIG, "contracted role result exceeds the byte limit")
+        if not raw:
+            raise FileNotFoundError("contracted role did not publish a result handoff")
+        return json.loads(raw.decode("utf-8"))
+
+
+class ContractedResultPathChanged(RuntimeError):
+    """Stop pathname-based finalization after a contracted directory swap."""
+
+
 def run_role_task(
     task: dict[str, Any],
     command: list[str],
@@ -235,9 +401,18 @@ def run_role_task(
     results_dir: pathlib.Path,
     base_env: dict[str, str],
 ) -> dict[str, Any]:
+    if is_contracted_task(task):
+        return run_contracted_role_task(task, command, results_dir=results_dir, base_env=base_env)
+    return run_uncontracted_role_task(task, command, results_dir=results_dir, base_env=base_env)
+
+
+def run_uncontracted_role_task(
+    task: dict[str, Any], command: list[str], *, results_dir: pathlib.Path, base_env: dict[str, str],
+) -> dict[str, Any]:
     task_path = results_dir / f"{task.get('role_id')}.task.json"
     task_path.write_text(json.dumps(task, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     result_path = role_result_path(results_dir, task)
+    result_path.unlink(missing_ok=True)
     env = os.environ.copy()
     env.update(base_env)
     env.update(
@@ -251,28 +426,44 @@ def run_role_task(
             "ATLAS_ROLE_RESULT_FILE": str(result_path),
         }
     )
-    proc = subprocess.run(
-        resolve_command(command),
-        cwd=str(results_dir),
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
     output_path = result_path.with_suffix(".out.txt")
-    output_path.write_text(proc.stdout or "", encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            resolve_command(command),
+            cwd=str(results_dir),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        output_path.write_text(proc.stdout or "", encoding="utf-8")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return failed_role_result(task, f"role command could not run: {exc}", output_path)
     if not result_path.exists():
-        return {
-            "role_id": str(task.get("role_id") or ""),
-            "status": "failed",
-            "outputs": {},
-            "evidence": [str(output_path)],
-            "notes": f"role command exited {proc.returncode} without writing ATLAS_ROLE_RESULT_FILE",
-        }
-    result = read_json(result_path)
+        return failed_role_result(
+            task,
+            f"role command exited {proc.returncode} without writing ATLAS_ROLE_RESULT_FILE",
+            output_path,
+        )
+    try:
+        result = read_json(result_path)
+    except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+        return failed_role_result(task, f"role command wrote a malformed result: {exc}", output_path)
     if not isinstance(result, dict):
-        raise ValueError(f"Role result must be an object: {result_path}")
+        return failed_role_result(task, "role command result must be a JSON object", output_path)
+    expected_role_id = str(task.get("role_id") or "")
+    if "role_id" in result and str(result.get("role_id") or "") != expected_role_id:
+        raw_result_path = result_path.with_name(result_path.stem + ".invalid-role-result.json")
+        result_path.replace(raw_result_path)
+        failed = failed_role_result(
+            task,
+            f"role command returned role_id {result.get('role_id')!r}; expected {expected_role_id!r}",
+            output_path,
+        )
+        failed["evidence"].append(str(raw_result_path))
+        write_json(result_path, failed)
+        return failed
     result.setdefault("role_id", str(task.get("role_id") or ""))
     result.setdefault("status", "complete" if proc.returncode == 0 else "failed")
     result.setdefault("outputs", {})
@@ -282,7 +473,130 @@ def run_role_task(
             evidence.append(str(output_path))
     else:
         result["evidence"] = [str(output_path)]
+    if proc.returncode != 0 and result.get("status") == "complete":
+        result["status"] = "failed"
+        result["notes"] = (str(result.get("notes") or "").strip() + "\n" +
+                           f"Rejected complete result because role command exited {proc.returncode}.").strip()
     write_json(result_path, result)
+    return result
+
+
+def run_contracted_role_task(
+    task: dict[str, Any], command: list[str], *, results_dir: pathlib.Path, base_env: dict[str, str],
+) -> dict[str, Any]:
+    result_path = role_result_path(results_dir, task)
+    output_path = result_path.with_suffix(".out.txt")
+    with ContractedResultDirectory(results_dir) as artifacts, tempfile.TemporaryFile(mode="w+b") as handoff:
+        task_path = results_dir / f"{task.get('role_id')}.task.json"
+        artifacts.write_json(task_path.name, task)
+        artifacts.unlink(result_path.name)
+        env = os.environ.copy()
+        env.update(base_env)
+        env.update(
+            {
+                "ATLAS_ROLE_ID": str(task.get("role_id") or ""),
+                "ATLAS_AGENT_REF": str(task.get("agent_ref") or ""),
+                "ATLAS_AGENT_ID": task_agent_id(task),
+                "ATLAS_AGENT_SOURCE": str(task_agent_definition(task).get("source") or ""),
+                "ATLAS_AGENT_EXECUTION_PROFILE": task_execution_profile(task),
+                "ATLAS_ROLE_TASK_FILE": str(task_path),
+                "ATLAS_ROLE_RESULT_FILE": str(result_path),
+                CONTRACTED_RESULT_HANDOFF_ENV: str(handoff.fileno()),
+            }
+        )
+        try:
+            proc = subprocess.run(
+                resolve_command(command),
+                cwd=str(results_dir),
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                pass_fds=(handoff.fileno(),),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            result = write_contracted_failure(
+                task, artifacts, result_path, output_path, f"role command could not run: {exc}",
+            )
+            if not artifacts.path_is_still_bound():
+                raise ContractedResultPathChanged("contracted result directory changed during failure publication")
+            return result
+        artifacts.write_bytes(output_path.name, (proc.stdout or "").encode("utf-8"))
+        try:
+            result = artifacts.read_handoff_json(handoff)
+        except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+            result = write_contracted_failure(
+                task, artifacts, result_path, output_path,
+                f"role command did not provide a bounded valid result handoff: {exc}",
+            )
+            if not artifacts.path_is_still_bound():
+                raise ContractedResultPathChanged("contracted result directory changed during failure publication")
+            return result
+        if not isinstance(result, dict):
+            failure = write_contracted_failure(
+                task, artifacts, result_path, output_path, "role command result must be a JSON object",
+            )
+            if not artifacts.path_is_still_bound():
+                raise ContractedResultPathChanged("contracted result directory changed during failure publication")
+            return failure
+        expected_role_id = str(task.get("role_id") or "")
+        if str(result.get("role_id") or "") != expected_role_id:
+            failure = write_contracted_failure(
+                task, artifacts, result_path, output_path,
+                "contracted result handoff role_id did not match the requested role",
+            )
+            if not artifacts.path_is_still_bound():
+                raise ContractedResultPathChanged("contracted result directory changed during failure publication")
+            return failure
+        result.setdefault("status", "complete" if proc.returncode == 0 else "failed")
+        result.setdefault("outputs", {})
+        evidence = result.get("evidence")
+        if isinstance(evidence, list):
+            if str(output_path) not in evidence:
+                evidence.append(str(output_path))
+        else:
+            result["evidence"] = [str(output_path)]
+        if proc.returncode != 0 and result.get("status") == "complete":
+            result["status"] = "failed"
+            result["notes"] = (str(result.get("notes") or "").strip() + "\n" +
+                               f"Rejected complete result because role command exited {proc.returncode}.").strip()
+        artifacts.write_json(result_path.name, result)
+        if not artifacts.path_is_still_bound():
+            result["status"] = "failed"
+            result["notes"] = (
+                str(result.get("notes") or "").strip() + "\n" +
+                "Rejected result because contracted result directory identity changed."
+            ).strip()
+            artifacts.write_json(result_path.name, result)
+            raise ContractedResultPathChanged("contracted result directory changed during publication; refusing completion")
+        return result
+
+
+def write_contracted_failure(
+    task: dict[str, Any], artifacts: ContractedResultDirectory, result_path: pathlib.Path,
+    output_path: pathlib.Path, notes: str,
+) -> dict[str, Any]:
+    result = {
+        "role_id": str(task.get("role_id") or ""),
+        "status": "failed",
+        "outputs": {},
+        "evidence": [str(output_path)],
+        "notes": notes,
+    }
+    artifacts.write_json(result_path.name, result)
+    return result
+
+
+def failed_role_result(task: dict[str, Any], notes: str, evidence_path: pathlib.Path) -> dict[str, Any]:
+    result = {
+        "role_id": str(task.get("role_id") or ""),
+        "status": "failed",
+        "outputs": {},
+        "evidence": [str(evidence_path)],
+        "notes": notes,
+    }
+    write_json(role_result_path(evidence_path.parent, task), result)
     return result
 
 
@@ -324,11 +638,48 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("command config must be a JSON object")
     results_dir = pathlib.Path(args.results_dir) if args.results_dir else pathlib.Path(args.results).with_suffix("")
     results_dir.mkdir(parents=True, exist_ok=True)
+    has_contracted_tasks = any(is_contracted_task(task) for task in tasks)
+    has_legacy_tasks = any(not is_contracted_task(task) for task in tasks)
+    main_artifacts = ContractedResultDirectory(results_dir) if has_contracted_tasks else None
+    results_parent = ContractedResultDirectory(pathlib.Path(args.results).parent) if has_contracted_tasks else None
+    tasks_parent = ContractedResultDirectory(pathlib.Path(args.tasks).parent) if has_contracted_tasks else None
+    if has_contracted_tasks and has_legacy_tasks:
+        main_artifacts.write_json("role-runner-summary.json", {
+            "tasks": [],
+            "result_count": 0,
+            "incomplete_tasks": incomplete_task_summary(tasks),
+            "finalization": "refused mixed contracted and legacy role task packet before launch",
+        })
+        main_artifacts.close()
+        results_parent.close()
+        tasks_parent.close()
+        return 3
     base_env = {
         "ATLAS_TEAM_ROLE_TASKS_FILE": str(args.tasks),
         "ATLAS_TEAM_ROLE_RESULTS_FILE": str(args.results),
+        # This setting comes from the operator-owned command config, never from
+        # a task packet or inherited environment. Absence preserves prepare-only.
+        SUPERVISOR_CODEX_EXECUTION_MODE_ENV: (
+            SUPERVISOR_CODEX_EXECUTION_MODE
+            if has_contracted_tasks
+            and config.get("supervisor_codex_execution_mode") == SUPERVISOR_CODEX_EXECUTION_MODE else ""
+        ),
     }
     results_by_role = results_by_role_from_file(args.results)
+    persisted_results_by_role: dict[str, dict[str, Any]] = {}
+    if has_contracted_tasks:
+        results_path = pathlib.Path(args.results)
+        if results_path.exists():
+            old_payload = read_json(results_path)
+            if isinstance(old_payload, list):
+                old_results = old_payload
+            elif isinstance(old_payload, dict) and isinstance(old_payload.get("role_results"), list):
+                old_results = old_payload["role_results"]
+            else:
+                old_results = []
+            persisted_results_by_role = {
+                str(item.get("role_id")): item for item in old_results if isinstance(item, dict)
+            }
     for existing in results_by_role.values():
         apply_result_to_tasks(tasks, existing)
     produced: list[dict[str, Any]] = []
@@ -340,16 +691,55 @@ def main(argv: list[str] | None = None) -> int:
             break
         task = runnable[0]
         command = command_from_config(task, config)
-        if command is None:
-            summary.append(
-                {
+        if is_contracted_task(task):
+            contract_problem = validate_contracted_task(task)
+            if contract_problem is None and not contracted_command_allowed(command):
+                contract_problem = "contracted role must map directly to ./atlas-agent-role-codex"
+            if contract_problem is not None:
+                if main_artifacts is not None:
+                    result = {
+                        "role_id": str(task.get("role_id") or "role"),
+                        "status": "failed",
+                        "outputs": {},
+                        "evidence": [str(results_dir / "role-runner.out.txt")],
+                        "notes": contract_problem,
+                    }
+                else:
+                    result = failed_role_result(
+                        task,
+                        contract_problem,
+                        results_dir / "role-runner.out.txt",
+                    )
+                result["status"] = "blocked"
+                result["evidence"].append(str(pathlib.Path(args.command_config)))
+                if main_artifacts is not None:
+                    main_artifacts.write_json(role_result_path(results_dir, task).name, result)
+                else:
+                    write_json(role_result_path(results_dir, task), result)
+                produced.append(result)
+                results_by_role[str(result.get("role_id") or "")] = result
+                if has_contracted_tasks:
+                    persisted_results_by_role[str(result.get("role_id"))] = result
+                summary.append({
                     "role_id": task.get("role_id"),
                     "phase_index": task.get("phase_index"),
-                    "status": "skipped",
-                    "reason": "no command mapping",
-                }
-            )
-            task["status"] = "blocked"
+                    "status": "blocked",
+                    "reason": contract_problem,
+                })
+                apply_result_to_tasks(tasks, result)
+                continue
+        if command is None:
+            result = failed_role_result(task, "no command mapping", results_dir / "role-runner.out.txt")
+            result["status"] = "blocked"
+            produced.append(result)
+            results_by_role[str(result.get("role_id") or "")] = result
+            summary.append({
+                "role_id": task.get("role_id"),
+                "phase_index": task.get("phase_index"),
+                "status": "blocked",
+                "reason": "no command mapping",
+            })
+            apply_result_to_tasks(tasks, result)
             continue
         summary.append(
             {
@@ -362,26 +752,79 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             task["status"] = "dry-run"
             continue
-        result = run_role_task(
-            attach_consumed_role_results(task, results_by_role),
-            command,
-            results_dir=results_dir,
-            base_env=base_env,
-        )
+        try:
+            result = run_role_task(
+                attach_consumed_role_results(task, results_by_role),
+                command,
+                results_dir=results_dir,
+                base_env=base_env,
+            )
+        except ContractedResultPathChanged:
+            if main_artifacts is not None:
+                main_artifacts.write_json("role-runner-summary.json", {
+                    "tasks": summary,
+                    "result_count": len(produced),
+                    "incomplete_tasks": incomplete_task_summary(tasks),
+                    "finalization": "aborted after contracted results-directory identity changed",
+                })
+                main_artifacts.close()
+            if results_parent is not None:
+                results_parent.close()
+            if tasks_parent is not None:
+                tasks_parent.close()
+            return 3
         produced.append(result)
         results_by_role[str(result.get("role_id") or "")] = result
+        if has_contracted_tasks:
+            persisted_results_by_role[str(result.get("role_id"))] = result
         apply_result_to_tasks(tasks, result)
     if produced:
-        append_results(args.results, produced)
-    write_json(args.tasks, {"tasks": tasks})
-    write_json(
-        results_dir / "role-runner-summary.json",
-        {
+        if main_artifacts is not None and not (
+            main_artifacts.path_is_still_bound()
+            and results_parent.path_is_still_bound()
+            and tasks_parent.path_is_still_bound()
+        ):
+            main_artifacts.write_json("role-runner-summary.json", {
+                "tasks": summary,
+                "result_count": len(produced),
+                "incomplete_tasks": incomplete_task_summary(tasks),
+                "finalization": "aborted after contracted publication directory identity changed",
+            })
+            main_artifacts.close()
+            results_parent.close()
+            tasks_parent.close()
+            return 3
+        if results_parent is not None:
+            results_parent.write_json(pathlib.Path(args.results).name, list(persisted_results_by_role.values()))
+        else:
+            append_results(args.results, produced)
+    if tasks_parent is not None:
+        tasks_parent.write_json(pathlib.Path(args.tasks).name, {"tasks": tasks})
+    else:
+        write_json(args.tasks, {"tasks": tasks})
+    summary_payload = {
             "tasks": summary,
             "result_count": len(produced),
             "incomplete_tasks": incomplete_task_summary(tasks),
-        },
-    )
+        }
+    if main_artifacts is not None:
+        main_artifacts.write_json("role-runner-summary.json", summary_payload)
+        if not (
+            main_artifacts.path_is_still_bound()
+            and results_parent.path_is_still_bound()
+            and tasks_parent.path_is_still_bound()
+        ):
+            summary_payload["finalization"] = "aborted after contracted publication directory identity changed"
+            main_artifacts.write_json("role-runner-summary.json", summary_payload)
+            main_artifacts.close()
+            results_parent.close()
+            tasks_parent.close()
+            return 3
+        main_artifacts.close()
+        results_parent.close()
+        tasks_parent.close()
+    else:
+        write_json(results_dir / "role-runner-summary.json", summary_payload)
     if args.dry_run:
         return 0
     if not produced and incomplete_tasks(tasks):

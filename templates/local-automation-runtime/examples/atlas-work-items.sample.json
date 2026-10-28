@@ -18,7 +18,11 @@
         ],
         "parallel_group": "local-bootstrap"
       },
-      "evidence": []
+      "evidence": [],
+      "goal": "Exercise independent review of local lifecycle evidence without remote APIs.",
+      "acceptance_criteria": [
+        "The local workflow records review findings and an explicit evidenced goal verdict."
+      ]
     }
   ]
 }

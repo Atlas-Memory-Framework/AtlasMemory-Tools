@@ -1,4 +1,4 @@
-<!-- atlas-tools-generated: source=skills/local-plan-agent-runtime/references/personas.md manifest=atlas-tools.v1 checksum=sha256:706bb87580294e5b0adea2ed6fd23b834bf6b2ada57a803ff5b8098154f4d9a6 -->
+<!-- atlas-tools-generated: source=skills/local-plan-agent-runtime/references/personas.md manifest=atlas-tools.v1 checksum=sha256:6f31bd48e67e8bc92bdbdf5b3118c28b7af89eacc0974a0a2c8cecbf5adf4adf -->
 <!-- atlas-tools-generated-end -->
 # Personas
 
@@ -41,6 +41,8 @@ Review automation manifest safety, issue projection readiness, dispatch blockers
 ## human-readability-reviewer
 
 Check whether a new engineer can explain what is being built, why now, what changes first, and what remains blocked.
+
+Use [plain-technical-english](../../plain-technical-english/SKILL.md) to assess the answer, actors/actions, conditions/reasons, stable terms, reasoning/uncertainty, useful detail, and faithfulness. Cite the unclear passage and what the reader cannot determine. Preserve technical terms when explained, required schemas, exact quotes, and evidence. A record validator can verify source freshness and coverage; it cannot judge meaning.
 
 ## security-privacy-reviewer
 

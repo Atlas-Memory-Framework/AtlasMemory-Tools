@@ -1,0 +1,29 @@
+{
+  "purpose": "Examples for content review under the existing human-readability rubric. Deterministic checks can verify routing and fields, not these judgments.",
+  "examples": [
+    {
+      "id": "vague-unexplained-language",
+      "draft": "Operationalize holistic orchestration to unlock robust, seamless execution at scale.",
+      "expected_review": "needs revision",
+      "reason": "The reader cannot identify the actor, concrete change, conditions or acceptance evidence."
+    },
+    {
+      "id": "repeated-filler",
+      "draft": "This plan improves the process. The process will become better through improvement. Improving the process is the goal of the plan.",
+      "expected_review": "needs revision",
+      "reason": "The repeated goal supplies no action, owner, reason, conditions, technical constraint or completion test."
+    },
+    {
+      "id": "missing-actor-and-action",
+      "draft": "After the check fails, it will be handled and validated before proceeding.",
+      "expected_review": "needs revision",
+      "reason": "Responsibility and the corrective action are missing; an implementer must guess who acts and what permits continuation."
+    },
+    {
+      "id": "concise-technically-complete",
+      "draft": "The local queue worker runs the selected offline test file after its source hashes and dependencies match the task. A nonzero exit stops the task and records the failing command; this pilot makes no automatic code repair. The reviewer checks the actual result and source revision before the worker records completion. Acceptance is 17 passing cases, no skipped tests and matching JUnit evidence. This proves the selected source tests passed; live database and browser behavior remain unverified. The task links the exact file and test command in its specification.",
+      "expected_review": "acceptable",
+      "reason": "The actor, action, conditions, failure route, acceptance evidence and limits are explicit, with necessary technical terms and reasoning preserved."
+    }
+  ]
+}
