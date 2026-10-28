@@ -2,6 +2,8 @@
 
 This document describes the current local issue-to-PR automation runtime. `AtlasMemory-Tools` remains the canonical source for skills, agents, scripts, Project helpers, and runtime templates. Installed runtime directories are local operational hosts and must preserve their config, auth, logs, jobs, and checkouts.
 
+For current local queue operation, use the [local harness operating instruction](local-harness-operating-instruction.md), including its route qualification and recorded-exception requirements.
+
 ## Current Model
 
 - Canonical template: `templates/local-automation-runtime/`

@@ -79,6 +79,177 @@ class AtlasWorkflowTemplateTests(unittest.TestCase):
 
         self.assertIn("role architecture must declare at least one output", template.validate())
 
+    def goal_gate_template(self):
+        return self.workflows.TeamTemplate.from_dict(
+            {
+                "id": "gated-work",
+                "workflow_kind": "work-item",
+                "roles": [
+                    {"id": "implementation", "agent_ref": "agents/implementation.md", "must_produce": ["change"]},
+                    {
+                        "id": "goal-review",
+                        "agent_ref": "agents/review.md",
+                        "must_produce": ["decision"],
+                        "consumes": ["implementation"],
+                        "goal_gate": True,
+                    },
+                ],
+            }
+        )
+
+    def test_goal_review_contract_requires_exact_typed_object(self) -> None:
+        valid = {"verdict": "pass", "reason": "The requested behavior is present.", "evidence": ["tests pass"]}
+        self.assertEqual(self.workflows.goal_review_issues(valid), [])
+        self.assertEqual(
+            self.workflows.goal_review_issues({**valid, "verdict": "unknown"})[0],
+            "goal review: verdict must be pass, fail, or inconclusive",
+        )
+        for bad in (
+            None,
+            "pass",
+            {"verdict": 1, "reason": 2, "evidence": [3]},
+            {"verdict": "pass", "reason": " ", "evidence": ["ok"]},
+            {"verdict": "pass", "reason": "ok", "evidence": []},
+            {**valid, "extra": True},
+        ):
+            self.assertTrue(self.workflows.goal_review_issues(bad), bad)
+
+    def test_template_rejects_implementation_as_its_own_goal_gate(self) -> None:
+        template = self.workflows.TeamTemplate.from_dict(
+            {
+                "id": "invalid-gate",
+                "roles": [
+                    {"id": "implementation", "agent_ref": "agents/implementation.md", "must_produce": ["change"], "goal_gate": True}
+                ],
+            }
+        )
+        self.assertIn("role implementation cannot be a goal gate", template.validate())
+
+    def test_goal_gate_pass_accepts_outputs_and_fail_or_inconclusive_blocks(self) -> None:
+        template = self.goal_gate_template()
+        self.assertEqual(template.validate(), [])
+        for verdict, expected_role_status in (
+            ("pass", "complete"),
+            ("fail", "blocked"),
+            ("inconclusive", "incomplete"),
+        ):
+            run = self.workflows.TeamRun.start(run_id="run-gate", template=template, work_item_id="WI-1")
+            review = {"verdict": verdict, "reason": f"Review says {verdict}.", "evidence": ["review.md"]}
+            self.workflows.apply_role_results(
+                template=template,
+                run=run,
+                results=[
+                    self.workflows.TeamRunRoleResult("implementation", "complete", {"change": "implemented"}),
+                    self.workflows.TeamRunRoleResult(
+                        "goal-review", "complete", {"decision": verdict}, goal_review=review
+                    ),
+                ],
+            )
+            self.assertEqual(run.role_results["goal-review"].status, expected_role_status)
+            self.assertEqual(run.status, "complete" if verdict == "pass" else "blocked")
+            self.assertEqual(run.role_results["goal-review"].goal_review, review)
+            summary = self.workflows.team_run_summary(template, run)
+            markdown = run.rollup_markdown(template)
+            self.assertEqual(summary["roles"][1]["goal_review"], review)
+            self.assertIn(f"- Goal gate verdict: `{verdict}`", markdown)
+            self.assertIn("- Goal review evidence: review.md", markdown)
+
+    def test_goal_gate_missing_or_malformed_review_fails_closed_and_roundtrips_raw_value(self) -> None:
+        template = self.goal_gate_template()
+        for review in (None, ["raw", 4], {"verdict": 7, "reason": False, "evidence": [None]}):
+            run = self.workflows.TeamRun.start(run_id="run-gate", template=template, work_item_id="WI-1")
+            run.record_role_result(
+                self.workflows.TeamRunRoleResult(
+                    "implementation", "complete", {"change": "implemented"}
+                )
+            )
+            raw_result = self.workflows.TeamRunRoleResult.from_dict(
+                {"role_id": "goal-review", "status": "complete", "outputs": {"decision": "pass"}, "goal_review": review}
+            )
+            self.assertEqual(raw_result.goal_review, review)
+            self.workflows.apply_role_results(template=template, run=run, results=[raw_result])
+            normalized = run.role_results["goal-review"]
+            self.assertEqual(normalized.status, "incomplete")
+            self.assertTrue(any(issue.startswith("goal review:") for issue in normalized.contract_issues))
+            self.assertEqual(normalized.goal_review, review)
+            restored = self.workflows.TeamRun.from_dict(run.to_dict())
+            self.assertEqual(restored.role_results["goal-review"].goal_review, review)
+            self.assertEqual(restored.refresh_status(template), "blocked")
+
+    def test_refresh_status_fails_closed_for_directly_recorded_gate_result(self) -> None:
+        template = self.goal_gate_template()
+        run = self.workflows.TeamRun.start(run_id="run-gate", template=template, work_item_id="WI-1")
+        run.record_role_result(
+            self.workflows.TeamRunRoleResult("implementation", "complete", {"change": "implemented"})
+        )
+        run.record_role_result(
+            self.workflows.TeamRunRoleResult(
+                "goal-review", "complete", {"decision": "fail"},
+                goal_review={"verdict": "fail", "reason": "The goal is unmet.", "evidence": ["review.md"]},
+            )
+        )
+        self.assertEqual(run.refresh_status(template), "blocked")
+
+    def test_corrected_goal_review_clears_generated_gate_contract_issue(self) -> None:
+        template = self.goal_gate_template()
+        run = self.workflows.TeamRun.start(run_id="run-gate", template=template, work_item_id="WI-1")
+        self.workflows.apply_role_results(
+            template=template,
+            run=run,
+            results=[
+                self.workflows.TeamRunRoleResult("implementation", "complete", {"change": "implemented"}),
+                self.workflows.TeamRunRoleResult("goal-review", "complete", {"decision": "pending"}),
+            ],
+        )
+        self.assertTrue(any(issue.startswith("goal review:") for issue in run.role_results["goal-review"].contract_issues))
+        self.workflows.apply_role_results(
+            template=template,
+            run=run,
+            results=[
+                self.workflows.TeamRunRoleResult(
+                    "goal-review", "complete", {"decision": "pass"},
+                    goal_review={"verdict": "pass", "reason": "Goal is met.", "evidence": ["review.md"]},
+                ),
+            ],
+        )
+        self.assertEqual(run.role_results["goal-review"].contract_issues, [])
+        self.assertEqual(run.status, "complete")
+
+    def test_goal_gate_contract_issues_cannot_be_ignored_and_dependency_waits_for_pass(self) -> None:
+        template = self.goal_gate_template()
+        template = self.workflows.TeamTemplate.from_dict(
+            {
+                **template.to_dict(),
+                "roles": [
+                    *[role.__dict__ for role in template.roles],
+                    {"id": "finalize", "agent_ref": "agents/rollup.md", "must_produce": ["final"], "consumes": ["goal-review"]},
+                ],
+            }
+        )
+        run = self.workflows.TeamRun.start(run_id="run-gate", template=template, work_item_id="WI-1")
+        run.record_role_result(
+            self.workflows.TeamRunRoleResult(
+                "implementation", "complete", {"change": "implemented"}
+            )
+        )
+        invalid = self.workflows.TeamRunRoleResult(
+            "goal-review", "complete", {"decision": "pass"},
+            contract_issues=["operator issue"],
+            goal_review={"verdict": "pass", "reason": "done", "evidence": ["review.md"]},
+        )
+        self.assertFalse(self.workflows.role_result_satisfies_outputs(template.roles[1], invalid))
+        self.workflows.apply_role_results(template=template, run=run, results=[invalid])
+        self.assertEqual(run.status, "blocked")
+        packets = self.workflows.role_task_packets(template, run)
+        self.assertTrue(packets[1]["goal_gate"])
+        self.assertEqual(packets[1]["goal_review"]["evidence"], ["review.md"])
+        self.assertEqual(
+            self.workflows.role_dependency_blockers(
+                template.roles[2], run, {role.id: role for role in template.roles}
+            ),
+            ["dependency not complete: goal-review"],
+        )
+
     def test_template_rejects_unknown_role_dependency_and_duplicate_outputs(self) -> None:
         template = self.workflows.TeamTemplate.from_dict(
             {
@@ -663,6 +834,16 @@ class AtlasWorkflowTemplateTests(unittest.TestCase):
         self.assertIsNotNone(selected)
         assert selected is not None
         self.assertEqual(selected.id, "work-item-change-lifecycle")
+        self.assertEqual(
+            selected.role_phases(),
+            [["implementation"], ["test-runner"], ["code-review", "semantic-alignment"], ["evidence-rollup"]],
+        )
+        run = self.workflows.TeamRun.start(run_id="local-change", template=selected, work_item_id="WI-1")
+        packets = {packet["role_id"]: packet for packet in self.workflows.role_task_packets(selected, run)}
+        self.assertEqual(packets["test-runner"]["consumes"], ["implementation"])
+        for role in ("code-review", "semantic-alignment"):
+            self.assertEqual(packets[role]["consumes"], ["implementation", "test-runner"])
+            self.assertTrue(packets[role]["dependency_blockers"])
 
     def test_default_review_and_validation_templates_are_valid_and_selectable(self) -> None:
         templates = self.workflows.load_team_templates(ROOT / "team-templates")
@@ -965,7 +1146,7 @@ class AtlasWorkflowTemplateTests(unittest.TestCase):
         by_id = {template["id"]: template for template in summary["templates"]}
         self.assertEqual(
             by_id["review-evidence-gate"]["role_phases"],
-            [["code-review", "security-review", "semantic-review"], ["review-rollup"]],
+            [["code-review", "security-review"], ["semantic-review"], ["review-rollup"]],
         )
         self.assertEqual(by_id["review-evidence-gate"]["rollup_roles"], ["review-rollup"])
         self.assertEqual(by_id["planning-design-doc"]["rollup_roles"], ["rollup-editor"])

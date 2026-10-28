@@ -1,0 +1,27 @@
+# Current local harness operating instruction
+
+Use the existing local JSON queue as the default execution record for eligible work. The supervisor owns intake, readiness, dispatch, evidence import and exceptions; it does not replace the queue with a series of unrecorded thread handoffs. This instruction applies to this harness workflow, not global platform permissions.
+
+An eligible item has an authorized goal, acceptance criteria, an isolated pinned checkout, exact write scope, dependencies, objective validation, an independent goal reviewer, a verified execution route and a bounded resource window. Split work that fails the existing model-sizing qualifier. Keep each established planning phase with its own owner; a small technical-planning canary does not complete the full `/plan` workflow.
+
+## Current routes
+
+- Deterministic local commands use the existing ordinary queue/worker/role-runner lane. Pilot149 completed one retained-evidence validation item through review, rollup and status with no test rerun or intervention between roles. That result does not qualify model-driven work.
+- For model-sized work on runtime484, retain `local_execution_v1`. Use the existing supervised in-app adapter only after the parent verifies that the available host tool can honor the packet's exact model/reasoning assignment and current account route. This adapter is not an unattended dispatcher. Keep `worker.command=None`; claim, reserve, dispatch the exact packet, retain its actual invocation ID, and import its authentic result through the existing handoff functions. Follow the [handoff protocol](../templates/local-automation-runtime/README.md#supervised-in-app-role-handoffs).
+- Contracted standalone Codex execution remains blocked by default with `standalone provider/billing/startup not qualified`. It can launch only when the supervisor-owned runtime `config.env` contains `ATLAS_ROLE_CODEX_STANDALONE_ROUTE_QUALIFICATION="chatgpt_subscription"` and the existing execute gate is enabled. The qualification value may be set only after the execution owner verifies the account, ChatGPT-subscription billing, assigned-model availability and remaining testing allowance. An installed binary, login status, task JSON or execution flag does not establish those facts. Do not route around the contract or add credentials to bypass that boundary.
+
+## Operating each item
+
+1. Add the item once with goal/context, selected template, source/spec pins, validation, role assignments and budgets. Put unresolved prerequisites in `scheduler.blockers` so the existing inspector shows them. Check dependencies and scope ownership before claim.
+2. Include plain technical English instructions before each role starts its first draft. Preserve technical precision, depth, breadth, terminology, reasoning and uncertainty. State the outcome, owner, action, conditions, reason and acceptance; do not impose arbitrary word limits. Readability review is a backstop, not a later rewrite phase. The separately tested language candidate is not installed by this instruction.
+3. Use one owned pending in-app handoff at a time. Dispatch only the reserved role; keep author and goal reviewer independent. Retain original result bytes and host receipt, including invocation ID, checkout revision, actual model/reasoning and result hash. Import a terminal result before claiming the next role. An accepted import is not necessarily a passing goal.
+4. Run objective checks in the admitted role's isolated workspace or a separately qualified deterministic item. Do not insert raw checker commands into a contracted role map. Preserve actual check receipts; distinguish a fresh test run from verification of retained evidence.
+5. Inspect the existing queue/status report after each import and at exit. Keep work-item ID, active/blocked/terminal state, next role, result paths, time/call budget and intervention count visible. Mark `done` only when all required outputs and the independent goal review pass.
+
+## Exceptions and stops
+
+Keep every exception tied to the same work-item identity. When no handoff is pending, put a concrete reason, owner and next action in its blocker, append an operator-exception evidence event, and state the count/scope in the run receipt. Examples are `route_not_verified`, `scope_requires_decomposition`, `resource_slot_unavailable` and `invocation_outcome_uncertain`. This is an operating convention using existing fields, not a new scheduler schema. Clear a blocker only with linked evidence resolving it.
+
+While a handoff is pending, its source item and reserved artifacts are frozen for capture/import. Do not add blockers or events to that item. Persist the exception in the external run receipt keyed by work-item, handoff and actual invocation IDs; show that receipt alongside the native status report. After successful import or explicit reconciliation, mirror/link the exception back to the item. A visible exception must not invalidate the outstanding reservation.
+
+If dispatch or cleanup is uncertain, retain the reservation and recover the same invocation. Do not redispatch, fabricate review evidence or silently continue through manual threads. Stop intake/dispatch at the agreed call/time budget; an in-app deadline is a supervision stop gate until cancellation and terminal observation are verified. Record any missing hard token/cost limit explicitly. No new provider, paid API route, installation, source merge or production effect follows from this instruction.

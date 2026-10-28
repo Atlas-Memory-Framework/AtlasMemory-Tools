@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/grill-me/SKILL.md manifest=atlas-tools.v1 checksum=sha256:ae3568e1f61db8d346b2bfddd9d522436fa487ec652ce6f715d1fe6c139ee651
+# atlas-tools-generated: source=skills/grill-me/SKILL.md manifest=atlas-tools.v1 checksum=sha256:371acb960c9d02566c59c142e2f4316f4c057c75376227e258b86d05d3c63237
 # atlas-tools-generated-end
 name: grill-me
 description: Interactively uncover and resolve material product, design, scope, and technical decisions before planning or implementation. Use when the user explicitly asks to be grilled, interviewed, or challenged about what should be built.
@@ -13,6 +13,7 @@ This is an interactive decision-elicitation procedure, not plan mode, implementa
 
 ## Boundaries
 
+- Use [plain-technical-english](../plain-technical-english/SKILL.md) before sending questions, checkpoints, or the final decision record. State the decision and its consequence plainly, explain necessary terms, and preserve qualifications. Perform the reader check inline; this does not authorize file edits, extra questions, or implementation.
 - Inspect available project context, code, documentation, evidence, and prior decisions before asking the user for facts the environment can answer.
 - Use read-only investigation. Do not edit files, write a plan, implement, install dependencies, or make external state changes.
 - Ask only questions whose answers could materially change the result. Question count is operator burden, not evidence of rigor.

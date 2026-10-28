@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/review/SKILL.md manifest=atlas-tools.v1 checksum=sha256:be6e8deb749cb43cd506653e7581198f60061c1458532925bbe444deb133fa77
+# atlas-tools-generated: source=skills/review/SKILL.md manifest=atlas-tools.v1 checksum=sha256:038157fdf41bfd7933f5bc5e2a3358155090001b2837792a10fc2cc6af07792b
 # atlas-tools-generated-end
 name: review
 description: Perform planning-phase document reviews for the current plan artifact. Use when running /review with mode=zero-context, mode=expert-tech, mode=implementer-readiness, mode=human-readability, or mode=automation-readiness.
@@ -25,6 +25,7 @@ Read `PlanTier` in the plan's Plan State and calibrate strictness:
 - If a finding is optional and does not block correct implementation, prefix the finding text with `Non-blocker:` (keep the schema and ids unchanged).
 
 ## Human meaning standard
+- Apply [plain-technical-english](../plain-technical-english/SKILL.md) to reviewed prose and the findings sent to the user. Its rubric extends this review; it does not replace required schemas or authorize edits. A short sentence or absence of jargon is not evidence of clarity.
 - A plan can be structurally complete and still fail review if it does not explain the real product/system problem, why the work exists now, or how future implementers can verify the result.
 - Product/problem and technical narrative sections should not read like validator output. Authority, projection, dispatch, and source-of-truth mechanics should be confined to execution sections/appendices unless those mechanics are the actual system being changed.
 - Treat "future agents can ask the user" as false. Flag any implementation-critical ambiguity that would require user interaction later.
@@ -86,6 +87,8 @@ Return findings using this exact schema (with stable ids):
 
 ### mode=human-readability
 Review whether a maintainer can understand the real work without knowing the planning framework. Prefer reviewing rendered HTML if available; otherwise review the markdown directly and say HTML was not run.
+
+Use the plain-technical-english rubric inside the existing findings schema. From the text alone, explain the answer, actor/action/target, relevant conditions, reason, and uncertainty. Cite a passage and its practical consequence for every material failure. Keep necessary technical terms with explanations; preserve reasoning and qualifications. An explicit unknown can be clear even when a separate execution gate remains blocked. For substantial saved deliverables, the skill's optional review-record checker verifies coverage, source hash, and evidence anchors only; semantic judgment remains the reviewer's responsibility.
 
 Fail the review for:
 - first Problem Definition paragraphs that describe creating/updating a plan rather than a real product/system failure or opportunity

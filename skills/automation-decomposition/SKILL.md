@@ -8,6 +8,12 @@ description: Produce the Automation Issue Manifest for /plan when a plan must pr
 ## Purpose
 Convert the accepted implementation plan into a machine-readable `## Automation Issue Manifest`. This section is the contract for downstream issue projection and local automation runtime dispatch. Run as a sub-agent and return a draft section; do not write the plan artifact directly.
 
+## Authoring and delegated task instructions
+
+Write the manifest and each executable task in plain, direct technical English from the first draft. State the intended result, then explain who changes what, under which conditions, and why. Use consistent terms and explain unfamiliar technical terms. Make dependencies, acceptance criteria, validation evidence, and the next action specific enough for an agent with no prior conversation to act without guessing.
+
+Preserve technical depth, decision rationale, scope boundaries, failure cases, qualifications, and uncertainty. Keep exact manifest field names, identifiers, commands, paths, hashes, and source references intact. Include this writing rule when delegating leaf descriptions or sidecar drafts. Apply it during authoring and revision; the existing planning readability review checks the resulting instructions afterward.
+
 ## Inputs
 - `## Implementation Plan`
 - `## Technical Plan`

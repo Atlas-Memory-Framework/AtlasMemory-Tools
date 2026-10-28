@@ -418,7 +418,9 @@ class PortabilityTests(unittest.TestCase):
         for path in verify_repo.iter_tree_files(ROOT / "templates" / "local-automation-runtime"):
             if not path.is_file():
                 continue
-            if "example" not in path.name:
+            # Configuration examples use the .example convention. Content
+            # fixtures named *-examples.json need no repository placeholder.
+            if ".example" not in path.name:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
             self.assertIn("OWNER", text, path)
