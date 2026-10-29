@@ -7,14 +7,26 @@ capabilities.
 ## Start and resume
 
 Read `git status --short`, the relevant canonical skills, and
-`docs/local-harness-operating-instruction.md`. If `.atlas-dev.local.json` exists,
-read its explicit runtime, state and owner locations and inspect the existing
-queue before creating another task. The configuration is local operator state;
-do not publish it. Never execute live jobs from the source template directory.
+`docs/local-harness-operating-instruction.md`. For the supervised daily lane, run
+`python3 -B scripts/atlas_daily.py status` and follow `docs/daily-development.md`
+before creating another task. The read-only entry selects `.atlas-dev.local.json`
+relative to the resolved script checkout, including through a symlink, rather
+than the current directory. To select another config explicitly, use
+`python3 -B scripts/atlas_daily.py --config /absolute/path/.atlas-dev.local.json status`.
+Missing or contradictory selection is an error; do not guess another installation.
+The configuration is local operator state; do not publish it. Never execute live
+jobs from the source template directory.
 
 Use `docs/daily-development.md` for the supervised add, status, prepare and import
 commands. Keep one persistent work-item identity through implementation, tests,
 review and handoff. A prepared packet or imported result alone is not completion.
+The entry supports status only; mutations use the guide's existing `daily` helper
+with runtime/state/owner taken from the same explicit config. Recover any pending
+handoff through the same invocation before other work. Checkout HEAD and candidate
+drift are reported separately from the runtime source pin. Markers record source
+provenance, not installed-file integrity or host/account/model qualification.
+The supervisor verifies the exact host and route before dispatch. This lane grants
+no unattended or merge authority; do not route it into general issue-to-PR commands.
 
 ## Scope before implementation
 
