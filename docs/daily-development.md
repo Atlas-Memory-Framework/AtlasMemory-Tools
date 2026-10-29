@@ -102,6 +102,8 @@ A changed context requires a fresh sizing review/hash. An existing operator task
 
 `status` is read-only: it does not create a directory, queue or lock, claim work or reconcile state. It reports scheduler state/readiness/blockers, pending handoff ID, role, owner and next action. An uninitialized queue is an observation, not an error.
 
+Recover a pending handoff through the same invocation before acting on other guidance. A `done` item needs no further action; inspect its retained evidence when needed. For `failed`, `cancelled` or `superseded`, inspect the retained evidence and review an explicit recovery or successor task. These terminal states do not call for another prepare. Draft and blocked items show scheduler prerequisites, including explicit blockers and dependencies, alongside their existing state or execution diagnostics. Resolve those prerequisites and review the item's state before preparing. Displaying them does not change readiness or clear a blocker.
+
 ## Prepare, dispatch and import one role
 
 Use the exact full SHA frozen in the intake. The runtime independently verifies the checkout root and current HEAD. Prepare claims only the named eligible item, or resumes the same owner's running claim. Any unresolved store-wide handoff prevents claiming unrelated work. The CLI also extends scheduler readiness inside the maintained claim operation: the provider rechecks the current queue under its existing store lock before writing a claim. A competing preparation that appears after the initial scan therefore leaves the unrelated item ready and unclaimed. Running-item and pending-reservation replay retain the maintained behavior.
@@ -113,7 +115,16 @@ daily prepare --id "$TASK_ID" --revision "$REVISION" > reservation.json
 
 The complete stdout artifact has exactly `status` (`prepared`), `binding`, `packet` and `artifacts`. Its binding contains the model/reasoning assignment and immutable identity hashes. Preserve this whole file. Preparation persists the reservation before writing stdout: if redirection fails or output is lost, repeat the **same** command with the same owner and revision to reexport it. The queue is the sole reservation authority.
 
-Use the supported in-app host to dispatch the exact emitted `packet`, in the bound checkout at the bound SHA and fixed model/reasoning assignment. Keep the actual host invocation ID. The host must write its original role-result JSON bytes to a file; do not copy a reformatted chat response into a substitute result. There is no dispatcher command in this adapter and no fabricated automatic host instruction.
+Use the supported in-app host to dispatch the exact emitted `packet`, in the bound checkout at the bound SHA and fixed model/reasoning assignment. Keep the actual host invocation ID. The worker must write its original role-result JSON bytes to a regular file; do not copy a reformatted chat response into a substitute result. There is no dispatcher command in this adapter and no fabricated automatic host instruction.
+
+Each packet contains `result_instructions` and a task-bound `result_template`. The reservation's packet hash binds both. The worker fills its emitted template with substantive results, preserving this contract:
+
+- The sole root key is `role_results`, containing a list with exactly one record for the reserved `role_id`.
+- `status` is `complete`, `blocked` or `failed`. `outputs` maps the exact `must_produce` names to strings, with no extra names. Use a string to describe a file or structured result; do not put lists or objects in output values.
+- `evidence` belongs at record level as a list of strings, alongside `outputs`. `notes` is a string and `contract_issues` is a list of strings.
+- For an ordinary role, keep `goal_review` null. A goal gate requires an object containing exactly `verdict` (`pass`, `fail` or `inconclusive`), a nonblank `reason` and a nonempty list of nonblank `evidence` strings. The reviewer supplies its own judgment and evidence. The emitted template starts blocked with empty outputs; its goal review starts inconclusive and unfilled. Neither default establishes completion or goal acceptance.
+
+On the currently observed collaboration host, formatting instructions are advisory: its dispatch tool exposes no JSON-schema or response-format enforcement parameter. The importer enforces the result shape, and the workflow separately checks required outputs and goal acceptance. A bare role record, nested nonstring output value or evidence list inside `outputs` is refused. An unexpected string output named `evidence` passes shape parsing but produces a workflow contract issue and blocks completion. This host observation does not qualify other hosts.
 
 Independently observe the completed invocation and save `receipt.json` with exactly the following six string fields, replacing every placeholder with the actual host observation:
 
@@ -137,6 +148,8 @@ daily status
 
 Capture validates the live reservation; ingest applies the result through existing handoff APIs. The installed runtime preserves the original bytes and reports accepted artifacts. All result reads, including duplicate replay, are bounded before parsing. Exact accepted replay returns `duplicate` after pending removal, even if checkout HEAD later advances. Changed invocation IDs, result bytes, binding/packet, foreign owners and stale live packets are refused.
 
+If formatting is refused, preserve the failed original file and refusal evidence. Have the same known worker invocation write a separate corrected file, then import that worker-authored file with the original reservation and observed receipt. Retain both attempts. The supervisor must not repair, normalize or replace the worker's bytes. An already accepted result uses exact replay; a later change requires the maintained explicit recovery process. Finish or recover already-bound old packets with their original installed runtime; new source instructions do not rewrite old reservations.
+
 If status becomes ready for another role, repeat prepare/host dispatch/import using a separate saved reservation, receipt and original result for that invocation. Implementation completion alone is not goal acceptance: validation, independent review, semantic acceptance and rollup must run through the maintained lifecycle. A blocked role requires explicit operator investigation; this CLI has no force, cancellation, requeue or merge command.
 
 ## Stop and recover
@@ -154,4 +167,4 @@ cd "$TOOLS"
 "$PYTHON" -B -m unittest discover -s templates/local-automation-runtime/tests -p test_atlas_local_dev.py
 ```
 
-Tests install temporary runtime copies and Git checkouts, restart the CLI as real subprocesses, exercise the maintained lifecycle and replay/refusal paths, and install tripwires for sockets, databases and non-Git process execution. A deterministic competing-prepare regression covers the previously reproduced scan/claim race and verifies that the unrelated item stays ready without a claim while the first reservation remains replayable. Synthetic fixture results verify adapter behavior; they do not establish model quality or real task acceptance.
+Tests install temporary runtime copies and Git checkouts, restart the CLI as real subprocesses, exercise the maintained lifecycle and replay/refusal paths, and install tripwires for sockets, databases and non-Git process execution. They fill the emitted templates with synthetic results through the goal gate, verify exact original-byte retention, and check that refused malformed imports leave queue/job bytes unchanged. They also distinguish a refused nonstring evidence output from an imported unexpected string output that blocks the workflow. A deterministic competing-prepare regression covers the previously reproduced scan/claim race and verifies that the unrelated item stays ready without a claim while the first reservation remains replayable. Synthetic fixture results verify adapter behavior; they do not establish model quality or real task acceptance.

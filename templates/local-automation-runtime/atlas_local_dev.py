@@ -247,13 +247,31 @@ def do_status(args, api):
         operation = provider.project(item, items)
         pending = handoff_state(item).get("pending")
         binding = pending.get("binding", {}) if isinstance(pending, dict) else {}
+        blockers = list(operation.blockers)
+        if operation.state in {"blocked", "draft"}:
+            # Share the scheduler's existing calculation while preserving its
+            # actual authority, uncertainty and state diagnostics above.
+            blockers = list(dict.fromkeys([
+                *blockers, *provider.scheduler_prerequisites(item, items),
+            ]))
+        if pending is not None:
+            next_action = "recover same invocation/import result"
+        elif operation.state == "done":
+            next_action = "no further action; inspect retained evidence if needed"
+        elif operation.state in {"failed", "cancelled", "superseded"}:
+            next_action = "inspect retained evidence; review explicit recovery or successor task"
+        elif operation.state in {"blocked", "draft"} or blockers:
+            next_action = "resolve listed prerequisites; review state before preparing"
+        elif operation.ready:
+            next_action = "prepare"
+        else:
+            next_action = "inspect current state and ownership before preparing"
         rows.append({
             "id": operation.source_id, "title": operation.title, "state": operation.state,
-            "ready": operation.ready, "blockers": operation.blockers,
+            "ready": operation.ready, "blockers": blockers,
             "pending_handoff_id": binding.get("handoff_id"), "pending_role": binding.get("role_id"),
             "pending_owner": binding.get("supervisor_id"),
-            "next_action": ("recover same invocation/import result" if pending else
-                            "prepare" if operation.ready else "inspect blockers"),
+            "next_action": next_action,
         })
     emit({"status": "observed", "work_items": rows})
 

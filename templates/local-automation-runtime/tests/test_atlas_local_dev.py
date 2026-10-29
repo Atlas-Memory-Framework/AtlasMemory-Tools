@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -142,16 +143,18 @@ print(json.dumps(item))
                    "transport": "supervised_in_app", "checkout": binding["checkout"],
                    "revision": binding["revision"], "model": assignment["model"],
                    "reasoning": assignment["reasoning"]}
-        record = {"role_id": binding["role_id"], "status": "complete",
-                  "outputs": {name: "synthetic harness evidence only"
-                              for name in reservation["packet"]["must_produce"]},
-                  "evidence": ["synthetic fixture; no model-quality claim"],
-                  "notes": "transport wiring only", "contract_issues": [], "goal_review": None}
+        payload = copy.deepcopy(reservation["packet"]["result_template"])
+        record = payload["role_results"][0]
+        record.update(status="complete",
+                      outputs={name: "synthetic harness evidence only" for name in record["outputs"]},
+                      evidence=["synthetic fixture; no model-quality claim"],
+                      notes="transport wiring only")
         if binding["role_id"] == "semantic-alignment":
             record["goal_review"] = {"verdict": "pass", "reason": "Synthetic fixture satisfies harness criteria.",
                                     "evidence": ["synthetic lifecycle fixture"]}
-        result = self.root / "original-result.json"
-        result.write_bytes(b'\n  ' + json.dumps({"role_results": [record]}).encode() + b'\n')
+        prefix = binding["role_id"]
+        result = self.root / (prefix + "-original-result.json")
+        result.write_bytes(b'\n  ' + json.dumps(payload).encode() + b'\n')
         return (self.write_json("reservation.json", reservation),
                 self.write_json("receipt.json", receipt), result)
 
@@ -172,6 +175,108 @@ print(json.dumps(item))
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(path.read_bytes(), raw)
         self.assertFalse((self.state / "work-items.json.lock").exists())
+
+    def test_status_terminal_draft_blocked_prerequisites_and_pending_precedence(self):
+        _, _, intake = self.make_intake()
+        task = json.loads(intake.read_text())
+        items = []
+        for state in ("done", "failed", "cancelled", "superseded", "draft", "blocked", "ready"):
+            item = copy.deepcopy(task)
+            item.update(id="WI-" + state, status=state, lifecycle={"state": state})
+            if state in {"draft", "blocked"}:
+                item["scheduler"].update(blockers=["operator must verify route"], depends_on=["WI-missing"])
+            if state == "blocked":
+                item["result"] = {"status": "blocked", "summary": "review found a gap",
+                                  "evidence": {"goal_acceptance": {"verdict": "fail", "reason": "missing check"}}}
+            items.append(item)
+        self.state.mkdir()
+        path = self.state / "work-items.json"
+        path.write_text(json.dumps({"version": 1, "work_items": items}))
+        before = self.snapshot()
+        rows = {row["state"]: row for row in self.ok("status")["work_items"]}
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(rows["done"]["next_action"], "no further action; inspect retained evidence if needed")
+        for state in ("failed", "cancelled", "superseded"):
+            self.assertIn("explicit recovery or successor", rows[state]["next_action"])
+            self.assertNotIn("prepare", rows[state]["next_action"])
+        for state in ("draft", "blocked"):
+            self.assertFalse(rows[state]["ready"])
+            self.assertIn("blocker: operator must verify route", rows[state]["blockers"])
+            self.assertIn("missing dependency: WI-missing", rows[state]["blockers"])
+            self.assertIn("resolve listed prerequisites", rows[state]["next_action"])
+        self.assertIn("not ready: draft", rows["draft"]["blockers"])
+        self.assertIn("goal review fail: missing check", rows["blocked"]["blockers"])
+        self.assertTrue(rows["ready"]["ready"])
+        self.assertEqual(rows["ready"]["next_action"], "prepare")
+        items[0]["supervised_handoff_v1"] = {"pending": {"binding": {"role_id": "implementation"}}}
+        path.write_text(json.dumps({"version": 1, "work_items": items}))
+        before = self.snapshot()
+        row = self.ok("status")["work_items"][0]
+        self.assertEqual(row["next_action"], "recover same invocation/import result")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_status_prerequisites_survive_uncertainty_and_authority_early_returns(self):
+        _, _, intake = self.make_intake()
+        task = json.loads(intake.read_text())
+        items = [
+            {"id": "WI-open", "status": "ready"},
+            {"id": "WI-accepted", "status": "done"},
+        ]
+        # A done work-item dependency without its required goal acceptance is
+        # still open. Status must use the scheduler's acceptance semantics.
+        unaccepted = copy.deepcopy(task)
+        unaccepted.update(id="WI-unaccepted", status="done", lifecycle={"state": "done"})
+        items.append(unaccepted)
+        active = copy.deepcopy(task)
+        active.update(id="WI-active", status="running", lifecycle={"state": "running"})
+        items.append(active)
+        expected = {}
+        for state in ("draft", "blocked"):
+            for gate in ("uncertainty", "authority"):
+                item = copy.deepcopy(task)
+                ident = "WI-" + state + "-" + gate
+                item.update(id=ident, status=state, lifecycle={"state": state})
+                item["scheduler"].update(
+                    blockers=["operator must verify route"],
+                    depends_on=["WI-missing", "WI-open", "WI-unaccepted", "WI-accepted"])
+                item["metadata"]["local_execution_v1"]["unresolved_questions"] = ["synthetic sizing prerequisite"]
+                if gate == "uncertainty":
+                    item["process_uncertainty"] = {"status": "unresolved", "invocation_id": "synthetic-worker-7"}
+                    diagnostic = "unresolved worker process uncertainty: synthetic-worker-7"
+                else:
+                    item["metadata"]["provider"] = "azure-devops"
+                    diagnostic = "Azure records require the Azure worker and its authority gates"
+                if state == "blocked":
+                    # Preserve the execution record even when the provider's
+                    # uncertainty/authority gate takes diagnostic precedence.
+                    item["result"] = {"status": "blocked", "summary": "retained execution diagnostic"}
+                items.append(item)
+                expected[ident] = (state, diagnostic)
+        self.state.mkdir()
+        path = self.state / "work-items.json"
+        path.write_text(json.dumps({"version": 1, "work_items": items}))
+        jobs = self.state / "jobs"
+        jobs.mkdir()
+        (jobs / "original-worker-bytes.bin").write_bytes(b"synthetic retained bytes\x00\n")
+        before = self.snapshot()
+        rows = {row["id"]: row for row in self.ok("status")["work_items"]}
+        self.assertEqual(self.snapshot(), before, "status changed queue/job bytes")
+        self.assertFalse((self.state / "work-items.json.lock").exists())
+        for ident, (state, diagnostic) in expected.items():
+            row = rows[ident]
+            self.assertEqual(row["state"], state)
+            self.assertFalse(row["ready"])
+            self.assertEqual(row["blockers"][0], diagnostic)
+            self.assertIn("blocker: operator must verify route", row["blockers"])
+            self.assertIn("missing dependency: WI-missing", row["blockers"])
+            self.assertIn("open dependency: WI-open", row["blockers"])
+            self.assertIn("open dependency: WI-unaccepted", row["blockers"])
+            self.assertNotIn("open dependency: WI-accepted", row["blockers"])
+            self.assertTrue(any(value.startswith("local sizing: decomposition_required:")
+                                for value in row["blockers"]))
+            self.assertIn("active scope conflict: WI-active", row["blockers"])
+            self.assertEqual(len(row["blockers"]), len(set(row["blockers"])))
+            self.assertIn("resolve listed prerequisites", row["next_action"])
 
     def test_intake_preserves_source_and_refuses_duplicate_and_runtime_fields(self):
         checkout, revision, path = self.make_intake()
@@ -404,18 +509,81 @@ assert p.claim(p.project(i)) is not None
         self.refused(*self.import_args(paths), code="revision")
         self.refused("prepare", "--id", "WI-CLI", "--revision", revision, code="revision")
 
+    def test_template_results_refuse_malformed_shapes_without_changing_state(self):
+        _, _, reservation = self.prepared()
+        paths = self.import_files(reservation)
+        valid = json.loads(paths[2].read_bytes())
+        variants = {"bare-record": valid["role_results"][0]}
+        for name, mutate in (
+            ("nested-output", lambda r: r["outputs"].update(change_summary={"detail": "nested"})),
+            ("evidence-output-list", lambda r: r["outputs"].update(evidence=["misplaced"])),
+            ("wrong-role", lambda r: r.update(role_id="test-runner")),
+        ):
+            payload = copy.deepcopy(valid)
+            mutate(payload["role_results"][0])
+            variants[name] = payload
+        for name, payload in variants.items():
+            bad = self.write_json(name + "-original-result.json", payload)
+            self.refused(*self.import_args((*paths[:2], bad)),
+                         code="role" if name == "wrong-role" else "result_shape")
+        original = paths[2].read_bytes()
+        accepted = self.ok(*self.import_args(paths))
+        self.assertEqual(Path(accepted["original_result_path"]).read_bytes(), original)
+
+    def test_unexpected_string_evidence_output_is_imported_but_blocks_workflow(self):
+        _, _, reservation = self.prepared()
+        paths = self.import_files(reservation)
+        payload = json.loads(paths[2].read_bytes())
+        payload["role_results"][0]["outputs"]["evidence"] = "misplaced string"
+        candidate = self.write_json("evidence-output-string-original-result.json", payload)
+        original = candidate.read_bytes()
+        accepted = self.ok(*self.import_args((*paths[:2], candidate)))
+        self.assertEqual(accepted["status"], "accepted")
+        self.assertEqual(accepted["item_status"], "blocked")
+        self.assertEqual(Path(accepted["original_result_path"]).read_bytes(), original)
+        runs = list((self.state / "jobs").glob("supervised-import-*/team-run.json"))
+        self.assertEqual(len(runs), 1)
+        result = json.loads(runs[0].read_text())["role_results"]["implementation"]
+        self.assertIn("unexpected output(s): evidence", result["contract_issues"])
+
     def test_all_roles_use_maintained_lifecycle_without_external_execution(self):
         checkout, revision, reservation = self.prepared()
         seen = []
         for _ in range(5):
             seen.append(reservation["binding"]["role_id"])
-            accepted = self.ok(*self.import_args(self.import_files(reservation)))
+            packet = reservation["packet"]
+            template = packet["result_template"]
+            record = template["role_results"][0]
+            self.assertEqual(set(template), {"role_results"})
+            self.assertEqual(len(template["role_results"]), 1)
+            self.assertEqual(record["role_id"], packet["role_id"])
+            self.assertEqual(record["status"], "blocked")
+            self.assertEqual(record["outputs"], {name: "" for name in packet["must_produce"]})
+            self.assertEqual(record["goal_review"],
+                             {"verdict": "inconclusive", "reason": "", "evidence": []}
+                             if packet["goal_gate"] else None)
+            self.assertIn("exactly one record", packet["result_instructions"])
+            self.assertIn("STRING values", packet["result_instructions"])
+            self.assertIn("record level", packet["result_instructions"])
+            packet_hash = hashlib.sha256(json.dumps(
+                packet, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                allow_nan=False).encode()).hexdigest()
+            self.assertEqual(reservation["binding"]["packet_hash"], packet_hash)
+            paths = self.import_files(reservation)
+            for path in paths[:2]:
+                shutil.copy2(path, self.root / (packet["role_id"] + "-" + path.name))
+            original = paths[2].read_bytes()
+            accepted = self.ok(*self.import_args(paths))
+            self.assertEqual(Path(accepted["original_result_path"]).read_bytes(), original)
             if accepted["item_status"] == "done":
                 break
             reservation = self.ok("prepare", "--id", "WI-CLI", "--revision", revision)
         self.assertEqual(seen, ["implementation", "test-runner", "code-review",
                                 "semantic-alignment", "evidence-rollup"])
         self.assertEqual(accepted["item_status"], "done")
+        before = self.snapshot()
+        self.assertIn("no further action", self.ok("status")["work_items"][0]["next_action"])
+        self.assertEqual(self.snapshot(), before)
         self.assertTrue((self.root / "guard.log").read_text().startswith("guard active"))
         self.assertFalse(list(self.runtime.rglob("__pycache__")))
 

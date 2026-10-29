@@ -785,6 +785,12 @@ class AtlasWorkItemOperationProvider:
             return [f"not ready: {state}"]
         if state not in READY_STATES:
             return [f"not ready: {state or 'missing state'}"]
+        return self.scheduler_prerequisites(item, by_id)
+
+    def scheduler_prerequisites(self, item: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> list[str]:
+        """Report scheduling prerequisites without changing state or bypassing admission gates."""
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        execution_repo, _, _ = scheduler_fields(item)
         scheduler = item.get("scheduler") if isinstance(item.get("scheduler"), dict) else {}
         blockers = [f"blocker: {value}" for value in list_value(scheduler.get("blockers") or item.get("blockers"))]
         if "local_execution_v1" in metadata:

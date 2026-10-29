@@ -987,6 +987,36 @@ def role_task_packets(
                 "skills": role.skills,
                 "consumes": role.consumes,
                 "must_produce": role.must_produce,
+                "result_instructions": (
+                    "Write your original result bytes to a regular JSON file. The sole root key must be "
+                    "role_results, containing exactly one record for reserved role_id " + role.id + ". "
+                    "Use terminal status complete, blocked, or failed. outputs must map exactly these "
+                    "must_produce names to STRING values: " + ", ".join(role.must_produce) + ". "
+                    "Never use lists or objects as output values or add output names. Put evidence at "
+                    "record level as a list of strings, never inside outputs. notes must be a string; "
+                    "contract_issues must be a list of strings. Fill the template with substantive "
+                    "results and evidence; its default blocked status and empty fields are not a completion. "
+                    + ("This goal gate requires goal_review with exactly verdict (pass, fail, or inconclusive), "
+                       "a nonblank reason and a nonempty list of nonblank evidence strings. Supply your own "
+                       "judgment; the unfilled inconclusive template is not passing goal acceptance. "
+                       if role.goal_gate else "Keep goal_review null for this role. ")
+                    + "Host formatting instructions are advisory; the importer enforces result shape and "
+                    "the workflow separately evaluates outputs and goal acceptance. Preserve original bytes. "
+                    "If formatting is refused, the same known invocation must write a separate corrected "
+                    "file; retain both attempts. The supervisor must not normalize the worker result."
+                ),
+                "result_template": {
+                    "role_results": [{
+                        "role_id": role.id,
+                        "status": "blocked",
+                        "outputs": {name: "" for name in role.must_produce},
+                        "evidence": [],
+                        "notes": "",
+                        "contract_issues": [],
+                        "goal_review": ({"verdict": "inconclusive", "reason": "", "evidence": []}
+                                        if role.goal_gate else None),
+                    }],
+                },
                 "goal_gate": role.goal_gate,
                 "goal_review_contract": {
                     "required": role.goal_gate,
