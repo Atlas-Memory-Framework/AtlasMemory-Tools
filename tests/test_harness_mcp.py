@@ -69,13 +69,14 @@ class MCPAdapterTests(unittest.TestCase):
         self.assertEqual({tool["name"] for tool in tools}, {
             "harness_discover", "harness_inspect", "harness_installation_status",
             "harness_prepare", "harness_start", "harness_wait", "harness_cancel",
+            "harness_remote_repositories", "harness_configure_remote",
         })
         for tool in tools:
             self.assertFalse(tool["inputSchema"]["additionalProperties"])
-            mutating = tool["name"] in {"harness_start", "harness_cancel"}
+            mutating = tool["name"] in {"harness_start", "harness_cancel", "harness_configure_remote"}
             self.assertEqual(tool["annotations"]["readOnlyHint"], not mutating)
-            self.assertEqual(tool["annotations"]["destructiveHint"], mutating)
-            self.assertEqual(tool["annotations"]["openWorldHint"], tool["name"] == "harness_start")
+            self.assertEqual(tool["annotations"]["destructiveHint"], tool["name"] in {"harness_start", "harness_cancel"})
+            self.assertEqual(tool["annotations"]["openWorldHint"], tool["name"] in {"harness_start", "harness_remote_repositories"})
 
     def test_each_tool_has_matching_structured_and_text_results(self) -> None:
         initialize(self.server)
@@ -154,7 +155,7 @@ class MCPAdapterTests(unittest.TestCase):
             options = {"max_minutes": 30, "cycles": 3, "max_per_repo": 2, "publish": False, "apply": True, "review_apply": False}
             response = self.server.handle(request("tools/call", {"name": "harness_prepare", "arguments": {"runtime_id": "test", "options": options}}))
             execution.assert_called_once_with(self.server.service)
-            execution.return_value.prepare.assert_called_once_with("test", "github-cycle", options)
+            execution.return_value.prepare.assert_called_once_with("test", None, options)
             self.assertEqual(response["result"]["structuredContent"], prepared)
             self.assertFalse(response["result"]["isError"])
             self.assertEqual(json.loads(response["result"]["content"][0]["text"]), prepared)
@@ -162,7 +163,88 @@ class MCPAdapterTests(unittest.TestCase):
         with patch("harness_execution.HarnessExecution") as execution:
             execution.return_value.prepare.return_value = prepared
             self.server.handle(request("tools/call", {"name": "harness_prepare", "arguments": {"runtime_id": "test"}}))
-            execution.return_value.prepare.assert_called_once_with("test", "github-cycle", None)
+            execution.return_value.prepare.assert_called_once_with("test", None, None)
+
+    def test_azure_prepare_and_start_route_the_explicit_named_operation(self) -> None:
+        initialize(self.server)
+        options = {"ids": [17, 23], "build_ids": [41], "live_read": True, "max_minutes": 2}
+        with patch("harness_execution.HarnessExecution") as execution:
+            execution.return_value.prepare.return_value = {"status": "prepared", "read_only": True}
+            result = self.server.handle(request("tools/call", {"name": "harness_prepare", "arguments": {
+                "runtime_id": "azure-test", "operation": "azure-inspect", "options": options,
+            }}))
+            execution.return_value.prepare.assert_called_once_with("azure-test", "azure-inspect", options)
+            self.assertFalse(result["result"]["isError"])
+        with patch("harness_runs.HarnessRuns") as runs:
+            runs.return_value.start.return_value = {"read_only": False, "run_id": "run-fixture"}
+            result = self.server.handle(request("tools/call", {"name": "harness_start", "arguments": {
+                "runtime_id": "azure-test", "proposal_id": "sha256:" + "a" * 64,
+                "operation": "azure-inspect", "options": options, "authorization_ref": "test:approved-read",
+            }}))
+            runs.return_value.start.assert_called_once_with(
+                "azure-test", "sha256:" + "a" * 64, options, "test:approved-read", operation="azure-inspect",
+            )
+            self.assertFalse(result["result"]["isError"])
+
+    def test_azure_arrays_and_operation_specific_fields_are_validated_before_routing(self) -> None:
+        initialize(self.server)
+        invalid = [
+            {"ids": []}, {"ids": [True]}, {"ids": [0]}, {"ids": [1.5]}, {"ids": "17"},
+            {"ids": [1] * 201}, {"build_ids": [2**31]}, {"live_read": 1},
+            {"ids": [17], "publish": True}, {"packet": "/tmp/x.json"},
+            {"ids": [17], "command": "arbitrary"},
+        ]
+        with patch("harness_execution.HarnessExecution") as execution:
+            for options in invalid:
+                with self.subTest(options=options):
+                    reply = self.server.handle(request("tools/call", {"name": "harness_prepare", "arguments": {
+                        "runtime_id": "azure-test", "operation": "azure-inspect", "options": options,
+                    }}))
+                    self.assertEqual(reply["error"]["code"], -32602)
+            for operation in ["azure-worker", "azure-publish", "azure-reconcile"]:
+                with self.subTest(operation=operation):
+                    reply = self.server.handle(request("tools/call", {"name": "harness_prepare", "arguments": {
+                        "runtime_id": "azure-test", "operation": operation, "options": {"packet": "/tmp/packet.json"},
+                    }}))
+                    self.assertEqual(reply["error"]["code"], -32602)
+            execution.assert_not_called()
+
+    def test_remote_configuration_and_discovery_route_caller_inputs_without_defaults(self) -> None:
+        initialize(self.server)
+        arguments = {"remote_id": "chosen-name", "provider": "azure-devops",
+                     "repository_url": "https://dev.azure.com/ExampleOrg/ExampleProject",
+                     "repository_name": "SelectedRepo", "base_branch": "feature-base", "apply": False,
+                     "capabilities": ["read"], "models": {"default": {"model": "reviewed-model", "reasoning": "high"}}}
+        with patch("harness_remotes.HarnessRemotes") as remotes:
+            remotes.return_value.configure.return_value = {"read_only": True, "mode": "preview", "status": "ready"}
+            remotes.return_value.repositories.return_value = {"read_only": True, "repositories": [{"name": "SelectedRepo"}]}
+            result = self.server.handle(request("tools/call", {"name": "harness_configure_remote", "arguments": arguments}))
+            remotes.return_value.configure.assert_called_once_with(**arguments)
+            self.assertTrue(result["result"]["structuredContent"]["read_only"])
+            result = self.server.handle(request("tools/call", {"name": "harness_remote_repositories", "arguments": {
+                "project_url": arguments["repository_url"],
+            }}))
+            remotes.return_value.repositories.assert_called_once_with(arguments["repository_url"])
+            self.assertFalse(result["result"]["isError"])
+
+    def test_remote_setup_rejects_credentials_unknown_model_fields_and_wrong_types(self) -> None:
+        initialize(self.server)
+        base = {"remote_id": "chosen", "provider": "azure-devops",
+                "repository_url": "https://dev.azure.com/ExampleOrg/ExampleProject/_git/Repo"}
+        invalid = [
+            {"token": "do-not-persist"}, {"apply": "true"}, {"apply": 1},
+            {"capabilities": ["read", "read"]}, {"capabilities": ["root"]}, {"capabilities": "read"},
+            {"models": {"default": {"model": "x", "reasoning": "high", "api_key": "forbidden"}}},
+            {"models": {"default": {"model": 2, "reasoning": "high"}}},
+            {"models": {"default": {"model": "x", "reasoning": "invalid"}}},
+            {"models": {"unknown": {"model": "x", "reasoning": "high"}}},
+        ]
+        with patch("harness_remotes.HarnessRemotes") as remotes:
+            for values in invalid:
+                with self.subTest(values=values):
+                    reply = self.server.handle(request("tools/call", {"name": "harness_configure_remote", "arguments": {**base, **values}}))
+                    self.assertEqual(reply["error"]["code"], -32602)
+            remotes.assert_not_called()
 
     def test_lifecycle_tools_route_exact_arguments_and_report_results_without_completion_inference(self) -> None:
         initialize(self.server)

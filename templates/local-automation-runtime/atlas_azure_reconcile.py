@@ -726,13 +726,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _read_local_json(raw: str) -> Any:
     identity_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    canonical_home = Path(os.path.realpath(identity_home))
     supplied = Path(raw).absolute()
-    roots = (identity_home, Path("/tmp"))
-    if not any(root in supplied.parents for root in roots):
+    roots = (identity_home, canonical_home, Path("/tmp"))
+    if ".." in supplied.parts or not any(root in supplied.parents for root in roots):
         raise ReconcileError("local proposal inputs must remain within this identity or its owned temporary files")
     path = supplied.resolve(strict=True)
-    if not any(root in path.parents for root in roots) or path.stat().st_uid != os.getuid() or not path.is_file():
+    if not any(root in path.parents for root in (canonical_home, Path("/tmp"))) or path.stat().st_uid != os.getuid() or not path.is_file():
         raise ReconcileError("local proposal input resolves outside this identity")
+    if path.stat().st_size > 262_144:
+        raise ReconcileError("local proposal input exceeds its bounded read limit")
     return strict_json_loads(path.read_text(encoding="utf-8"))
 
 

@@ -162,6 +162,7 @@ class HarnessService:
             "manifests/atlas-tools.v1.json", "scripts/harness_service.py", "scripts/harnesslib.py",
             "scripts/runtime_control.py", "scripts/harness_mcp.py", "scripts/harness_execution.py",
             "scripts/harness_runs.py", "scripts/setup_harness_interface.py",
+            "scripts/harness_azure.py", "scripts/harness_remotes.py",
         ):
             path = self.tools_root / relative
             if path.is_file():
@@ -252,6 +253,13 @@ class HarnessService:
             try:
                 resolved = self.get_runtime(entry["id"])
                 summary.update(available=True, capabilities=resolved.get("configuration", {}).get("capabilities", ["read"]), blockers=[])
+                if entry["provider"] == "azure-devops":
+                    from harness_azure import AZURE_OPERATIONS
+
+                    summary["supported_operations"] = list(AZURE_OPERATIONS)
+                    summary["remote"] = resolved["configuration"]["repository"]
+                else:
+                    summary["supported_operations"] = ["github-cycle"]
             except HarnessServiceError as exc:
                 summary.update(available=False, capabilities=[], blockers=[_blocker(exc.code, exc.message, "Repair this registration or runtime configuration.")])
             recent = self._interface_runs(entry["id"])
@@ -560,6 +568,8 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("prepare", "start"):
         operation_parser = sub.add_parser(command)
         operation_parser.add_argument("runtime_id")
+        operation_parser.add_argument("--operation", help="Named GitHub or Azure operation; defaults to the registered provider's read entry.")
+        operation_parser.add_argument("--options-file", type=Path, help="Non-secret JSON options for the named operation, validated before execution.")
         operation_parser.add_argument("--max-minutes", type=int)
         operation_parser.add_argument("--cycles", type=int)
         operation_parser.add_argument("--max-per-repo", type=int)
@@ -574,6 +584,20 @@ def main(argv: list[str] | None = None) -> int:
     wait_parser.add_argument("--timeout-seconds", type=int, default=0)
     cancel_parser = sub.add_parser("cancel")
     cancel_parser.add_argument("run_id")
+    repositories_parser = sub.add_parser("remote-repositories")
+    repositories_parser.add_argument("project_url")
+    remote_parser = sub.add_parser("configure-remote")
+    remote_parser.add_argument("--remote-id", required=True)
+    remote_parser.add_argument("--provider", required=True, choices=["azure-devops"])
+    remote_parser.add_argument("--repository-url", required=True)
+    remote_parser.add_argument("--repository-name")
+    remote_parser.add_argument("--base-branch")
+    remote_parser.add_argument("--runtime-dir")
+    remote_parser.add_argument("--checkout")
+    remote_parser.add_argument("--expected-profile-sha256")
+    remote_parser.add_argument("--models-file", type=Path)
+    remote_parser.add_argument("--capability", action="append", dest="capabilities")
+    remote_parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     service = HarnessService(registry=args.registry)
     try:
@@ -584,19 +608,37 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "installation-status":
             result = service.installation_status(args.target, args.harness)
         elif args.command in {"prepare", "start"}:
-            options = {
+            options = _read_json(args.options_file) if args.options_file else {}
+            flag_options = {
                 name: getattr(args, name) for name in
                 ("max_minutes", "cycles", "max_per_repo", "publish", "apply", "review_apply")
                 if getattr(args, name) is not None
             }
+            if set(options).intersection(flag_options):
+                raise HarnessServiceError("conflicting_options", "Specify an option once, in the JSON file or as a command-line flag.")
+            options.update(flag_options)
             if args.command == "prepare":
                 from harness_execution import HarnessExecution
 
-                result = HarnessExecution(service).prepare(args.runtime_id, options=options)
+                result = HarnessExecution(service).prepare(args.runtime_id, operation=args.operation, options=options)
             else:
                 from harness_runs import HarnessRuns
 
-                result = HarnessRuns(service).start(args.runtime_id, args.proposal_id, options, args.authorization_ref)
+                result = HarnessRuns(service).start(args.runtime_id, args.proposal_id, options, args.authorization_ref, operation=args.operation)
+        elif args.command in {"remote-repositories", "configure-remote"}:
+            from harness_remotes import HarnessRemotes
+
+            remotes = HarnessRemotes(service)
+            if args.command == "remote-repositories":
+                result = remotes.repositories(args.project_url)
+            else:
+                result = remotes.configure(
+                    remote_id=args.remote_id, provider=args.provider, repository_url=args.repository_url,
+                    repository_name=args.repository_name, base_branch=args.base_branch, runtime_dir=args.runtime_dir,
+                    models=_read_json(args.models_file) if args.models_file else None,
+                    capabilities=args.capabilities, apply=args.apply, checkout=args.checkout,
+                    expected_profile_sha256=args.expected_profile_sha256,
+                )
         else:
             from harness_runs import HarnessRuns
 
@@ -605,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         return 2 if result.get("status") in {"error", "blocked"} else 0
     except HarnessServiceError as exc:
-        print(json.dumps({"schema_version": SCHEMA_VERSION, "read_only": args.command not in {"start", "cancel"}, "error": exc.as_dict()}, indent=2))
+        print(json.dumps({"schema_version": SCHEMA_VERSION, "read_only": args.command not in {"start", "cancel", "configure-remote"}, "error": exc.as_dict()}, indent=2))
         return 2
 
 

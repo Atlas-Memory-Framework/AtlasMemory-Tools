@@ -604,6 +604,23 @@ class AzureReconcileTests(unittest.TestCase):
             with self.assertRaisesRegex(reconcile.ReconcileError, "identity"):
                 reconcile._read_local_json("/home/another-identity/private.json")
 
+    def test_nonsecret_inputs_accept_same_identity_alias_and_canonical_home(self):
+        with tempfile.TemporaryDirectory(prefix=".reconcile-home-alias-", dir=ROOT) as tmp:
+            fixture = Path(tmp).resolve()
+            home = fixture / "canonical-home"
+            home.mkdir()
+            alias = fixture / "home-alias"
+            alias.symlink_to(home, target_is_directory=True)
+            packet = home / "packet.json"
+            packet.write_text('{"value": 1}')
+            with mock.patch.object(reconcile.pwd, "getpwuid", return_value=SimpleNamespace(pw_dir=str(alias))):
+                self.assertEqual(reconcile._read_local_json(str(alias / "packet.json")), {"value": 1})
+                self.assertEqual(reconcile._read_local_json(str(packet)), {"value": 1})
+                foreign = fixture / "other-account.json"
+                foreign.write_text('{}')
+                with self.assertRaises(reconcile.ReconcileError):
+                    reconcile._read_local_json(str(foreign))
+
     def test_cli_invalid_apply_hash_and_contradictory_preview_never_authenticate(self):
         config_path = self.config_file()
         config = replace(reconcile.load_runtime_config(config_path, require_runtime=False), runtime_dir=self.runtime)

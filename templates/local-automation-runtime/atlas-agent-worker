@@ -15,6 +15,15 @@ import atlas_agent_common as common
 
 
 def run(cmd, cwd=None, check=True, capture=True, env=None):
+    parts = common.gh_shell_command_parts(cmd)
+    if parts is not None:
+        prepared, suppressed = common.github_comment_command(["gh", *parts], env)
+        if suppressed is not None:
+            if check and suppressed.returncode:
+                raise RuntimeError(suppressed.stdout)
+            return suppressed.stdout or ""
+        if prepared != ["gh", *parts]:
+            cmd = shlex.join(prepared)
     print(f"+ {cmd}", flush=True)
     if cmd.strip().startswith("git "):
         env = common.git_env(env)
@@ -306,6 +315,8 @@ Next action: add the required approval label(s), then requeue the issue. The wor
 
 
 def build_prompt(issue, repo, issue_repo=None):
+    if common.remote_comment_policy() == "local":
+        issue = {**issue, "comments": []}
     issue_context = f"{issue_repo}#{issue['number']}" if issue_repo and issue_repo != repo else f"#{issue['number']}"
     return f"""You are working on GitHub issue {issue_context} and implementing changes in repo {repo}.
 
@@ -582,6 +593,10 @@ Closes {close_ref}
 def comment_issue(repo, number, job_dir, body):
     comment_file = job_dir / "comment.md"
     comment_file.write_text(body, encoding="utf-8")
+    if common.remote_comment_policy() != "legacy":
+        # The durable local result is the worker handoff. Cloud review summaries
+        # are a separate explicit operation; issue comments are not a message bus.
+        return
     run(
         f"gh issue comment {number} --repo {shlex.quote(repo)} "
         f"--body-file {quote_path(comment_file)}",

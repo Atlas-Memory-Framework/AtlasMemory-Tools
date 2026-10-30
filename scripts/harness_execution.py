@@ -165,7 +165,13 @@ class HarnessExecution:
                 blockers.append(_blocker("missing_runtime_script", "A required owned runtime script is missing, unsafe or exceeds the bounded read limit.", "Install or explicitly upgrade this runtime from the canonical template."))
         return bindings
 
-    def prepare(self, runtime_id: str, operation: str = OPERATION, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    def prepare(self, runtime_id: str, operation: str | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        if operation is None:
+            operation = "azure-inspect" if self.service.get_runtime(runtime_id)["provider"] == "azure-devops" else OPERATION
+        if operation.startswith("azure-"):
+            from harness_azure import HarnessAzure
+
+            return HarnessAzure(self.service).prepare(runtime_id, operation, options)
         if operation != OPERATION:
             raise HarnessServiceError("unsupported_operation", "Only the named github-cycle operation is supported; arbitrary commands and shell arguments are forbidden.")
         values = validated_options(options)
@@ -240,6 +246,7 @@ class HarnessExecution:
             "--project-reconcile-every", "0",
             "--stop-before-deadline-seconds", "1",
             "--",
+            "--remote-comments", "local",
             "--project-reconcile-every", "0",
             "--repos-file", str(root / "repos.txt"),
             "--required-checks-file", str(root / "required-checks.json"),
@@ -288,6 +295,8 @@ class HarnessExecution:
             "deployment_requested": False,
             "cleanup": False,
             "notifications": False,
+            "remote_comment_communication": False,
+            "coordination": "local",
         }
         proposal = {
             "runtime_id": runtime_id,
@@ -295,6 +304,7 @@ class HarnessExecution:
             "provider": "github",
             "runtime_dir": str(root),
             "options": values,
+            "required_capabilities": ["local_execute"],
             "argv": argv,
             "cwd": str(root),
             "targets": targets,

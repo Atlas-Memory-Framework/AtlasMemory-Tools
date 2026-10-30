@@ -68,6 +68,39 @@ class AzureRuntimeConfigTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CODEX_MODEL": "ambient-model"}), self.assertRaises(config.RuntimeConfigError):
             self.load(data)
 
+    def test_read_only_configuration_needs_no_models_and_cannot_build_worker_command(self) -> None:
+        data = example()
+        del data["models"]
+        loaded = self.load(data)
+        self.assertEqual(loaded.roles, {})
+        self.assertEqual(loaded.report()["models"], {})
+        with self.assertRaisesRegex(config.RuntimeConfigError, "missing effective role"):
+            config.build_codex_command(loaded, "implementation", self.runtime)
+
+    def test_effect_capabilities_still_require_explicit_models(self) -> None:
+        for capability in ("local_execute", "draft_pr", "assess"):
+            data = example()
+            del data["models"]
+            data["capabilities"] = ["read", capability]
+            with self.subTest(capability=capability), self.assertRaises(config.RuntimeConfigError):
+                self.load(data)
+
+    def test_board_reconciliation_configuration_needs_no_model(self) -> None:
+        data = example()
+        del data["models"]
+        data["capabilities"] = ["read", "board_write"]
+        loaded = self.load(data)
+        self.assertEqual(loaded.roles, {})
+        config.require_capability(loaded, "board_write")
+        with self.assertRaisesRegex(config.RuntimeConfigError, "missing effective role"):
+            config.build_codex_command(loaded, "implementation", self.runtime)
+
+    def test_read_only_explicit_invalid_models_are_not_ignored(self) -> None:
+        data = example()
+        data["models"] = {}
+        with self.assertRaises(config.RuntimeConfigError):
+            self.load(data)
+
     def test_unsafe_config_profile_command_overrides_and_model_flags_rejected(self) -> None:
         variants = []
         for key, value in (("sandbox", "danger-full-access"), ("approval_policy", "never"),

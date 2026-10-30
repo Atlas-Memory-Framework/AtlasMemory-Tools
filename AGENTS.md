@@ -46,6 +46,12 @@ actual routing policy and task-bound sizing evidence in the work item.
 
 ## Execute and close
 
+Keep agent communications, reservations, heartbeats, result bytes and progress
+in local queues and artifacts. Remote services are for explicitly selected PR,
+Board and other cloud operations. Do not use issue/PR comments as an agent
+message bus or poll them for local handoffs. Publish a cloud-facing review
+summary only when that operation is requested and material content changed.
+
 For eligible approved work, use the configured local queue and its maintained
 handoff APIs. Keep implementation and goal review independent. Use the actual
 reserved assignment, original result bytes and observed host receipt; never

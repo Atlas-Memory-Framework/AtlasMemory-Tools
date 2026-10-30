@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:a9fa4c6c2f89a9607b3d2f3e5fccb08cae25a57fe0efd53fc52410a7b12da1f3
+# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:c014e18613aa52df43e0606ee89bfa93a2c32e75903196079118ae0138401fe8
 # atlas-tools-generated-end
 name: local-automation-runtime-operate
 description: "Operate the local automation runtime: queue issues, run bounded or unattended cycles, long shift supervision, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup."
@@ -33,6 +33,11 @@ When the `atlasmemory_tools` MCP server is available, start with
 `harness_discover` and `harness_inspect` to select the registered runtime and
 establish its operating picture. The commands below remain the provider-level
 operations; do not reconstruct runtime location from memory.
+
+Keep agent coordination in local queues and artifacts. The MCP GitHub cycle
+uses `--remote-comments local`. Direct legacy commands retain their old default;
+select local policy explicitly for new automation. Use `cloud-review` only for
+deliberately selected PR-facing summaries, never as worker-to-worker messaging.
 
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
 This skill owns operation of the `atlas-agent-shift` terminal program; there is no separate shift skill. The program is the durable supervisor wrapper, while this skill defines when and how an operator may use it.
