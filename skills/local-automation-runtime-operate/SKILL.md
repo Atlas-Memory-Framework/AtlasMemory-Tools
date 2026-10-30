@@ -32,6 +32,11 @@ When the `atlasmemory_tools` MCP server is available, start with
 establish its operating picture. The commands below remain the provider-level
 operations; do not reconstruct runtime location from memory.
 
+Keep agent coordination in local queues and artifacts. The MCP GitHub cycle
+uses `--remote-comments local`. Direct legacy commands retain their old default;
+select local policy explicitly for new automation. Use `cloud-review` only for
+deliberately selected PR-facing summaries, never as worker-to-worker messaging.
+
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
 This skill owns operation of the `atlas-agent-shift` terminal program; there is no separate shift skill. The program is the durable supervisor wrapper, while this skill defines when and how an operator may use it.
 Use `repos.txt` to add target repos; use another runtime only for isolation, secrets separation, or intentional concurrent lanes.

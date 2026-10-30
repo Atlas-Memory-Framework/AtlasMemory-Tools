@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlsplit
 
 ROLES = ("planning", "implementation", "review", "repair")
 CAPABILITIES = frozenset({"read", "local_execute", "draft_pr", "board_write", "assess"})
+MODEL_CAPABILITIES = frozenset({"local_execute", "draft_pr", "assess"})
 PROVIDERS = frozenset({"azure-devops", "github"})
 REASONING = frozenset({"minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
@@ -141,7 +142,7 @@ class RuntimeConfig:
             "runtime_dir": str(self.runtime_dir) if self.runtime_dir else None,
             "repository": dict(self.repository),
             "capabilities": sorted(self.capabilities),
-            "models": {role: self.roles[role].report() for role in ROLES},
+            "models": {role: self.roles[role].report() for role in ROLES if role in self.roles},
             "sandbox": self.sandbox,
             "approval_policy": self.approval_policy,
             "authority": "operation-specific authorization is required separately",
@@ -243,9 +244,13 @@ def load_runtime_config(
         raise RuntimeConfigError("workspace-write sandbox and on-request approvals must be explicit")
     location = runtime_dir if runtime_dir is not None else raw.get("runtime_dir")
     root = validate_runtime_path(location) if location is not None or require_runtime else None
+    # Inspection and exact Board patches invoke no model. Explicit models are
+    # still validated; worker, publication and assessment capabilities retain
+    # their complete bounded role-setting requirement.
+    roles = {} if "models" not in raw and not set(capabilities) & MODEL_CAPABILITIES else resolve_role_settings(raw, source=str(source))
     return RuntimeConfig(
         provider=provider, runtime_dir=root, repository=_repository_config(provider, raw.get("repository")),
-        capabilities=frozenset(capabilities), roles=resolve_role_settings(raw, source=str(source)), source=str(source),
+        capabilities=frozenset(capabilities), roles=roles, source=str(source),
     )
 
 

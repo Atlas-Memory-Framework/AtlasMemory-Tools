@@ -216,9 +216,9 @@ class HarnessPreparationTests(unittest.TestCase):
         self.assertEqual({item["code"] for item in result["blockers"]}, {"missing_execution_capability", "missing_publication_capability"})
         self.assertFalse(result["proposal"]["required_authorization"]["granted"])
 
-    def test_azure_is_explicitly_unsupported_and_has_no_github_proposal(self) -> None:
+    def test_explicit_github_operation_cannot_fall_back_to_azure(self) -> None:
         self.service.runtime["provider"] = "azure-devops"
-        result = self.prepare()
+        result = self.execution.prepare("test", operation="github-cycle")
         self.assertEqual(result["status"], "blocked")
         self.assertIsNone(result["proposal"])
         self.assertIsNone(result["proposal_id"])

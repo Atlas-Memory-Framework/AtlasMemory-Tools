@@ -91,6 +91,106 @@ def gh_shell_command_parts(command: str) -> list[str] | None:
     return parts[1:]
 
 
+def remote_comment_policy(env: dict[str, str] | None = None) -> str:
+    """Select cloud presentation; local queue/result files remain coordination truth."""
+    raw = (env or {}).get("AGENT_REMOTE_COMMENTS")
+    if raw is None:
+        raw = os.environ.get("AGENT_REMOTE_COMMENTS")
+    if raw is None:
+        raw = read_config().get("AGENT_REMOTE_COMMENTS", "legacy")
+    policy = str(raw).strip().strip('"').strip("'")
+    if policy not in {"local", "cloud-review", "legacy"}:
+        raise ValueError("AGENT_REMOTE_COMMENTS must be local, cloud-review or legacy")
+    return policy
+
+
+def github_comment_command(
+    args: list[str], env: dict[str, str] | None = None,
+) -> tuple[list[str] | None, subprocess.CompletedProcess[str] | None]:
+    """Remove comment reads or reject comment writes before any CLI/API call.
+
+    A rejected write is not reported as a successful remote publication. Empty
+    comment-read results supply no validation evidence, so comment-only gates
+    remain blocked. All ordinary PR/check/label operations retain their policy.
+    """
+    if args[:1] != ["gh"]:
+        return args, None
+    policy = remote_comment_policy(env)
+    parts = args[1:]
+    fixed = "Remote comments are disabled by the local coordination policy."
+    if policy == "cloud-review" and parts[:2] == ["issue", "comment"]:
+        return None, subprocess.CompletedProcess(["gh", "issue-comment-suppressed"], 78, stdout="Issue comment communication is disabled; use local results or an explicit PR-facing summary.")
+    if policy != "local":
+        return args, None
+    if tuple(parts[:2]) in {("issue", "comment"), ("pr", "comment")}:
+        return None, subprocess.CompletedProcess(["gh", "comment-suppressed"], 78, stdout=fixed)
+    if parts[:1] == ["api"]:
+        endpoint = next((part for part in parts[1:] if part.startswith(("repos/", "/repos/", "https://api.github.com/repos/"))), "")
+        comment_endpoint = bool(re.search(r"(?:^|/)(?:comments|review-comments)(?:/|$|\?)", endpoint))
+        graphql_comments = "graphql" in parts and any("comment" in part.lower() for part in parts)
+        if comment_endpoint or graphql_comments:
+            explicit_get = any(part in {"-X", "--method"} and index + 1 < len(parts) and parts[index + 1].upper() == "GET" for index, part in enumerate(parts))
+            implicit_post = not explicit_get and any(part in {"-f", "-F", "--field", "--raw-field", "--input"} for part in parts)
+            if gh_command_is_mutating(parts) or graphql_comments or implicit_post:
+                return None, subprocess.CompletedProcess(["gh", "comment-suppressed"], 78, stdout=fixed)
+            return None, subprocess.CompletedProcess(["gh", "comment-read-suppressed"], 0, stdout="[]")
+    if parts[:2] in (["issue", "view"], ["pr", "view"], ["issue", "list"], ["pr", "list"]):
+        prepared = [arg for arg in args if arg not in {"--comments", "-c"}]
+        for position, arg in enumerate(prepared):
+            if arg == "--json" and position + 1 < len(prepared):
+                index, prefix = position + 1, ""
+            elif arg.startswith("--json="):
+                index, prefix = position, "--json="
+            else:
+                continue
+            fields = [field.strip() for field in prepared[index].removeprefix(prefix).split(",") if field.strip() != "comments"]
+            if not fields:
+                empty = "[]" if parts[1] == "list" else "{}"
+                return None, subprocess.CompletedProcess(["gh", "comment-read-suppressed"], 0, stdout=empty)
+            prepared[index] = prefix + ",".join(fields)
+            break
+        return prepared, None
+    return args, None
+
+
+def cloud_comment_cached(kind: str, repo: str, number: int, body: str) -> bool:
+    """A successful identical publication needs no repeated comment API read/write."""
+    key = hashlib.sha256(f"{kind}:{repo}:{number}".encode()).hexdigest()
+    path = jobs_dir() / "cloud-comment-publications" / (key + ".json")
+    try:
+        if path.is_symlink() or path.parent.is_symlink() or path.stat().st_uid != os.getuid() or path.stat().st_size > 4096:
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("body_sha256") == hashlib.sha256(body.encode()).hexdigest()
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def record_cloud_comment(kind: str, repo: str, number: int, body: str) -> None:
+    """Record only a content hash after a known-successful cloud publication."""
+    root = jobs_dir() / "cloud-comment-publications"
+    if root.is_symlink():
+        raise ValueError("cloud comment publication state must not be symlinked")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if root.stat().st_uid != os.getuid():
+        raise ValueError("cloud comment publication state must be owned by this identity")
+    key = hashlib.sha256(f"{kind}:{repo}:{number}".encode()).hexdigest()
+    path = root / (key + ".json")
+    if path.is_symlink():
+        raise ValueError("cloud comment publication records must not be symlinked")
+    data = {"body_sha256": hashlib.sha256(body.encode()).hexdigest(), "published_at": now_rfc3339()}
+    fd, temporary = tempfile.mkstemp(prefix=".publication-", dir=root)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream)
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def gh_command_is_mutating(parts: list[str]) -> bool:
     if not parts:
         return False
@@ -586,6 +686,13 @@ def run(
     retries: int = 1,
     backoff_seconds: float = 3.0,
 ) -> subprocess.CompletedProcess[str]:
+    prepared, suppressed = github_comment_command(args, env)
+    if suppressed is not None:
+        if check and suppressed.returncode:
+            raise RuntimeError(suppressed.stdout)
+        return suppressed
+    assert prepared is not None
+    args = prepared
     if args[:1] == ["git"]:
         env = git_env(env)
     gh_parts = gh_command_parts(args)

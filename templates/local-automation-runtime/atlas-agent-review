@@ -79,6 +79,7 @@ class ReviewDecision:
     ci_review: dict[str, Any] | None = None
     current_labels: set[str] | None = None
     issue_repo: str | None = None
+    head: str | None = None
 
 
 def target_repos(path: str | None) -> list[str]:
@@ -486,7 +487,14 @@ def failed_workflow_comment_body(repo: str, number: int, review: dict[str, Any])
 
 
 def post_failed_workflow_review(repo: str, number: int, review: dict[str, Any]) -> None:
+    if common.remote_comment_policy() == "local":
+        return
     body = failed_workflow_comment_body(repo, number, review)
+    # Local artifact locations may change between observations of identical CI
+    # evidence. They do not warrant another cloud message on their own.
+    material_body = re.sub(r"(?m)^Artifacts:.*$", "", body)
+    if common.cloud_comment_cached("failed-workflow", repo, number, material_body):
+        return
     payload = common.gh_json_or_none(
         ["pr", "view", str(number), "--repo", repo, "--json", "comments"],
         retries=2,
@@ -498,10 +506,13 @@ def post_failed_workflow_review(repo: str, number: int, review: dict[str, Any]) 
             continue
         if head and not re.search(rf"(?im)^\s*Head:\s*`?{re.escape(head)}`?\s*$", existing):
             continue
+        if re.sub(r"(?m)^Artifacts:.*$", "", existing) == material_body:
+            common.record_cloud_comment("failed-workflow", repo, number, material_body)
+            return
         comment_id = str(comment.get("id") or "")
         if not comment_id:
             return
-        common.run(
+        result = common.run(
             [
                 "gh",
                 "api",
@@ -515,11 +526,17 @@ def post_failed_workflow_review(repo: str, number: int, review: dict[str, Any]) 
             ],
             check=False,
         )
+        if getattr(result, "returncode", None) == 0:
+            common.record_cloud_comment("failed-workflow", repo, number, material_body)
         return
-    common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
+    result = common.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=False)
+    if getattr(result, "returncode", None) == 0:
+        common.record_cloud_comment("failed-workflow", repo, number, material_body)
 
 
 def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
+    if common.remote_comment_policy() == "local":
+        return False
     if LOCAL_VALIDATION_PASSED_LABEL not in common.label_names(pr):
         return False
     head_oid = str(pr.get("headRefOid") or "").strip()
@@ -537,6 +554,8 @@ def local_validation_passed_for_head(pr: dict[str, Any]) -> bool:
 
 
 def deployed_validation_passed_for_head(pr: dict[str, Any]) -> bool:
+    if common.remote_comment_policy() == "local":
+        return False
     if DEPLOYED_VALIDATION_PASSED_LABEL not in common.label_names(pr):
         return False
     head_oid = str(pr.get("headRefOid") or "").strip()
@@ -554,6 +573,8 @@ def deployed_validation_passed_for_head(pr: dict[str, Any]) -> bool:
 
 
 def semantic_review_state_for_head(pr: dict[str, Any]) -> str:
+    if common.remote_comment_policy() == "local":
+        return "missing"
     head_oid = str(pr.get("headRefOid") or "").strip()
     if not head_oid:
         return "missing"
@@ -573,6 +594,8 @@ def semantic_review_state_for_head(pr: dict[str, Any]) -> str:
 
 
 def semantic_review_body_for_head(pr: dict[str, Any]) -> str:
+    if common.remote_comment_policy() == "local":
+        return ""
     head_oid = str(pr.get("headRefOid") or "").strip()
     if not head_oid:
         return ""
@@ -1019,6 +1042,7 @@ def classify(
         files=files,
         ci_review=ci_review,
         current_labels=common.label_names(pr),
+        head=str(pr.get("headRefOid") or ""),
     )
 
 
@@ -1052,6 +1076,7 @@ def review_comment_body(decision: ReviewDecision) -> str:
         next_action = "Follow the blocker-specific instruction in the failed-workflow review, issue, or PR comments, then rerun review."
     return (
         "<!-- atlas-agent-review -->\n"
+        f"Head: `{decision.head or 'unknown'}`\n"
         f"## Automated Review Decision\n\n"
         f"Classification: `{decision.label}`\n\n"
         f"Decision: `{policy_decision_for(decision)}`\n"
@@ -1070,7 +1095,11 @@ def review_comment_body(decision: ReviewDecision) -> str:
 
 
 def post_review_comment(decision: ReviewDecision) -> None:
+    if common.remote_comment_policy() == "local":
+        return
     body = review_comment_body(decision)
+    if common.cloud_comment_cached("review", decision.repo, decision.number, body):
+        return
     comments = common.gh_json_or_none(
         ["api", f"repos/{decision.repo}/issues/{decision.number}/comments"],
         retries=2,
@@ -1078,10 +1107,13 @@ def post_review_comment(decision: ReviewDecision) -> None:
     for comment in comments:
         if "<!-- atlas-agent-review -->" not in str(comment.get("body") or ""):
             continue
+        if str(comment.get("body") or "") == body:
+            common.record_cloud_comment("review", decision.repo, decision.number, body)
+            return
         comment_id = str(comment.get("id") or "")
         if not comment_id:
             return
-        common.run(
+        result = common.run(
             [
                 "gh",
                 "api",
@@ -1093,8 +1125,12 @@ def post_review_comment(decision: ReviewDecision) -> None:
             ],
             check=False,
         )
+        if getattr(result, "returncode", None) == 0:
+            common.record_cloud_comment("review", decision.repo, decision.number, body)
         return
-    common.run(["gh", "pr", "comment", str(decision.number), "--repo", decision.repo, "--body", body], check=False)
+    result = common.run(["gh", "pr", "comment", str(decision.number), "--repo", decision.repo, "--body", body], check=False)
+    if getattr(result, "returncode", None) == 0:
+        common.record_cloud_comment("review", decision.repo, decision.number, body)
 
 
 _LABELS_READY: set[str] = set()
@@ -1188,6 +1224,7 @@ def write_summary(path: str, decisions: list[ReviewDecision]) -> None:
                     "url": decision.url,
                     "issue_repo": decision.issue_repo,
                     "issue_number": decision.issue_number,
+                    "head": decision.head,
                     "label": decision.label,
                     "route": route_for_decision(decision),
                     "blocker_types": blocker_types_for(decision.label, decision.reasons),

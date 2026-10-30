@@ -38,6 +38,20 @@ The supervised daily-development lane uses its separate explicit selection in
 `.atlas-dev.local.json` and its pinned runtime. Follow
 [daily development](daily-development.md) for that lane; this MCP registration
 does not select it, upgrade its runtime, or grant its execution authority.
+After shared discovery, an operator may select an existing supervised installation
+explicitly with the read-only daily status wrapper when the repository operating
+instructions direct that lane:
+
+```bash
+python3 -B scripts/atlas_daily.py --config /absolute/operator-selection.json status
+```
+
+No MCP runtime registration or new provider adapter is required for the local JSON
+queue. Its maintained `daily add`, `prepare`, host dispatch, `import` and `status`
+sequence retains separate ownership, sizing, route, budget and independent-review
+gates. Missing or contradictory local selection remains a blocker. The
+provider-cycle registration requirement below applies to provider cycles;
+`harness_start` does not execute the supervised local lane.
 
 Register an existing runtime explicitly:
 
@@ -89,8 +103,10 @@ The additional tools are:
 | `harness_start` | Starts the approved bounded GitHub cycle and returns a durable run id |
 | `harness_wait` | Reads compact status, optionally waiting up to 30 seconds for a cursor change |
 | `harness_cancel` | Requests shutdown of the supervisor's own worker process group |
+| `harness_remote_repositories` | Lists repository and branch choices for an entered Azure project URL |
+| `harness_configure_remote` | Previews or explicitly saves a named, non-secret remote configuration |
 
-The execution options are `max_minutes` (1–30, default 10), `cycles` (1–3,
+The GitHub cycle options are `max_minutes` (1–30, default 10), `cycles` (1–3,
 default 1), `max_per_repo` (1–2, default 1), and boolean `publish`, `apply`, and
 `review_apply` (all false by default). The default cycle requests provider reads
 and local artifacts. Publication and repair require their explicit effects.
@@ -99,7 +115,91 @@ notifications, and constrains dispatch to the declared repository inventory.
 Project-configured validation commands in an `apply` proposal retain their
 existing review and authority requirements.
 
-Execution requires the registered non-secret provider configuration to enable
+Agent coordination stays in local queues, handoffs, results and run records.
+The MCP GitHub cycle selects `--remote-comments local`: no worker issue-comment
+messages, comment polling or comment writes. Explicit PR/cloud operations remain
+available. Direct legacy CLI operations keep their compatibility default;
+`cloud-review` deliberately permits PR-facing review summaries and skips unchanged
+publications. A suppressed comment is not successful publication or accepted
+validation evidence. See the [communication audit](remote-communication-audit-2026-10-30.md).
+
+## Named Azure remotes
+
+Every target is supplied by the caller. There is no default organization,
+project, repository or base branch. For an Azure project URL, first call:
+
+```json
+{"project_url": "https://dev.azure.com/ORG/PROJECT"}
+```
+
+Pass that to `harness_remote_repositories`. It uses existing current-account
+Azure CLI access to return choices and observed default branches. It does not
+log in, save a profile, or choose a repository. The configured Azure adapter
+never uses GitHub as a fallback.
+
+Preview the chosen remote with `harness_configure_remote`:
+
+```json
+{
+  "remote_id": "chosen-name",
+  "provider": "azure-devops",
+  "repository_url": "https://dev.azure.com/ORG/PROJECT",
+  "repository_name": "REPOSITORY_FROM_DISCOVERY",
+  "base_branch": "BRANCH_FROM_DISCOVERY",
+  "apply": false
+}
+```
+
+Repeat the reviewed request with `apply: true` to save it. A project-only request
+returns `needs_selection` and creates no files even if apply was requested. Remote
+profiles are private non-secret configuration under
+`~/.config/atlasmemory-tools/remotes/`; named registrations live in the shared
+registry. If no existing runtime is supplied, setup installs finite adapter code
+under `~/.local/share/atlasmemory-tools/remotes/NAME/runtime`. It never copies
+credentials or overwrites another runtime's jobs, configuration or worktrees.
+Private receipts support guarded rollback through `scripts/harness_remotes.py`.
+
+Read-only and Board-only profiles need no model configuration. Worker, routing
+and publication capabilities require reviewed model settings; all privileged
+effects retain their existing native authority checks. A profile grants no
+consent. Azure worker operations also require their exact existing isolated
+checkout and task packet.
+
+To change a saved profile, preview the new same-target settings, retain the
+returned `current_profile_sha256`, and repeat the reviewed request with that
+value in `expected_profile_sha256` and `apply: true`. The update backs up the old
+profile and refuses a stale hash. Omitted optional settings retain their saved
+values. A different organization/project/repository needs a different named
+profile. `checkout` selects an already existing isolated worktree under that
+runtime's `worktrees/`; configuration never creates or clones it implicitly.
+
+Use the shared lifecycle with an explicit Azure operation:
+
+```json
+{
+  "runtime_id": "chosen-name",
+  "operation": "azure-inspect",
+  "options": {"ids": [123], "live_read": true, "max_minutes": 5}
+}
+```
+
+`harness_prepare` binds the exact configuration, code and input evidence without
+provider calls. `harness_start` repeats the operation/options and proposal id,
+then uses the existing Azure CLI adapter. `harness_wait` exposes a bounded,
+sanitized `operation_result`, including separate Boards and repository coverage;
+raw logs, credentials and unknown backend fields are not returned. Process exit
+does not establish task acceptance.
+
+Other named operations are `azure-worker-preview`, `azure-worker`,
+`azure-publish`, `azure-reconcile-preview` and `azure-reconcile`. Worker and
+reconciliation options name the exact local JSON packet and, for effects, signed
+authorization inputs. The maintained adapter verifies the signatures and fresh
+native state before model execution, draft publication or Board updates. Missing
+grants, capabilities, models, scope or evidence remain concrete blockers.
+
+## Existing runtime boundaries
+
+The GitHub cycle requires the registered non-secret provider configuration to enable
 `local_execute`, plus `draft_pr` for publication. These capabilities describe
 availability; the host-approved tool call must already be authorized for the
 proposal's effects. `authorization_ref` records the authorization source and is

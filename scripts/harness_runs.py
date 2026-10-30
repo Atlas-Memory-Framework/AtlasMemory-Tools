@@ -260,16 +260,33 @@ class HarnessRuns:
                                 if data["status"] in TERMINAL else
                                 [{"operation": "reconcile_run", "run_id": data["run_id"]}] if view["status"] == "unknown" else
                                 [{"operation": "wait", "run_id": data["run_id"], "cursor": data["cursor"]}])
+        proposal = data.get("proposal", {})
+        if isinstance(proposal, dict) and proposal.get("provider") == "azure-devops":
+            view["operation"] = proposal.get("operation")
+            if data["status"] in TERMINAL:
+                from harness_azure import project_result
+                from harness_service import _read_bytes
+
+                try:
+                    output = _checked(self.state_dir / data["run_id"] / "worker-output.log", self.boundary, required=True)
+                    raw = _read_bytes(output, boundary=self.state_dir / data["run_id"])
+                    view["operation_result"] = project_result(proposal, raw) if not data.get("output_truncated") else {
+                        "status": "unavailable", "reason": "bounded_output_truncated", "accepted_progress": False, "completion": False,
+                    }
+                except (HarnessServiceError, OSError, ValueError, TypeError):
+                    view["operation_result"] = {
+                        "status": "unavailable", "reason": "structured_result_unavailable", "accepted_progress": False, "completion": False,
+                    }
         return view
 
     def start(self, runtime_id: str, proposal_id: str, options: dict | None = None,
-              authorization_ref: str | None = None) -> dict[str, Any]:
+              authorization_ref: str | None = None, operation: str | None = None) -> dict[str, Any]:
         from harness_execution import HarnessExecution
 
         self._reap_supervisors()
         if not isinstance(authorization_ref, str) or not REFERENCE.fullmatch(authorization_ref):
             raise _error("missing_authorization_reference", "Start requires a bounded host-tool approval provenance reference; the reference itself grants no authority.")
-        prepared = HarnessExecution(self.service).prepare(runtime_id, operation="github-cycle", options=options)
+        prepared = HarnessExecution(self.service).prepare(runtime_id, operation=operation, options=options)
         if prepared.get("proposal_id") != proposal_id:
             raise _error("stale_proposal", "The proposal changed; prepare again and review its current effects before starting.")
         proposal = prepared.get("proposal", {})
@@ -277,11 +294,17 @@ class HarnessRuns:
             raise _error("proposal_blocked", "The prepared operation has unresolved blockers; no worker was launched.")
         runtime = self.service.get_runtime(runtime_id)
         capabilities = runtime.get("configuration", {}).get("capabilities", [])
-        if "local_execute" not in capabilities:
-            raise _error("execution_disabled", "The registered runtime lacks explicit local_execute capability.")
-        if (proposal.get("operation") != "github-cycle" or proposal.get("runtime_id") != runtime_id or
+        required = proposal.get("required_capabilities", ["local_execute"])
+        if not isinstance(required, list) or not required or any(capability not in capabilities for capability in required):
+            raise _error("execution_disabled", "The registered runtime lacks the capabilities required by this operation.")
+        from harness_azure import AZURE_OPERATIONS
+
+        supported = {"github-cycle", *AZURE_OPERATIONS}
+        if (proposal.get("operation") not in supported or proposal.get("runtime_id") != runtime_id or
+                (operation is not None and proposal.get("operation") != operation) or
+                proposal.get("provider") != runtime.get("provider", proposal.get("provider")) or
                 proposal.get("cwd") != runtime["runtime_dir"]):
-            raise _error("invalid_proposal", "Only the effect-bound registered GitHub cycle may be started.")
+            raise _error("invalid_proposal", "Only a named effect-bound operation for the registered provider may be started.")
         argv = proposal.get("argv")
         if not isinstance(argv, list) or not argv or any(not isinstance(arg, str) or not arg or "\0" in arg for arg in argv):
             raise _error("invalid_proposal", "The prepared operation did not supply valid bounded arguments.")
