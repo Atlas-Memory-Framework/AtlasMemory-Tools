@@ -1,11 +1,31 @@
 ---
-# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:c19c59d07369aa92a95d8af215d4bf721dfe4d203a947d02ae97b5ad2000ebe1
+# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:a9fa4c6c2f89a9607b3d2f3e5fccb08cae25a57fe0efd53fc52410a7b12da1f3
 # atlas-tools-generated-end
 name: local-automation-runtime-operate
 description: "Operate the local automation runtime: queue issues, run bounded or unattended cycles, long shift supervision, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup."
 ---
 
 # Local Automation Runtime Operate
+
+## Supervised daily lane first
+
+For a Tools checkout using `.atlas-dev.local.json`, start with
+`python3 -B scripts/atlas_daily.py status` and follow `docs/daily-development.md`
+before queueing work. The read-only entry selects config relative to its resolved
+script checkout, including through a symlink, regardless of the current directory.
+Use `python3 -B scripts/atlas_daily.py --config /absolute/path/.atlas-dev.local.json status`
+for another explicit config. Missing or contradictory selection fails; never guess
+another installation or run from the source template. Keep local config private.
+
+This entry supports status only. For mutations, use the guide's existing `daily`
+helper with runtime/state/owner taken from the same explicit config. Preserve the
+stable owner and recover pending handoffs through the same invocation before other
+work. Read native status and recovery guidance alongside the distinct checkout
+HEAD, candidate drift and runtime source pin. Source markers record provenance,
+not installed-file integrity or host/account/model qualification. The supervisor
+must verify the exact host and route before dispatch. This supervised lane grants
+no unattended or merge authority. Do not continue into the general issue-to-PR
+flow below automatically; it applies only to a separately selected, qualified lane.
 
 ## Purpose
 

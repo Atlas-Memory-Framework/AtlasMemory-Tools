@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Freeze and verify operator-supplied advisory review evidence for a Git delta."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from atlas_delta_review import (
+    DeltaReviewError,
+    freeze_delta,
+    new_metrics,
+    ordered_checks,
+    record_metric_event,
+    run_ordered_checks,
+    validate_pilot_acceptance,
+    write_json,
+)
+
+
+def read_json(path: str) -> dict:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if type(value) is not dict:
+        raise DeltaReviewError(f"{path} must contain a JSON object")
+    return value
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    freeze = commands.add_parser("freeze", help="write an immutable committed-delta manifest")
+    freeze.add_argument("repo")
+    freeze.add_argument("base")
+    freeze.add_argument("candidate")
+    freeze.add_argument("output")
+    plan = commands.add_parser("plan-checks", help="show declared check order without executing commands")
+    plan.add_argument("checks")
+    plan.add_argument("output")
+    metric = commands.add_parser("metric", help="record one pilot timing event")
+    metric.add_argument("state")
+    metric.add_argument("event", choices=("start", "useful_finding", "rework", "accepted"))
+    metric.add_argument("--snapshot", required=True, help="exact frozen snapshot JSON")
+    run_checks = commands.add_parser("run-checks", help="run argv checks code-first, stopping on failure")
+    run_checks.add_argument("repo")
+    run_checks.add_argument("snapshot")
+    run_checks.add_argument("checks")
+    run_checks.add_argument("output")
+    acceptance = commands.add_parser("acceptance-check", help="fail-closed pilot gate before existing supervised acceptance")
+    acceptance.add_argument("repo")
+    acceptance.add_argument("snapshot")
+    acceptance.add_argument("review")
+    acceptance.add_argument("check_plan")
+    acceptance.add_argument("checks_result")
+    args = parser.parse_args()
+    try:
+        if args.command == "freeze":
+            write_json(args.output, freeze_delta(args.repo, args.base, args.candidate))
+            print(f"Frozen delta manifest: {args.output}")
+        elif args.command == "plan-checks":
+            checks = json.loads(Path(args.checks).read_text(encoding="utf-8"))
+            if type(checks) is not list:
+                raise DeltaReviewError("checks file must contain a JSON array")
+            write_json(args.output, {"checks": ordered_checks(checks), "execution": "not_run"})
+            print(f"Ordered check plan (not executed): {args.output}")
+        elif args.command == "run-checks":
+            checks = json.loads(Path(args.checks).read_text(encoding="utf-8"))
+            if type(checks) is not list:
+                raise DeltaReviewError("checks file must contain a JSON array")
+            result = run_ordered_checks(args.repo, read_json(args.snapshot), checks)
+            write_json(args.output, result)
+            print(json.dumps({"passed": result["passed"], "result_file": args.output}, sort_keys=True))
+            if not result["passed"]:
+                return 1
+        elif args.command == "acceptance-check":
+            plan = read_json(args.check_plan).get("checks")
+            result = validate_pilot_acceptance(args.repo, read_json(args.snapshot), read_json(args.review), plan,
+                read_json(args.checks_result))
+            print(json.dumps(result, sort_keys=True))
+            if not result["pilot_acceptance_eligible"]:
+                return 1
+        else:
+            state_path = Path(args.state)
+            snapshot = read_json(args.snapshot)
+            state = new_metrics(snapshot) if args.event == "start" else read_json(str(state_path))
+            if args.event != "start":
+                state = record_metric_event(state, args.event, snapshot)
+            write_json(state_path, state)
+            print(f"Pilot metrics updated: {state_path}")
+    except (OSError, json.JSONDecodeError, DeltaReviewError) as exc:
+        print(f"delta-review: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

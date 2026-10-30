@@ -451,6 +451,17 @@ class HarnessServiceTests(unittest.TestCase):
         self.assertFalse(runtime["available"])
         self.assertEqual(runtime["interface_runs"]["runs"][0]["run_id"], "run-" + "b" * 32)
 
+    def test_runtime_code_read_budget_does_not_expand_artifact_budget(self):
+        path = self.root / "large-runtime.py"
+        content = b"#" * (service.MAX_INPUT_BYTES + 1)
+        path.write_bytes(content)
+        with self.assertRaises(service.HarnessServiceError) as caught:
+            service._read_bytes(path)
+        self.assertEqual(caught.exception.code, "input_too_large")
+        self.assertEqual(service._read_bytes(path, max_bytes=service.MAX_CODE_BYTES), content)
+        with self.assertRaises(service.HarnessServiceError):
+            service._read_bytes(path, max_bytes=service.MAX_CODE_BYTES + 1)
+
 
 if __name__ == "__main__":
     unittest.main()

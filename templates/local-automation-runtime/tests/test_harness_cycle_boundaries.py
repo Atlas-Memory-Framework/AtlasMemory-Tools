@@ -163,6 +163,38 @@ class HarnessCycleBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.orchestrator.execution_targets(self.args("--execution-targets-file", str(self.inventory)))
 
+    def test_merged_parser_preserves_both_interfaces_without_mixing_bounded_authority(self) -> None:
+        argv = [
+            "--atlas-bounded", "--atlas-work-items", str(self.root / "queue.json"),
+            "--atlas-role-command-config", str(self.root / "roles.json"),
+            "--atlas-cycle-pins", str(self.root / "pins.json"),
+            "--atlas-max-steps", "1", "--atlas-max-claims", "1", "--atlas-max-roles", "1",
+            "--atlas-role-max", "1", "--atlas-cycle-seconds", "10",
+            "--atlas-worker-timeout-seconds", "5", "--atlas-worker-termination-grace-seconds", "0.1",
+            "--atlas-stop-file", str(self.root / "stop"),
+        ]
+        parser = self.orchestrator.build_parser()
+        local = parser.parse_args(argv)
+        self.assertTrue(local.atlas_bounded)
+        self.assertEqual(local.atlas_max_steps, 1)
+        self.assertTrue(local.worker_notifications)
+        for extra in [["--execution-targets-file", str(self.inventory)], ["--no-worker-notifications"]]:
+            with self.subTest(extra=extra):
+                mixed = argv + extra
+                args = parser.parse_args(mixed)
+                with patch.object(self.orchestrator, "_cycle_guard_read", side_effect=AssertionError("mixed mode must refuse before source reads")), \
+                        patch.object(self.orchestrator, "process_once", side_effect=AssertionError("mixed mode must not enter legacy dispatch")), \
+                        self.assertRaisesRegex(ValueError, "forbids legacy/mixed modes"):
+                    self.orchestrator._run_bounded_cli(args, mixed)
+
+    def test_merged_main_keeps_ordinary_once_routing(self) -> None:
+        with patch.object(sys, "argv", ["atlas-agent-orchestrator", "--once", "--no-worker-notifications"]), \
+                patch.object(self.orchestrator, "process_once", return_value=0) as ordinary, \
+                patch.object(self.orchestrator, "_run_bounded_cli", side_effect=AssertionError("ordinary mode cannot enter bounded supervisor")):
+            self.orchestrator.main()
+        ordinary.assert_called_once()
+        self.assertFalse(ordinary.call_args.args[0].worker_notifications)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:9bc00f07291f74ce808a31f3acbbc579cc862fd9507be586b62a1b1ba8b5f72b
+# atlas-tools-generated: source=skills/plan/SKILL.md manifest=atlas-tools.v1 checksum=sha256:ecf23c7e0af439bbb0631e50c385008f416a99b56e33aa99cc30515ecf4fb1dc
 # atlas-tools-generated-end
 name: plan
 description: Orchestrate the /plan workflow to create or update the current plan artifact (autonamed by the planning workflow) as the planning write surface and implementation plan. Use when the user runs /plan, asks to create a plan, or wants to progress planning stages with validation and reviews.
@@ -10,6 +10,14 @@ description: Orchestrate the /plan workflow to create or update the current plan
 ## Purpose
 Create or update the current markdown plan artifact and move it through Problem, Feature, Technical, Implementation, Automation, and Reviews with deterministic validators, decision logging, and substance-first human review. `$plan` is the public planning entrypoint and canonical writer. Before problem framing hardens, preserve the user's latent target, anti-targets, expression-state gaps, open loops, and intent checksum in `## Intent Model`. The plan must explain the real product/system work before it explains planning machinery, and it must contain enough detail for implementation agents that have zero prior context and no user interaction. The markdown artifact is the authoring write surface. Compiled registry YAML, when used, is a derived machine-readable package for joins, validator inputs, and projection metadata; it does not replace the selected markdown plan as authoring authority. Section-owner skills run as sub-agents and return drafts; the orchestrator is the only writer and runs the Q/A loop inline with the user.
 
+## Plain technical English throughout planning
+
+Apply this rule from the first draft, in every planning stage, user explanation, and delegated task instruction:
+
+> Use plain, direct technical English. State the answer first, then explain it. Make clear who does what, under which conditions, and why. Use the same term for the same thing. Explain necessary technical terms instead of replacing them with vague words. Preserve important reasoning, qualifications, and uncertainty. Remove filler, repeated conclusions, and unnecessary introductions. Do not confuse brevity with clarity.
+
+Preserve the depth and breadth needed to understand the system and implement the work: definitions, evidence, alternatives, dependencies, failure cases, and decision rationale. Use concrete actors, actions, and targets so each sentence has a specific meaning. Keep exact schema fields, identifiers, commands, and source references intact. The existing HumanReadabilityReview checks this authoring rule after drafting; stage owners and the orchestrator apply it while developing the plan.
+
 ## Agentic review mode
 When the user says `Use $plan with agentic review mode`, asks for parallel plan review, asks to review an old plan before trusting it, or asks to run the local agentic planning workflow on a markdown plan, `$plan` remains the public workflow and canonical writer. Invoke `/local-plan-agent-runtime` as an internal review layer after the authoring artifact is selected and before preserving approval/readiness state.
 
@@ -18,6 +26,7 @@ Agentic review mode must run as dry-run review/proposal work unless the user exp
 Use this mode for new plans, old plans that are not in current shape, and previously reviewed or approved plans. For old or approved plans, treat existing `Pass`, `Approved`, projection, and dispatch claims as stale until the re-entry audit and agentic review findings are dispositioned. If implementation-critical intent is missing, interrogate the user with targeted questions and keep the plan blocked until the answer is recorded.
 
 ## Core rules
+- **Reader check before delivery**: use [plain-technical-english](../plain-technical-english/SKILL.md) for new or materially changed prose, section-owner drafts, and user-facing reports. Apply its meaning rubric through the existing Human Readability Review. Preserve required schemas, exact quotes, commands, and evidence. Deterministic structure checks do not prove understandable reasoning; the reviewing agent must explain the result, actors, conditions, reason, and uncertainty from the text. Do not bulk-rewrite old plans.
 - The current markdown plan artifact is the planning write surface; do not assume a fixed filename.
 - **Substance before mechanics**: Product/system sections (`Problem Definition`, `Challenge Artifacts`, `Technical Plan`) must describe the real workflow failure/opportunity, desired behavior, and engineering approach. Planning machinery, authority contracts, projection, and dispatch policy belong in `Plan State`, `Implementation Plan`, `Automation Issue Manifest`, and `Execution Mechanics / Automation Appendix`.
 - **Zero-interaction implementer standard**: assume future build agents cannot ask the user questions and have no prior knowledge. If an implementation-critical fact is missing, ask now, record a decision boundary, or keep the gate failing. Do not fill gaps with vague defaults.
@@ -73,6 +82,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
    - When available, run `python3 skills/plan/scripts/validate_plan.py <authoring-artifact>` as the deterministic mechanical check for `IntentModelComplete`, `ProblemDefinitionComplete`, `PlanReadiness`, `AutomationReadiness`, `PlanningReviewsComplete`, and `PlanStateSanity`. Use the script output as blocking evidence, not as a substitute for human-agency decisions.
    - If the plan is part of an atomic-plan campaign, verify that its descriptive metadata is coherent enough for human navigation (`PlanGroup`, `AtomicScope`, and known dependencies), but do not fail the gate solely because optional cross-plan metadata is absent unless the plan itself depends on it.
 8) Route to the first failing gate and call the owner skill as a sub-agent to produce a draft section. Run `/intent-reconciliation` before `/problem-definition` when `## Intent Model` is missing, placeholder-only, has blocking open loops, or the user input is stream-of-thought, under-specified, experiential, architecture-intuition-heavy, prior-intent-miss recovery, high `RubberStampSignals`, `PlanTier: Full`, or `AutomationTarget: unattended-prs`. Provide any known agent roster or `## Context Snapshot` so ownership can be assigned correctly.
+   - Include the plain technical English rule above in each stage-owner delegation. Require the draft to explain the proposed behavior, responsible actor, conditions, reasons, and remaining uncertainty wherever they affect that section. Preserve the technical detail needed by a future implementer. Apply the same rule when revising the draft and writing downstream task instructions.
 9) Run the human Q/A loop inline with the user using the gate's mode (see map below) when:
    - the validator fails, OR
    - `Questions` is non-empty, OR
@@ -118,6 +128,7 @@ Use this mode for new plans, old plans that are not in current shape, and previo
   - It must avoid authority/projection/dispatch language unless the technical work itself is authority/projection/dispatch.
   - It must leave no implementation-critical TBDs outside Decision Log/Open questions.
 - HumanReadabilityReview:
+  - The draft follows the plain technical English authoring rule used throughout the planning stages and their delegations; correct specific unclear passages through the existing remediation route.
   - A new engineer can explain what is being built and why after reading only `Intent Model`, `Problem Definition`, and the `Technical Plan` intro.
   - Rendered HTML, if generated, reads like a product/engineering plan rather than a validator report.
   - Automation, authority-contract, projection, and dispatch details are confined to execution sections/appendices unless directly part of the product problem.

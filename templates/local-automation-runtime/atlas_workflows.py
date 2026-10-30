@@ -32,6 +32,7 @@ class TeamRole:
     skills: list[str] = field(default_factory=list)
     consumes: list[str] = field(default_factory=list)
     acceptance_criteria: list[str] = field(default_factory=list)
+    goal_gate: bool = False
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "TeamRole":
@@ -43,6 +44,7 @@ class TeamRole:
             skills=as_list(payload.get("skills")),
             consumes=as_list(payload.get("consumes")),
             acceptance_criteria=as_list(payload.get("acceptance_criteria")),
+            goal_gate=payload.get("goal_gate") is True,
         )
 
     def validate(self) -> list[str]:
@@ -57,6 +59,8 @@ class TeamRole:
             errors.append(f"role {self.id} has duplicate outputs")
         if self.id in self.consumes:
             errors.append(f"role {self.id} cannot consume itself")
+        if self.goal_gate and self.id == "implementation":
+            errors.append("role implementation cannot be a goal gate")
         return errors
 
 
@@ -307,6 +311,7 @@ class TeamRunRoleResult:
     evidence: list[str] = field(default_factory=list)
     notes: str = ""
     contract_issues: list[str] = field(default_factory=list)
+    goal_review: Any | None = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "TeamRunRoleResult":
@@ -317,6 +322,7 @@ class TeamRunRoleResult:
             evidence=as_list(payload.get("evidence")),
             notes=str(payload.get("notes") or ""),
             contract_issues=as_list(payload.get("contract_issues")),
+            goal_review=payload.get("goal_review"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -361,14 +367,30 @@ class TeamRun:
         self.role_results[result.role_id] = result
 
     def refresh_status(self, template: TeamTemplate) -> str:
-        self.status = "complete" if not self.missing_outputs(template) else "running"
+        roles_by_id = {role.id: role for role in template.roles}
+        attempted_failure = any(
+            result.status in {"failed", "blocked", "incomplete"}
+            or bool(result.contract_issues)
+            or (
+                result.status == "complete"
+                and not role_result_satisfies_outputs(
+                    roles_by_id.get(role_id, TeamRole(role_id, role_id, "", [])), result
+                )
+            )
+            for role_id, result in self.role_results.items()
+            if result.status in {"complete", "incomplete", "failed", "blocked"}
+        )
+        if attempted_failure:
+            self.status = "blocked"
+        else:
+            self.status = "complete" if not self.missing_outputs(template) else "running"
         return self.status
 
     def missing_outputs(self, template: TeamTemplate) -> dict[str, list[str]]:
         missing: dict[str, list[str]] = {}
         for role in template.roles:
             result = self.role_results.get(role.id)
-            if result is None or result.status != "complete":
+            if result is None or not role_result_satisfies_outputs(role, result):
                 missing[role.id] = list(role.must_produce)
                 continue
             absent = [name for name in role.must_produce if not result.outputs.get(name)]
@@ -409,6 +431,15 @@ class TeamRun:
                     lines.append(f"- {name}: {value or '`missing`'}")
                 for evidence in result.evidence:
                     lines.append(f"- Evidence: {evidence}")
+                if role.goal_gate:
+                    verdict = result.goal_review.get("verdict") if isinstance(result.goal_review, dict) else "invalid or missing"
+                    lines.append(f"- Goal gate verdict: `{verdict}`")
+                    if isinstance(result.goal_review, dict):
+                        lines.append(f"- Goal review reason: {result.goal_review.get('reason', '')}")
+                        review_evidence = result.goal_review.get("evidence")
+                        if isinstance(review_evidence, list):
+                            for item in review_evidence:
+                                lines.append(f"- Goal review evidence: {item}")
                 for issue in result.contract_issues:
                     lines.append(f"- Contract issue: {issue}")
                 if result.notes:
@@ -718,6 +749,11 @@ def load_role_results(path: str | pathlib.Path) -> list[TeamRunRoleResult]:
     if not source.exists():
         return []
     payload = json.loads(source.read_text(encoding="utf-8"))
+    return role_results_from_payload(payload)
+
+
+def role_results_from_payload(payload: Any) -> list[TeamRunRoleResult]:
+    """Parse role results from an already-read payload (including an anchored FD read)."""
     if isinstance(payload, dict) and "role_results" in payload:
         raw_results = payload["role_results"]
     else:
@@ -738,7 +774,42 @@ def role_required_missing(role: TeamRole, result: TeamRunRoleResult) -> list[str
 
 
 def role_result_satisfies_outputs(role: TeamRole, result: TeamRunRoleResult | None) -> bool:
-    return result is not None and result.status == "complete" and not role_required_missing(role, result)
+    if result is None or result.status != "complete" or role_required_missing(role, result) or result.contract_issues:
+        return False
+    if not role.goal_gate:
+        return True
+    return (
+        not goal_review_issues(result.goal_review)
+        and result.goal_review.get("verdict") == "pass"
+    )
+
+
+def goal_review_issues(review: Any) -> list[str]:
+    """Validate the exact structured contract required by a goal gate."""
+    if not isinstance(review, dict):
+        return ["goal review: must be an object"]
+    allowed = {"verdict", "reason", "evidence"}
+    issues: list[str] = []
+    extra = sorted(set(review).difference(allowed))
+    if extra:
+        issues.append("goal review: unknown field(s): " + ", ".join(str(item) for item in extra))
+    missing = sorted(allowed.difference(review))
+    if missing:
+        issues.append("goal review: missing field(s): " + ", ".join(missing))
+    verdict = review.get("verdict")
+    if not isinstance(verdict, str) or verdict not in {"pass", "fail", "inconclusive"}:
+        issues.append("goal review: verdict must be pass, fail, or inconclusive")
+    reason = review.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        issues.append("goal review: reason must be a nonblank string")
+    evidence = review.get("evidence")
+    if (
+        not isinstance(evidence, list)
+        or not evidence
+        or any(not isinstance(item, str) or not item.strip() for item in evidence)
+    ):
+        issues.append("goal review: evidence must be a nonempty list of nonblank strings")
+    return issues
 
 
 GENERATED_CONTRACT_ISSUE_PREFIXES = (
@@ -746,6 +817,7 @@ GENERATED_CONTRACT_ISSUE_PREFIXES = (
     "dependency not complete:",
     "unexpected output(s):",
     "unknown status:",
+    "goal review:",
 )
 
 
@@ -776,6 +848,8 @@ def role_result_contract_issues(
         ]
         if incomplete_dependencies:
             issues.append("dependency not complete: " + ", ".join(incomplete_dependencies))
+    if role.goal_gate:
+        issues.extend(goal_review_issues(result.goal_review))
     if unexpected:
         issues.append("unexpected output(s): " + ", ".join(unexpected))
     if result.status not in {"complete", "failed", "blocked", "pending", "running", "incomplete", "dry-run"}:
@@ -805,6 +879,15 @@ def normalize_role_result(
         for issue in issues
     ):
         status = "incomplete"
+    if role.goal_gate:
+        if not goal_review_issues(result.goal_review):
+            verdict = result.goal_review.get("verdict")
+            if verdict == "fail":
+                status = "blocked"
+            elif verdict == "inconclusive" and status == "complete":
+                status = "incomplete"
+        elif status == "complete":
+            status = "incomplete"
     if (
         status == "incomplete"
         and any(generated_contract_issue(issue) for issue in result.contract_issues)
@@ -821,6 +904,7 @@ def normalize_role_result(
         evidence=list(result.evidence),
         notes=result.notes,
         contract_issues=list(dict.fromkeys(issues)),
+        goal_review=result.goal_review,
     )
 
 
@@ -872,6 +956,7 @@ def role_task_packets(
     *,
     registry: AgentRegistry | None = None,
     agent_root: str | pathlib.Path | None = None,
+    work_item_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     missing = run.missing_outputs(template)
     roles_by_id = {role.id: role for role in template.roles}
@@ -894,6 +979,7 @@ def role_task_packets(
                 "run_id": run.id,
                 "template_id": template.id,
                 "work_item_id": run.work_item_id,
+                "work_item_context": dict(work_item_context or {}),
                 "role_id": role.id,
                 "label": role.label,
                 "phase_index": phase_by_role.get(role.id, 0),
@@ -901,9 +987,49 @@ def role_task_packets(
                 "skills": role.skills,
                 "consumes": role.consumes,
                 "must_produce": role.must_produce,
+                "result_instructions": (
+                    "Write your original result bytes to a regular JSON file. The sole root key must be "
+                    "role_results, containing exactly one record for reserved role_id " + role.id + ". "
+                    "Use terminal status complete, blocked, or failed. outputs must map exactly these "
+                    "must_produce names to STRING values: " + ", ".join(role.must_produce) + ". "
+                    "Never use lists or objects as output values or add output names. Put evidence at "
+                    "record level as a list of strings, never inside outputs. notes must be a string; "
+                    "contract_issues must be a list of strings. Fill the template with substantive "
+                    "results and evidence; its default blocked status and empty fields are not a completion. "
+                    + ("This goal gate requires goal_review with exactly verdict (pass, fail, or inconclusive), "
+                       "a nonblank reason and a nonempty list of nonblank evidence strings. Supply your own "
+                       "judgment; the unfilled inconclusive template is not passing goal acceptance. "
+                       if role.goal_gate else "Keep goal_review null for this role. ")
+                    + "Host formatting instructions are advisory; the importer enforces result shape and "
+                    "the workflow separately evaluates outputs and goal acceptance. Preserve original bytes. "
+                    "If formatting is refused, the same known invocation must write a separate corrected "
+                    "file; retain both attempts. The supervisor must not normalize the worker result."
+                ),
+                "result_template": {
+                    "role_results": [{
+                        "role_id": role.id,
+                        "status": "blocked",
+                        "outputs": {name: "" for name in role.must_produce},
+                        "evidence": [],
+                        "notes": "",
+                        "contract_issues": [],
+                        "goal_review": ({"verdict": "inconclusive", "reason": "", "evidence": []}
+                                        if role.goal_gate else None),
+                    }],
+                },
+                "goal_gate": role.goal_gate,
+                "goal_review_contract": {
+                    "required": role.goal_gate,
+                    "fields": {
+                        "verdict": ["pass", "fail", "inconclusive"],
+                        "reason": "nonblank string",
+                        "evidence": "nonempty list of nonblank strings",
+                    },
+                },
                 "missing_outputs": missing.get(role.id, []),
                 "status": result.status if result else "pending",
                 "contract_issues": result.contract_issues if result else [],
+                "goal_review": result.goal_review if result else None,
                 "dependency_blockers": role_dependency_blockers(role, run, roles_by_id),
                 "acceptance_criteria": role.acceptance_criteria,
                 "consumed_role_results": consumed,
@@ -930,6 +1056,8 @@ def team_run_summary(template: TeamTemplate, run: TeamRun) -> dict[str, Any]:
                 "completed_outputs": sorted(run.role_results[role.id].outputs) if role.id in run.role_results else [],
                 "contract_issues": run.role_results[role.id].contract_issues if role.id in run.role_results else [],
                 "dependency_blockers": role_dependency_blockers(role, run, {item.id: item for item in template.roles}),
+                "goal_gate": role.goal_gate,
+                "goal_review": run.role_results[role.id].goal_review if role.id in run.role_results else None,
             }
             for role in template.roles
         ],
@@ -943,10 +1071,14 @@ def write_role_task_packets(
     *,
     registry: AgentRegistry | None = None,
     agent_root: str | pathlib.Path | None = None,
+    work_item_context: dict[str, Any] | None = None,
 ) -> None:
     pathlib.Path(path).write_text(
         json.dumps(
-            {"tasks": role_task_packets(template, run, registry=registry, agent_root=agent_root)},
+            {"tasks": role_task_packets(
+                template, run, registry=registry, agent_root=agent_root,
+                work_item_context=work_item_context,
+            )},
             indent=2,
             sort_keys=True,
         )

@@ -1,0 +1,299 @@
+{
+  "schema": "plain-technical-english.evaluation.v1",
+  "reviewer": "independent subagent plain_english_review",
+  "protocol": "The reviewer received raw drafts without expected results, judged them first, then inspected the implementation diff.",
+  "fixture_source": "tests/fixtures/plain-technical-english.json",
+  "fixture_sha256": "6de480b7d13abcb09d251a07c8020bcfd6110fb4810c381efea66b49a0a47449",
+  "outcomes": [
+    {
+      "id": "clear-technical-reasoning",
+      "result": "pass",
+      "reader_summary": "The importer prevents duplicate Atlas records when the coordinator retries a result by saving the record and result ID atomically, then returning the existing record on a repeated ID.",
+      "material_findings": [],
+      "correction": null
+    },
+    {
+      "id": "unclear-short-report",
+      "result": "fail",
+      "reader_summary": "The text claims completion and readiness, but does not identify what completed, who acted, or what is ready for which next step.",
+      "material_findings": [
+        {
+          "lines": [
+            1,
+            2
+          ],
+          "criteria": [
+            "answer-first",
+            "actors-actions",
+            "conditions-reasons",
+            "terms-referents",
+            "reasoning-uncertainty",
+            "economy-clarity"
+          ],
+          "finding": "The reader cannot connect Done, It, lane, envelope, surface, or assimilation to concrete work, actors, targets, evidence, or readiness conditions. This blocks any reliable decision or action."
+        }
+      ],
+      "correction": "The report claims that work is complete, but it does not identify the completed work or responsible component. It also does not explain what is ready or what can happen next. Those details must be verified before completion or readiness can be confirmed.",
+      "correction_limit": "A concrete completion report requires source context not present in the draft; do not substitute the examples as facts."
+    },
+    {
+      "id": "clear-uncertainty",
+      "result": "pass",
+      "reader_summary": "A fixture test established that the coordinator selects eligible work, while a real worker launch remains untested and must be tested by the runtime worker before claiming unattended dispatch works.",
+      "material_findings": [],
+      "correction": null
+    },
+    {
+      "id": "synonyms-hide-ownership",
+      "result": "fail",
+      "reader_summary": "The draft says a worker result is stored, but does not say where, whether the artifact and packet are the result, which component imports it, or what readiness means.",
+      "material_findings": [
+        {
+          "lines": [
+            1,
+            2
+          ],
+          "criteria": [
+            "actors-actions",
+            "conditions-reasons",
+            "terms-referents",
+            "reasoning-uncertainty"
+          ],
+          "finding": "The passive storage claim and unexplained artifact/surface/substrate/packet synonyms obscure the storage boundary, future actor, target, and trigger. A reader cannot distinguish a saved artifact from an imported or durable record."
+        }
+      ],
+      "correction": "The report says the worker result is stored, but it does not identify the storage location. It also does not identify the component that will import the result, the import target, or the condition that permits the import. The report does not establish whether the artifact and packet refer to that worker result.",
+      "correction_limit": "No specific storage location, database, owner, or import outcome can be supplied from this draft."
+    },
+    {
+      "id": "protected-content",
+      "result": "pass",
+      "reader_summary": "The checker rejected a stale review record; the reviewer must read the current document and create a fresh record because replacing only the source hash would reuse an old judgment.",
+      "material_findings": [],
+      "correction": null,
+      "protected_content": "The source_sha256 identifier, quoted error, JSON example, and python3 check_review.py check report.md review.json command remain exact."
+    }
+  ],
+  "checker_runs": [
+    {
+      "draft_id": "clear-technical-reasoning",
+      "review": {
+        "schema": "plain-technical-english.review.v1",
+        "source_sha256": "a99fc7cfaf6825699b02c7b374b1322e7fdcb96dd0e269173d96df0e133d8e51",
+        "reviewer": "independent-plain-english-review-agent",
+        "reader_summary": "The importer prevents duplicate Atlas records by atomically saving a record with its result ID and returning that record when the coordinator retries a committed request with the same ID.",
+        "criteria": {
+          "answer-first": {
+            "result": "pass",
+            "reason": "The opening directly names the result: duplicate Atlas records are prevented when a result is retried.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "The importer prevents duplicate Atlas records when the coordinator retries a worker result."
+              }
+            ]
+          },
+          "actors-actions": {
+            "result": "pass",
+            "reason": "The importer writes and returns records; the coordinator retries using the same result ID. Each action has an explicit target.",
+            "evidence": [
+              {
+                "line": 2,
+                "text": "It writes the record and result ID in one Postgres transaction, meaning both writes succeed or neither does."
+              },
+              {
+                "line": 3,
+                "text": "If the response is lost after that transaction commits, the coordinator retries with the same result ID. The importer returns the existing record. This handles a lost response without requiring the coordinator to know whether the first request committed."
+              }
+            ]
+          },
+          "conditions-reasons": {
+            "result": "pass",
+            "reason": "The text explains the lost-response-after-commit trigger and why returning the existing record lets the coordinator retry without knowing the first commit outcome.",
+            "evidence": [
+              {
+                "line": 3,
+                "text": "If the response is lost after that transaction commits, the coordinator retries with the same result ID. The importer returns the existing record. This handles a lost response without requiring the coordinator to know whether the first request committed."
+              }
+            ]
+          },
+          "terms-referents": {
+            "result": "pass",
+            "reason": "Importer and coordinator keep consistent roles, result ID keeps the same meaning, and the transaction term is explained by the both-or-neither behavior.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "The importer prevents duplicate Atlas records when the coordinator retries a worker result."
+              },
+              {
+                "line": 2,
+                "text": "It writes the record and result ID in one Postgres transaction, meaning both writes succeed or neither does."
+              },
+              {
+                "line": 3,
+                "text": "If the response is lost after that transaction commits, the coordinator retries with the same result ID. The importer returns the existing record. This handles a lost response without requiring the coordinator to know whether the first request committed."
+              }
+            ]
+          },
+          "reasoning-uncertainty": {
+            "result": "pass",
+            "reason": "The atomic-write premise and lost-response scenario remain explicit. The report describes that mechanism and does not extend it into a deployment or universal reliability claim.",
+            "evidence": [
+              {
+                "line": 2,
+                "text": "It writes the record and result ID in one Postgres transaction, meaning both writes succeed or neither does."
+              },
+              {
+                "line": 3,
+                "text": "If the response is lost after that transaction commits, the coordinator retries with the same result ID. The importer returns the existing record. This handles a lost response without requiring the coordinator to know whether the first request committed."
+              }
+            ]
+          },
+          "economy-clarity": {
+            "result": "pass",
+            "reason": "Each sentence adds a necessary part of the result, transaction guarantee, retry condition, or causal explanation; removing the longer explanation would lose the reason the mechanism works.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "The importer prevents duplicate Atlas records when the coordinator retries a worker result."
+              },
+              {
+                "line": 2,
+                "text": "It writes the record and result ID in one Postgres transaction, meaning both writes succeed or neither does."
+              },
+              {
+                "line": 3,
+                "text": "If the response is lost after that transaction commits, the coordinator retries with the same result ID. The importer returns the existing record. This handles a lost response without requiring the coordinator to know whether the first request committed."
+              }
+            ]
+          },
+          "faithfulness": {
+            "result": "pass",
+            "reason": "This review preserves the draft verbatim, including Atlas, Postgres, and the result ID relationship; no rewrite or external implementation verification is claimed.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "The importer prevents duplicate Atlas records when the coordinator retries a worker result."
+              },
+              {
+                "line": 2,
+                "text": "It writes the record and result ID in one Postgres transaction, meaning both writes succeed or neither does."
+              },
+              {
+                "line": 3,
+                "text": "If the response is lost after that transaction commits, the coordinator retries with the same result ID. The importer returns the existing record. This handles a lost response without requiring the coordinator to know whether the first request committed."
+              }
+            ]
+          }
+        }
+      },
+      "observed_exit_code": 0
+    },
+    {
+      "draft_id": "unclear-short-report",
+      "review": {
+        "schema": "plain-technical-english.review.v1",
+        "source_sha256": "e37e9e2e80612abb0ee70a2d289817220398b2f9df9f33a21b10a99cbb746467",
+        "reviewer": "independent-plain-english-review-agent",
+        "reader_summary": "The draft claims that some work is complete and some unnamed surface is ready, but a reader cannot identify the work, responsible component, target, or next condition.",
+        "criteria": {
+          "answer-first": {
+            "result": "fail",
+            "reason": "The opening asserts completion without stating what completed, so the result has to be guessed.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "Done. It is handled."
+              }
+            ]
+          },
+          "actors-actions": {
+            "result": "fail",
+            "reason": "It, lane, envelope, surface, and assimilation do not identify an actor and concrete target that a reader can act on.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "Done. It is handled."
+              },
+              {
+                "line": 2,
+                "text": "The lane resolved the envelope. The surface is ready for assimilation."
+              }
+            ]
+          },
+          "conditions-reasons": {
+            "result": "fail",
+            "reason": "The draft never identifies what ready permits next or what condition makes it ready, so the consequence of the claimed result is unknown.",
+            "evidence": [
+              {
+                "line": 2,
+                "text": "The lane resolved the envelope. The surface is ready for assimilation."
+              }
+            ]
+          },
+          "terms-referents": {
+            "result": "fail",
+            "reason": "It has no referent and the framework labels are not explained through observable behavior or named components.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "Done. It is handled."
+              },
+              {
+                "line": 2,
+                "text": "The lane resolved the envelope. The surface is ready for assimilation."
+              }
+            ]
+          },
+          "reasoning-uncertainty": {
+            "result": "fail",
+            "reason": "Done and ready assert completion while withholding the scope and evidence needed to distinguish completed work from an unverified readiness claim.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "Done. It is handled."
+              },
+              {
+                "line": 2,
+                "text": "The lane resolved the envelope. The surface is ready for assimilation."
+              }
+            ]
+          },
+          "economy-clarity": {
+            "result": "fail",
+            "reason": "Repeated completion and readiness labels add no concrete information; extreme compression removes the relationships necessary to understand the report.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "Done. It is handled."
+              },
+              {
+                "line": 2,
+                "text": "The lane resolved the envelope. The surface is ready for assimilation."
+              }
+            ]
+          },
+          "faithfulness": {
+            "result": "pass",
+            "reason": "The draft is retained verbatim for this review and no protected source span is changed; the proposed bounded correction does not invent the missing actor, result, or readiness condition.",
+            "evidence": [
+              {
+                "line": 1,
+                "text": "Done. It is handled."
+              },
+              {
+                "line": 2,
+                "text": "The lane resolved the envelope. The surface is ready for assimilation."
+              }
+            ]
+          }
+        }
+      },
+      "observed_exit_code": 1
+    }
+  ],
+  "implementation_review": {
+    "material_findings": [],
+    "scope": "Skill, record checker, fixture tests, generated adapters, and planning/review/grill integration. No repo edits or external effects were performed by the reviewer."
+  }
+}

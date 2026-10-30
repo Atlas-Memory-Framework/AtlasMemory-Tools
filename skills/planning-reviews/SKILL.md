@@ -85,6 +85,8 @@ If you cannot provide an evidence hook, emit a finding with `Remediation target:
 ## Human Readability Review (required)
 Run this review after `TechnicalClarity` and refresh it whenever Intent Model, Problem Definition, Technical Plan intro, Implementation Plan summary, or execution/authority sections materially change.
 
+Apply [plain-technical-english](../plain-technical-english/SKILL.md) to the plan and the report sent to the user. Use its seven meaning criteria within this existing review, keeping the required findings schema and freshness markers. The reviewer must explain what happens, who acts, when, why, and what remains uncertain from the text alone. Route material failures through the existing remediation owner. Do not replace reader judgment with word counts, jargon bans, or a completed checklist. If a separate machine-checked review record is retained, regenerate it after material edits; its CLI checks record validity and freshness, not semantic quality or plan approval.
+
 ### Review questions
 - Can a new engineer explain what is being built and why after reading only `Intent Model`, `Problem Definition`, and `Technical Plan Intro`?
 - Does the rendered HTML, or the markdown if HTML is not generated, read like a product/engineering plan instead of a validator report?

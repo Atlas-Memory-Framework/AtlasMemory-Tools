@@ -25,6 +25,20 @@ the interface and safe updates while retaining those files. Installation status
 continues to report retained overrides as modified, not as current canonical
 copies.
 
+The account installation persists across chats and reboots. Codex starts the
+registered stdio MCP server when it connects; no always-running service or login
+task is installed. The registration points directly to this source checkout,
+so keep it at the registered path. After moving the checkout or updating the
+canonical skills, rerun the same setup command, review its preview, then apply
+it with `--preserve-local` if local overrides should remain. Start a new client
+session after a source update to load the new server code. Another account,
+machine, or MCP client needs its own registration.
+
+The supervised daily-development lane uses its separate explicit selection in
+`.atlas-dev.local.json` and its pinned runtime. Follow
+[daily development](daily-development.md) for that lane; this MCP registration
+does not select it, upgrade its runtime, or grant its execution authority.
+
 Register an existing runtime explicitly:
 
 ```bash

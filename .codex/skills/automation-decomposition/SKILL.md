@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:a6b9740cdb5fefc33071d1bfc55d953fa98daef0eb902b87e0e394bf5d60172f
+# atlas-tools-generated: source=skills/automation-decomposition/SKILL.md manifest=atlas-tools.v1 checksum=sha256:342609c6c9e1e28de5652eaa710b316d55bd263bf86508000496ba49525e9e55
 # atlas-tools-generated-end
 name: automation-decomposition
 description: Produce the Automation Issue Manifest for /plan when a plan must project into bounded issues or unattended issue-to-PR execution. Use after implementation planning and before planning reviews when AutomationTarget is not none.
@@ -9,6 +9,12 @@ description: Produce the Automation Issue Manifest for /plan when a plan must pr
 
 ## Purpose
 Convert the accepted implementation plan into a machine-readable `## Automation Issue Manifest`. This section is the contract for downstream issue projection and local automation runtime dispatch. Run as a sub-agent and return a draft section; do not write the plan artifact directly.
+
+## Authoring and delegated task instructions
+
+Write the manifest and each executable task in plain, direct technical English from the first draft. State the intended result, then explain who changes what, under which conditions, and why. Use consistent terms and explain unfamiliar technical terms. Make dependencies, acceptance criteria, validation evidence, and the next action specific enough for an agent with no prior conversation to act without guessing.
+
+Preserve technical depth, decision rationale, scope boundaries, failure cases, qualifications, and uncertainty. Keep exact manifest field names, identifiers, commands, paths, hashes, and source references intact. Include this writing rule when delegating leaf descriptions or sidecar drafts. Apply it during authoring and revision; the existing planning readability review checks the resulting instructions afterward.
 
 ## Inputs
 - `## Implementation Plan`
@@ -44,7 +50,7 @@ Each leaf issue must include:
 - dependencies that resolve to other leaf issue ids, or external/manual blockers with owner and status
 - required gate ids that exist in the implementation plan and define where/entrypoint/green means
 - acceptance criteria that are executable by command or evidence artifact
-- one-PR contract and source plan sections
+- one-PR contract and source plan sections, preserving the link from the intended outcome and needed capability to the bounded change or discovery
 - scheduler metadata for local automation: parallel group, blocks, critical path rank, merge group, combine policy, conflict class, and validation tier; use `none` only when the field is not applicable
 - sidecar metadata when the leaf needs depth beyond the inline manifest. Use `Spec: sidecar`, `Spec path`, `Spec hash`, `Spec source id`, and `Depth contract`; use `Spec: inline` only when the manifest leaf itself is self-contained.
 
@@ -57,9 +63,10 @@ Allowed dispatch modes:
 ## Risk to dispatch policy
 Convert risk into execution boundaries. Examples:
 - live commerce/payment/checkout, secrets, auth, webhooks, migrations, infra/deploy, public API contracts, data deletion, compliance, or customer-impacting changes default to `manual-review` or `blocked`.
-- uncertain vendor/API behavior becomes a spike leaf issue before production wiring.
+- uncertain vendor/API behavior or a decision needed to implement the intended outcome becomes a bounded spike before dependent production wiring. State the question, evidence to gather, and resulting decision; a completed spike does not itself prove delivered behavior.
 - no frontend or mutation wiring should depend on a risky backend integration until the spike/contract issue closes.
-- merge/integration work must be represented as a leaf issue when it requires code changes or validation beyond tracking.
+- merge/integration work must be represented as a leaf issue when it requires code changes or validation beyond tracking. Identify who owns evidence that the combined work achieves the parent outcome across relevant boundaries, or record the owner and blocker for evidence still missing.
+- Fit the model to the reasoning, uncertainty, coupling, and risk of the work, not file count alone. Use Luna by default for bounded work; use Sol or Terra for sizing, review, or a coherent implementation task when its difficulty warrants it. This choice does not change existing dispatch or approval policy.
 
 ## Validation checklist
 Return `Fail` unless:
@@ -67,6 +74,7 @@ Return `Fail` unless:
 - every dependency resolves to a leaf id, structured external blocker, or structured manual blocker
 - no `G-*`, `MP*`, `DR-*`, `A*`, or `R*` token is used as a dependency unless wrapped as a structured blocker
 - every gate is defined and attached to at least one leaf issue
+- leaf completion and isolated checks are not treated as proof of the parent outcome without relevant integration evidence or an explicit owner and blocker for missing evidence
 - every `agent-ready` issue has bounded write scope, validation command/evidence, dispatch mode, and one-PR contract
 - every `agent-ready` issue has explicit scheduler metadata, with `Blocks: none` when it does not unblock another leaf or issue
 - no `agent-ready` issue exceeds a reasonable budget: more than one repo, broad cross-cutting file ownership, unclear risk, or no focused acceptance criteria

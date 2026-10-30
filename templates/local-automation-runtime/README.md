@@ -1,5 +1,7 @@
 # Local Automation Runtime Template
 
+Use the [current local harness operating instruction](../../docs/local-harness-operating-instruction.md) for queue-first work, model-route qualification and visible exceptions. It does not enable standalone model execution.
+
 This template contains separate GitHub and Azure providers. The Azure provider
 supports read-only inspection, one bounded local task, separately authorized
 draft PR publication and revision-safe Board reconciliation. Start with the
@@ -95,7 +97,7 @@ Run the full unattended loop:
 
 The unattended loop first reconciles stale lifecycle labels and Project epic status, promotes dependency-gated one-point stories whose upstream issues/PRs and manual gates are complete, then dispatches issue workers, reviews local-agent PRs, runs local/deployed validation where configured, repairs PRs labeled `agent:needs-repair`, and finalizes only PRs with `agent:review-approved`.
 
-Run the Atlas-owned local work-item bootstrap lane without touching GitHub:
+Run the local work-item bootstrap lane without touching GitHub:
 
 ```bash
 ./atlas-agent-orchestrator --once --atlas-work-items ./work-items.json
@@ -117,6 +119,48 @@ result evidence. During command execution, workflow-aware commands receive `ATLA
 outputs, missing outputs, phase index, acceptance criteria, and any completed `consumed_role_results` for roles listed in
 `consumes`. Phase indexes come from the template dependency graph: roles in the same phase are dependency-independent,
 and later phases wait for earlier consumed outputs.
+Each role packet includes `work_item_context`: the work item's title, substantive task/goal text, acceptance criteria,
+validation commands, scope, checkout/base identity, and plan/spec references when supplied. This explicit projection
+excludes lifecycle, claim, result, evidence, and unrelated metadata. It is carried through role-result refresh and resume,
+and the Codex wrapper includes it in the prompt. Reference paths are context for the worker; the runtime does not load
+their contents or verify their hashes here. Supply an explicit local checkout path and substantive instructions before
+real execution. Goal-reviewed resumes bind the complete context and template contract; changed inputs block reuse and
+require explicit replanning or rework. Declared plan/spec identities are included; reference contents are not read here.
+
+The `work-item-change-lifecycle` template runs implementation, then tests, then independent code and goal-alignment
+reviews, then evidence rollup. Both reviewers consume implementation and test results. `work-item` and `review` workflows
+require exactly one independent `goal_gate`, substantive source goals, and acceptance criteria. That role must return
+`goal_review` separately from its outputs:
+
+```json
+{"verdict": "pass", "reason": "Observed behavior meets the supplied criteria.", "evidence": ["path/to/result.json"]}
+```
+
+The exact verdicts are `pass`, `fail`, and `inconclusive`; reason and evidence must be nonempty. Only a complete role with
+valid `pass` evidence and no contract issues satisfies the gate. Missing/malformed/negative reviews, failed commands,
+and incomplete attempted roles persist `blocked` state. Positive rollup prose cannot override the gate. Dependent work
+requires a current structured pass, including the current goal and workflow request hash. The reviewer still owns the
+semantic judgment: a synthetic fake pass verifies wiring only.
+
+Budget pauses return to `ready` only after newly completed roles; prior progress alone cannot cause repeated dispatch.
+To prepare one bounded rework after diagnosis, use:
+
+```bash
+./atlas-agent-work-item-rework ./work-items.json --id LOCAL-WI-001 \
+  --reason "Address the evidenced goal-review finding" --evidence ./review-finding.json
+```
+
+Only blocked items qualify. The fixed budget permits one explicit rework, archives prior run/result evidence, carries
+the rationale and prior goal verdict into fresh role packets, and starts a fresh run. A second rework request is rejected;
+the scheduler never starts a model repair loop automatically. Generic evidence-only workflow kinds remain available, but
+cannot substitute for the goal-reviewed `work-item`/`review` contracts.
+
+This is external bootstrap tooling, separate from Atlas-native runtime capability. Queue state, scheduling, packets, and
+results stay local in this lane. A source checkout may use Azure Repos while local task identity remains local; this lane
+does not fetch or publish source changes. Existing Azure Board records and Azure-origin operation identities are rejected
+by the generic provider because they require the Azure worker's authority checks. The Azure adapter still reads Boards;
+API pacing/caching there does not remove that dependency. Do not relabel remote work items to bypass its guards.
+
 `config/agent-registry.example.json` seeds the registry-style references used by the checked-in workflow templates. It is
 not an executor by itself; it lets operators validate that template roles point at named specialist agent profiles before
 they bind those roles to concrete local commands or Codex profiles.
@@ -244,11 +288,237 @@ outputs. The checked-in example config is a safe failing stub; replace it with p
 agent commands before treating role output as evidence. Completed workflow runs are also copied into the work item under
 `workflow_runs`, including a compact run summary and rollup markdown snapshot.
 
+### Supervised in-app role handoffs
+
+The supervised handoff adapter is a local Python library, not a dispatcher. Use
+one persistent `claimed_by` identity, an explicitly configured checkout, the
+existing provider/store, and a worker with `command=None`. For example, set the
+paths and work-item ID for your installation, then run this in the runtime
+environment:
+
+```python
+from pathlib import Path
+import hashlib
+import json
+import subprocess
+import sys
+
+runtime = Path("/path/to/local-automation-runtime").resolve()
+sys.path.insert(0, str(runtime))
+import atlas_supervised_handoff as handoff
+import atlas_work_items
+
+store_path = Path("/path/to/work-items.json")
+jobs_dir = Path("/path/to/local-jobs")
+checkout = Path("/path/to/execution-checkout").resolve()
+source_id = "WI-123"
+supervisor_id = "operator:atlas-local-handoff"  # Keep this identity across restarts.
+
+store = atlas_work_items.AtlasWorkItemStore(store_path)
+provider = atlas_work_items.AtlasWorkItemOperationProvider(store, claimed_by=supervisor_id)
+worker = atlas_work_items.LocalCommandOperationWorker(
+    command=None,
+    jobs_dir=jobs_dir,
+    templates_dir=runtime / "team-templates",
+    # Set these only when the selected roles use your local registry/agent files.
+    agent_registry_path=runtime / "config" / "agent-registry.json",
+    agent_root=runtime,
+)
+
+# The queue's configured execution_repo must explicitly identify this checkout.
+# The wrapper independently verifies repository root and full HEAD before use.
+head = subprocess.run(
+    ["git", "--no-optional-locks", "-C", str(checkout), "rev-parse", "--verify", "HEAD"],
+    check=True, capture_output=True, text=True, timeout=5,
+).stdout.strip()
+payload = store.load()
+item = next(item for item in payload["work_items"] if atlas_work_items.item_id(item) == source_id)
+state = atlas_work_items.item_state(item)
+if state == "ready":
+    operation = next(op for op in provider.operation_states() if op.source_id == source_id)
+    if not operation.ready:
+        raise RuntimeError(f"work item is not claimable: {operation.blockers}")
+    if provider.claim(operation) is None:  # One explicit claim, before reservation.
+        raise RuntimeError("claim lost a concurrent readiness race; inspect the queue")
+elif state == "running":
+    claim = item.get("claim") if isinstance(item.get("claim"), dict) else {}
+    if claim.get("claimed_by") != supervisor_id:
+        raise RuntimeError("active claim belongs to another supervisor; stop")
+else:
+    raise RuntimeError(f"expected ready or this supervisor's running item, got {state!r}")
+
+prepared = handoff.prepare_handoff(
+    provider, worker, source_id=source_id, expected_revision=head,
+)
+binding = prepared["binding"]
+packet = prepared["packet"]
+print(json.dumps({"binding": binding, "packet": packet}, indent=2))
+```
+
+Only after `prepare_handoff` returns should the supervisor dispatch that exact
+packet with the existing in-app tool, using the packet's fixed model and
+reasoning assignment. Do not call `worker.run()` or launch an inference command.
+Retain the actual task/invocation ID returned by the app. If dispatch outcome is
+uncertain, recover that same invocation from app history; do not dispatch again
+or guess at a result. A repeated prepare for a still-valid pending handoff
+returns the same reservation. A stale or refused reservation requires operator
+inspection; it is not cleared or silently replaced.
+
+Build the role result from the authentic single-role response. Keep the original
+JSON bytes as received; the required root object is `{"role_results": [...]}`
+with exactly one record for the reserved `role_id`. The record's `status` must
+be terminal (`complete`, `failed`, `blocked`, or `incomplete`), `outputs` must
+map output names to strings, and `evidence`, `contract_issues`, and `notes` must
+use the fields and types shown below. For a goal-gate role, preserve its actual
+structured review with `verdict`, nonblank `reason`, and nonempty `evidence`.
+The example variables below must come from the real in-app response and receipt;
+do not use placeholder values as evidence.
+
+```python
+# Supply these from the actual app response. Preserve its original bytes;
+# do not parse and re-serialize the child's JSON before hashing/importing it.
+actual_invocation_id = actual_task_id_returned_by_app
+original_result_bytes = actual_role_result_bytes
+decoded = json.loads(original_result_bytes)
+records = decoded.get("role_results") if isinstance(decoded, dict) else None
+if not isinstance(records, list) or len(records) != 1:
+    raise RuntimeError("expected exactly one authentic role result; stop")
+role_record = records[0]
+if role_record.get("role_id") != binding["role_id"]:
+    raise RuntimeError("result role does not match reservation; stop")
+if not isinstance(role_record.get("outputs", {}), dict) or any(
+    not isinstance(name, str) or not isinstance(value, str)
+    for name, value in role_record.get("outputs", {}).items()
+):
+    raise RuntimeError("role outputs must map names to strings; stop")
+# For packet["goal_gate"] == True, the original result must also contain its
+# authentic structured goal_review; do not invent one to make acceptance pass.
+assignment = binding["role_assignment"]
+envelope = {
+    "binding": binding,
+    "host_receipt": {
+        "invocation_id": actual_invocation_id,
+        "transport": "supervised_in_app",
+        "checkout": binding["checkout"],
+        "revision": binding["revision"],
+        "model": assignment["model"],
+        "reasoning": assignment["reasoning"],
+    },
+    "result_sha256": hashlib.sha256(original_result_bytes).hexdigest(),
+}
+receipt = handoff.ingest_handoff(
+    provider, worker, envelope=envelope, result_bytes=original_result_bytes,
+)
+print(json.dumps(receipt, indent=2))
+```
+
+If the process stops after reservation or dispatch, recover the same pending
+packet and task; stop for human reconciliation when the invocation or its result
+cannot be established. Replaying the exact accepted binding, host receipt, and
+result bytes returns the prior acknowledgement without another queue event; a
+different owner or conflicting replay is refused. `receipt["status"] ==
+"accepted"` means the attempted role result was imported, not that the goal
+passed. A failed or malformed goal review can be recorded and leave the item
+blocked. Maintained `done` still requires every required role output and a
+structured goal-review pass. There is one unresolved handoff across the store:
+claim and prepare one role, import it, then explicitly claim the next role if
+the item returns to ready. This opt-in adapter does not provide unattended
+execution, automatic recovery/redispatch, or standalone startup qualification.
+
 For a Codex-backed starting point, copy `config/role-commands.codex.example.json` instead. That map routes default
 template roles to `./atlas-agent-role-codex`, which prepares a role-specific prompt and result-file contract but fails
 closed unless the command is changed to include `--execute`. This makes the Codex invocation boundary explicit before
 role output becomes lifecycle evidence. Actual execution also requires `--allow-execute` on the wrapper command or
 `ATLAS_ROLE_CODEX_ALLOW_EXECUTE=true`, and uses `AGENT_CODEX_WORKFLOW_ROLE_*` profile/model/extra-args/timeout settings.
+
+For explicit per-role model sizing, map each role to the wrapper with a distinct `--profile-kind`, such as
+`["./atlas-agent-role-codex", "--profile-kind", "implementation"]`. Existing configuration keys then select
+`AGENT_CODEX_IMPLEMENTATION_MODEL`, `AGENT_CODEX_IMPLEMENTATION_PROFILE`, and `AGENT_CODEX_IMPLEMENTATION_EXTRA_ARGS`.
+Use separate kinds for decomposition and goal review. Verify the model identifier, effective argv, account and billing
+route before enabling execution; an example model name or an available CLI does not establish that route. The local
+lane does not classify task difficulty or choose a cheaper model automatically. Size the task packet to the selected
+model and retain independent evaluation of the original goals. Neither a routing change nor a completed workflow
+qualifies an unattended lane without a representative evaluated canary.
+
+For enforced local sizing and fixed bindings, add this opt-in object to a work item's `metadata`:
+
+```json
+{
+  "local_execution_v1": {
+    "policy_id": "local-luna-unit-v1",
+    "role_purposes": {
+      "implementation": "implementation",
+      "test-runner": "validation",
+      "code-review": "review",
+      "semantic-alignment": "goal-review",
+      "evidence-rollup": "review"
+    },
+    "changed_interfaces": [],
+    "unresolved_questions": [],
+    "complexity_flags": []
+  }
+}
+```
+
+The qualifier derives counts from existing `write_scope` and `acceptance_criteria`; supplied point estimates cannot
+override them. Coding/validation packets require 1–4 exact repository-relative file paths, 1–3 substantive acceptance
+criteria, and at most one named changed interface. Directories, globs, and unknown scope block. The pure path qualifier
+conservatively requires a file extension or `Makefile`, `LICENSE`, or `Dockerfile`; the provider also rejects existing
+directories. More scope requires splitting. Unresolved questions or `security_or_authority`, `migration`,
+`new_dependency_or_service`, or `cross_component_protocol` flags require decomposition before coding. Decomposition-only
+work may inspect oversized input and produce smaller leaves; it cannot relabel an implementation role to evade limits.
+These are conservative pilot bounds, not measured cost-optimal thresholds.
+
+Every selected template role needs an explicit purpose; known implementation, validation, and review roles retain their
+purposes. `implementation` and `validation` bind to `gpt-6-luna` with `medium` reasoning; `decomposition`, `review`, and
+`goal-review` bind to `gpt-6.1-sol` with `high` reasoning. Unknown policies, purposes, model/provider overrides, and incomplete
+role maps fail qualification. The local provider requires an independent goal gate and includes resolved routing in its
+resume fingerprint. Scheduling and state remain in the local JSON store.
+
+For an independently reviewed sizing decision, opt in with `policy_id: "local-reviewed-unit-v2"` in the same
+`local_execution_v1` object. Add the required fields `implementation_model`, `review_model`, and `sizing_review`.
+Choose `gpt-6-luna` for ordinary implementation (and validation); it runs at medium reasoning. For a coherent,
+bounded task that needs stronger reasoning, the operator may select `gpt-6.1-sol` or `gpt-6.1-terra` at high reasoning
+for implementation and validation. Choose either `gpt-6.1-sol` or `gpt-6.1-terra` at high reasoning for decomposition
+and review, including goal review. The model choices are explicit; there is no automatic difficulty classifier.
+
+`sizing_review` must contain exactly `reviewer`, `rationale`, and `subject_sha256`: a nonblank reviewer identity,
+a specific rationale for this task and its selected models, and the digest of the complete work-item context. Compute
+the digest with `atlas_local_sizing.sizing_subject_sha256(work_item_context)` after setting the models and all other
+context fields; the helper omits only `local_execution_v1.sizing_review`. Any subsequent context change requires a
+fresh sizing review and digest. These fields provide structural evidence and freshness binding only: strings and a hash
+do not authenticate the reviewer or grant authority. The operator must retain actual independent host review and the
+independent goal gate. The same file, criterion, and interface budgets apply, and a stronger model does not resolve
+open questions or complexity flags; split or decompose those packets first. Existing execution, authority, billing,
+and canonical-runner gates remain in force.
+
+Contracted work must pass through the canonical role runner and Codex wrapper. Raw worker commands and custom role
+executables cannot bypass the binding. The outer runner accepts only the generated command-config and bounded role-count
+arguments; contracted role maps contain only the canonical wrapper executable, with no packet-substitution arguments.
+The wrapper records `<result>.invocation.json` with the exact intended model,
+reasoning, and argv before execution. Ambient profile/model/extra-argument or provider overrides are rejected. Contracted
+`--execute` remains blocked by default with `standalone provider/billing/startup not qualified`. The contracted route can
+launch only when the supervisor-owned runtime `config.env` contains
+`ATLAS_ROLE_CODEX_STANDALONE_ROUTE_QUALIFICATION="chatgpt_subscription"` and the existing execute gate is enabled. The
+qualification value must be set only after the execution owner independently verifies account identity, subscription
+billing, assigned-model availability, and the applicable spending allowance; task JSON and `--allow-execute` alone cannot
+qualify the route. The canonical runner can request execution mode only when its operator-owned command config contains
+`"supervisor_codex_execution_mode": "contracted-chatgpt-subscription-v1"`; the field is absent by default, is never read
+from task JSON, and does not replace route qualification or the existing execute gate. Contracted launches use bounded
+wall time and combined output. The Codex child inherits the canonical
+role runner's process group so the outer work-item supervisor retains group cleanup custody; the wrapper reports only
+direct-child and pipe state, and rebuilds its diagnostic report from parent-held metadata after the child exits. It reads
+the child result only as a no-follow regular file, limited to 64 KiB, and atomically replaces the result, invocation
+report, and log paths using a directory descriptor held across execution. The wrapper sends its validated result to the
+canonical role runner through a bounded private file-descriptor handoff; the nested Codex process does not inherit that
+descriptor. The runner consumes that handoff rather than reopening a child-writable result pathname, and anchors its
+contracted result and output publication to its own held results-directory descriptor. It checks that the configured
+directory path still identifies that directory immediately
+after publication; a changed path fails closed. This prevents a same-group descendant from redirecting the consumer's
+result read or parent writes through a swapped directory path.
+Group uncertainty keeps the work item blocked. This does not prove cleanup of descendants that deliberately detach into
+another session. This source change does not verify billing or enable an active role map. Preparation
+verifies binding only, and cannot count as accepted implementation. Existing uncontracted packets retain their prior behavior.
 
 Try the local bootstrap path without GitHub or Codex execution:
 

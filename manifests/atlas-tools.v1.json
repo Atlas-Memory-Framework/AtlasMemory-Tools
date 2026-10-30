@@ -120,6 +120,10 @@
       "path": "skills/planning-reviews"
     },
     {
+      "name": "plain-technical-english",
+      "path": "skills/plain-technical-english"
+    },
+    {
       "name": "problem-definition",
       "path": "skills/problem-definition"
     },

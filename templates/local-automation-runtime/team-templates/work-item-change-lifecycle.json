@@ -17,6 +17,7 @@
       "label": "Test Runner",
       "agent_ref": "agents/test-engineer.md",
       "skills": ["implementation-planning"],
+      "consumes": ["implementation"],
       "must_produce": ["commands_run", "test_results", "coverage_or_gap_notes"],
       "acceptance_criteria": ["Runs focused verification or records a concrete validation gap."]
     },
@@ -25,6 +26,7 @@
       "label": "Code Review",
       "agent_ref": "agents/code-reviewer.md",
       "skills": ["review"],
+      "consumes": ["implementation", "test-runner"],
       "must_produce": ["findings", "risk_level", "required_fixes"],
       "acceptance_criteria": ["Prioritizes correctness, regressions, missing tests, and maintainability risks."]
     },
@@ -33,6 +35,8 @@
       "label": "Semantic Alignment",
       "agent_ref": "agent-registry://semantic-alignment",
       "skills": ["plan-execution-readiness"],
+      "consumes": ["implementation", "test-runner"],
+      "goal_gate": true,
       "must_produce": ["plan_alignment", "intent_model_alignment", "behavioral_risks", "vision_drift_notes"],
       "acceptance_criteria": ["Checks that the change still matches the broader plan, Intent Model, anti-targets, and product intent."]
     },

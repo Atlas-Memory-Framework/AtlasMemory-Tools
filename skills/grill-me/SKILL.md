@@ -11,6 +11,7 @@ This is an interactive decision-elicitation procedure, not plan mode, implementa
 
 ## Boundaries
 
+- Use [plain-technical-english](../plain-technical-english/SKILL.md) before sending questions, checkpoints, or the final decision record. State the decision and its consequence plainly, explain necessary terms, and preserve qualifications. Perform the reader check inline; this does not authorize file edits, extra questions, or implementation.
 - Inspect available project context, code, documentation, evidence, and prior decisions before asking the user for facts the environment can answer.
 - Use read-only investigation. Do not edit files, write a plan, implement, install dependencies, or make external state changes.
 - Ask only questions whose answers could materially change the result. Question count is operator burden, not evidence of rigor.

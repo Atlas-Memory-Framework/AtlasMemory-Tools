@@ -27,6 +27,7 @@ import harnesslib  # noqa: E402
 
 SCHEMA_VERSION = "atlas-tools.harness.v1"
 MAX_INPUT_BYTES = 262_144
+MAX_CODE_BYTES = 1_048_576
 MAX_ARTIFACTS = 32
 MAX_DIRECTORY_ENTRIES = 512
 STALE_AFTER_SECONDS = 900
@@ -110,7 +111,9 @@ def _owned_path(path: Path, *, directory: bool = False, boundary: Path | None = 
         raise HarnessServiceError("unavailable_path", "The registered path is unavailable or unsafe.") from exc
 
 
-def _read_bytes(path: Path, *, boundary: Path | None = None) -> bytes:
+def _read_bytes(path: Path, *, boundary: Path | None = None, max_bytes: int = MAX_INPUT_BYTES) -> bytes:
+    if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_CODE_BYTES:
+        raise HarnessServiceError("invalid_read_limit", "The internal bounded read limit is invalid.")
     resolved = _owned_path(path, boundary=boundary)
     try:
         # O_NOFOLLOW prevents a last-component symlink race. Directory paths were
@@ -120,10 +123,10 @@ def _read_bytes(path: Path, *, boundary: Path | None = None) -> bytes:
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
                 raise HarnessServiceError("unsafe_path", "Expected an owned regular file.")
-            if info.st_size > MAX_INPUT_BYTES:
+            if info.st_size > max_bytes:
                 raise HarnessServiceError("input_too_large", "The input exceeds the bounded read limit.")
-            data = stream.read(MAX_INPUT_BYTES + 1)
-            if len(data) > MAX_INPUT_BYTES:
+            data = stream.read(max_bytes + 1)
+            if len(data) > max_bytes:
                 raise HarnessServiceError("input_too_large", "The input exceeds the bounded read limit.")
             return data
     except HarnessServiceError:

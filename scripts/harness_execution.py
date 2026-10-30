@@ -16,6 +16,7 @@ sys.dont_write_bytecode = True
 from harness_service import (  # noqa: E402
     HarnessService,
     HarnessServiceError,
+    MAX_CODE_BYTES,
     _blocker,
     _owned_path,
     _read_bytes,
@@ -150,8 +151,8 @@ class HarnessExecution:
         for name in names:
             path = root / name
             try:
-                content = _read_bytes(path, boundary=root)
-                expected = _read_bytes(canonical / name, boundary=canonical)
+                content = _read_bytes(path, boundary=root, max_bytes=MAX_CODE_BYTES)
+                expected = _read_bytes(canonical / name, boundary=canonical, max_bytes=MAX_CODE_BYTES)
                 bindings[name] = _digest(content)
                 info = path.stat()
                 if info.st_nlink != 1 or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
