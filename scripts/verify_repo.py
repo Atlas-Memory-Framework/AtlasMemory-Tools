@@ -95,6 +95,11 @@ REQUIRED_COPY_PATHS = (
     "docs/source-of-truth.md",
     "manifests/atlas-tools.v1.json",
     "scripts/install_harness.py",
+    "scripts/harness_service.py",
+    "scripts/harness_mcp.py",
+    "scripts/harness_execution.py",
+    "scripts/harness_runs.py",
+    "scripts/setup_harness_interface.py",
     "scripts/enforce_local_ssot.py",
     "scripts/verify_harness.py",
     "scripts/verify_repo.py",
@@ -126,6 +131,11 @@ JSON_FILES = (
 
 PY_COMPILE_FILES = (
     "scripts/harnesslib.py",
+    "scripts/harness_service.py",
+    "scripts/harness_mcp.py",
+    "scripts/harness_execution.py",
+    "scripts/harness_runs.py",
+    "scripts/setup_harness_interface.py",
     "scripts/enforce_local_ssot.py",
     "scripts/install_harness.py",
     "scripts/runtime_control.py",

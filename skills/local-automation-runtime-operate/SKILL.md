@@ -7,6 +7,11 @@ description: "Operate the local automation runtime: queue issues, run bounded or
 
 ## Purpose
 
+When the `atlasmemory_tools` MCP server is available, start with
+`harness_discover` and `harness_inspect` to select the registered runtime and
+establish its operating picture. The commands below remain the provider-level
+operations; do not reconstruct runtime location from memory.
+
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
 This skill owns operation of the `atlas-agent-shift` terminal program; there is no separate shift skill. The program is the durable supervisor wrapper, while this skill defines when and how an operator may use it.
 Use `repos.txt` to add target repos; use another runtime only for isolation, secrets separation, or intentional concurrent lanes.

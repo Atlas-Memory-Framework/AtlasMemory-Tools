@@ -152,6 +152,51 @@ class AzureRuntimeConfigTests(unittest.TestCase):
             with self.assertRaises(config.RuntimeConfigError):
                 config.load_runtime_config(self.path, require_runtime=False)
 
+    def test_input_accepts_passwd_home_alias_and_its_canonical_path_without_content_reads(self) -> None:
+        # A fixture outside /tmp is essential: /tmp is independently allowed and
+        # would hide the canonical-home lexical rejection this test reproduces.
+        if Path("/tmp") in ROOT.resolve().parents:
+            self.skipTest("Canonical-home regression fixture requires a checkout outside /tmp.")
+        with tempfile.TemporaryDirectory(prefix=".input-home-alias-", dir=ROOT) as temp:
+            fixture = Path(temp)
+            canonical_home = fixture / "canonical-home"
+            canonical_home.mkdir()
+            alias = fixture / "passwd-home"
+            alias.symlink_to(canonical_home, target_is_directory=True)
+            source = canonical_home / "provider.json"
+            source.write_text("{}", encoding="utf-8")
+            with mock.patch.object(config.pwd, "getpwuid", return_value=types.SimpleNamespace(pw_dir=str(alias))), \
+                    mock.patch.object(Path, "read_text", side_effect=AssertionError("validation must not read contents")), \
+                    mock.patch.dict(os.environ, {"HOME": "/another-account"}):
+                self.assertEqual(config.validate_input_path(alias / source.name), source)
+                self.assertEqual(config.validate_input_path(source), source)
+
+    def test_home_alias_does_not_allow_traversal_or_another_account_symlink(self) -> None:
+        if Path("/tmp") in ROOT.resolve().parents:
+            self.skipTest("Identity escape fixture requires a checkout outside /tmp.")
+        with tempfile.TemporaryDirectory(prefix=".input-home-escape-", dir=ROOT) as temp:
+            fixture = Path(temp)
+            canonical_home = fixture / "canonical-home"
+            canonical_home.mkdir()
+            other_home = fixture / "other-account"
+            other_home.mkdir()
+            other_file = other_home / "provider.json"
+            other_file.write_text("{}", encoding="utf-8")
+            alias = fixture / "passwd-home"
+            alias.symlink_to(canonical_home, target_is_directory=True)
+            (canonical_home / "escape").symlink_to(other_home, target_is_directory=True)
+            with mock.patch.object(config.pwd, "getpwuid", return_value=types.SimpleNamespace(pw_dir=str(alias))), \
+                    mock.patch.object(Path, "read_text", side_effect=AssertionError("must not read foreign contents")):
+                for source in [other_file, alias / ".." / "other-account" / "provider.json", canonical_home / "escape" / "provider.json"]:
+                    with self.subTest(source=source), self.assertRaises(config.RuntimeConfigError):
+                        config.validate_input_path(source)
+
+    def test_owned_temporary_input_remains_allowed(self) -> None:
+        self.path.write_text("{}", encoding="utf-8")
+        with mock.patch.object(config.pwd, "getpwuid", return_value=types.SimpleNamespace(pw_dir="/home/an-isolated-identity")), \
+                mock.patch.object(Path, "read_text", side_effect=AssertionError("validation must not read contents")):
+            self.assertEqual(config.validate_input_path(self.path), self.path.resolve())
+
     def test_assessment_capability_is_explicit_and_does_not_change_default_roles(self):
         value = example()
         value["capabilities"].append("assess")

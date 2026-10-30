@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -40,6 +41,65 @@ HARD_NON_EXECUTION_LABELS = {
     "agent:decomposed",
 }
 NON_EXECUTION_TITLE_PREFIXES = ("[Epic]", "[Tracker]")
+EXECUTION_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z")
+
+
+def execution_targets(args: argparse.Namespace) -> set[str] | None:
+    """An optional explicit execution boundary; absence preserves legacy routing."""
+    raw = getattr(args, "execution_targets_file", None)
+    if raw is None:
+        return None
+    path = Path(raw)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("Execution targets require an absolute owned inventory file.")
+    try:
+        for component in (path, *path.parents):
+            if component.is_symlink():
+                raise ValueError("Execution target inventory may not contain symlinks.")
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("Execution target inventory must be an owned regular file.")
+        if info.st_size > 262_144:
+            raise ValueError("Execution target inventory exceeds its bounded limit.")
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.getuid() or opened.st_nlink != 1 or opened.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                raise ValueError("Execution target inventory must remain an owned regular file.")
+            content = stream.read(262_145)
+        if len(content) > 262_144:
+            raise ValueError("Execution target inventory exceeds its bounded limit.")
+        targets = set()
+        for line in content.decode("utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if not EXECUTION_REPO.fullmatch(line) or line.casefold() == "instablinds/website":
+                raise ValueError("Execution targets require GitHub owner/repository lines without inline comments.")
+            if line.casefold() in targets:
+                raise ValueError("Execution target inventory contains duplicate targets.")
+            targets.add(line.casefold())
+            if len(targets) > 32:
+                raise ValueError("Execution target inventory exceeds 32 targets.")
+        if not targets:
+            raise ValueError("Execution target inventory must name at least one GitHub repository.")
+        return targets
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Execution target inventory is unavailable or malformed.") from exc
+
+
+def execution_target_reasons(repo: str, issue: dict, args: argparse.Namespace) -> list[str]:
+    targets = execution_targets(args)
+    if targets is None:
+        return []
+    execution_repo = execution_repo_for_issue(repo, issue)
+    if not EXECUTION_REPO.fullmatch(repo) or repo.casefold() not in targets:
+        return ["source repository is outside the explicit execution target allowlist"]
+    if not EXECUTION_REPO.fullmatch(execution_repo) or execution_repo.casefold() not in targets:
+        return ["execution repository is outside the explicit execution target allowlist"]
+    return []
+
+
 def target_repos(path: str | None) -> list[str]:
     repo_file = common.RUNTIME_DIR / (path or "repos.txt")
     repos: list[str] = []
@@ -195,6 +255,9 @@ def recommended_policy_allow_labels(issue: dict) -> set[str]:
 
 
 def dispatch_blockers(repo: str, issue: dict, args: argparse.Namespace, *, check_open_pr: bool) -> list[str]:
+    target_reasons = execution_target_reasons(repo, issue, args)
+    if target_reasons:
+        return target_reasons
     labels = common.label_names(issue)
     author = (issue.get("author") or {}).get("login")
     reasons = hard_non_execution_reasons(
@@ -257,6 +320,10 @@ def print_dispatch_preview(preview: dict) -> None:
 
 
 def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
+    target_reasons = execution_target_reasons(repo, issue, args)
+    if target_reasons:
+        print(f"Not queueing {repo}#{issue['number']}: {', '.join(target_reasons)}.", flush=True)
+        return False
     labels = common.label_names(issue)
     blocked = {
         "agent:ready",
@@ -284,6 +351,8 @@ def maybe_queue_issue(repo: str, issue: dict, args: argparse.Namespace) -> bool:
         print(f"DRY-RUN queue {repo}#{issue['number']} from {args.auto_queue_label}: {issue['title']}", flush=True)
         return False
     print(f"Queueing {repo}#{issue['number']} from {args.auto_queue_label}: {issue['title']}", flush=True)
+    if getattr(args, "execution_targets_file", None):
+        ensure_agent_labels(repo)
     common.run(["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--add-label", "agent:ready"], retries=3)
     common.update_issue_automation_state(repo, int(issue["number"]), "Queued")
     return True
@@ -798,6 +867,13 @@ def process_once(args: argparse.Namespace) -> int:
     if getattr(args, "atlas_work_items", None):
         return process_atlas_work_items_once(args)
 
+    # Validate before triage or issue-specific provider operations. A restricted
+    # lane never lets the old bulk triage path mutate uninspected issue routes.
+    restricted_targets = execution_targets(args)
+    if restricted_targets is not None:
+        for repo in target_repos(args.repos_file):
+            if not EXECUTION_REPO.fullmatch(repo) or repo.casefold() not in restricted_targets:
+                raise ValueError("Source repository is outside the explicit execution target allowlist.")
     processed = 0
     queued = 0
     max_per_repo = getattr(args, "max_per_repo", 1)
@@ -812,13 +888,13 @@ def process_once(args: argparse.Namespace) -> int:
         triage_cmd = [str(common.RUNTIME_DIR / "atlas-agent-triage"), "--limit", str(args.limit)]
         if args.repos_file:
             triage_cmd.extend(["--repos-file", args.repos_file])
-        if args.triage_apply_stale and not getattr(args, "dry_run", False):
+        if args.triage_apply_stale and not getattr(args, "dry_run", False) and restricted_targets is None:
             triage_cmd.append("--apply-stale")
-        if args.triage_approve_review_before_dispatch and not getattr(args, "dry_run", False):
+        if args.triage_approve_review_before_dispatch and not getattr(args, "dry_run", False) and restricted_targets is None:
             triage_cmd.append("--approve-review-before-dispatch")
-        if args.triage_clean_pause_labels and not getattr(args, "dry_run", False):
+        if args.triage_clean_pause_labels and not getattr(args, "dry_run", False) and restricted_targets is None:
             triage_cmd.append("--clean-pause-labels")
-        if args.triage_comment and not getattr(args, "dry_run", False):
+        if args.triage_comment and not getattr(args, "dry_run", False) and restricted_targets is None:
             triage_cmd.append("--comment")
         if args.triage_summary:
             triage_cmd.extend(["--summary", args.triage_summary])
@@ -830,7 +906,9 @@ def process_once(args: argparse.Namespace) -> int:
 
     for repo in target_repos(args.repos_file):
         repo_processed = 0
-        if not getattr(args, "dry_run", False):
+        if restricted_targets is not None and (not EXECUTION_REPO.fullmatch(repo) or repo.casefold() not in restricted_targets):
+            raise ValueError("Source repository is outside the explicit execution target allowlist.")
+        if not getattr(args, "dry_run", False) and restricted_targets is None:
             ensure_agent_labels(repo)
 
         if args.auto_queue_label and queued < args.auto_queue_max:
@@ -876,6 +954,10 @@ def process_once(args: argparse.Namespace) -> int:
 
         if args.inspect_failed:
             for issue in repo_failed:
+                target_reasons = execution_target_reasons(repo, issue, args)
+                if target_reasons:
+                    print(f"Skipping failed inspection for {repo}#{issue['number']}: {', '.join(target_reasons)}.", flush=True)
+                    continue
                 labels = common.label_names(issue)
                 reasons = failed_inspection_hard_reasons(
                     issue,
@@ -902,7 +984,7 @@ def process_once(args: argparse.Namespace) -> int:
             if "agent:running" in labels or reasons:
                 if reasons:
                     print(f"Skipping {repo}#{issue['number']}: {', '.join(reasons)}.", flush=True)
-                    if not getattr(args, "dry_run", False) and not any("missing policy allow label" in reason for reason in reasons):
+                    if not getattr(args, "dry_run", False) and not any("missing policy allow label" in reason or "explicit execution target allowlist" in reason for reason in reasons):
                         common.run(
                             ["gh", "issue", "edit", str(issue["number"]), "--repo", repo, "--remove-label", "agent:ready"],
                             check=False,
@@ -920,6 +1002,12 @@ def process_once(args: argparse.Namespace) -> int:
                     return processed
                 continue
             execution_repo = execution_repo_for_issue(repo, issue)
+            # Re-read the explicit inventory immediately before taking leases.
+            # The issue's execution route was never allowed to widen that file.
+            if execution_target_reasons(repo, issue, args):
+                continue
+            if restricted_targets is not None:
+                ensure_agent_labels(repo)
             print(f"Processing {repo}#{issue['number']} in {execution_repo}: {issue['title']}")
             lease = acquire_issue_lease(repo, issue, lease_stale_seconds)
             if not lease:
@@ -957,7 +1045,8 @@ def process_once(args: argparse.Namespace) -> int:
                 )
                 processed += 1
                 repo_processed += 1
-                notify_worker_result(repo, issue, rc)
+                if getattr(args, "worker_notifications", True):
+                    notify_worker_result(repo, issue, rc)
                 if rc != 0:
                     admin_inspect(
                         repo,
@@ -973,13 +1062,15 @@ def process_once(args: argparse.Namespace) -> int:
     return processed
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--daemon", action="store_true")
     parser.add_argument("--publish", action="store_true", help="Create draft PRs instead of dry-run comments.")
     parser.add_argument("--dry-run", action="store_true", help="Preview queue/dispatch decisions without mutating labels or running workers.")
     parser.add_argument("--repos-file")
+    parser.add_argument("--execution-targets-file", help="Optional owned GitHub inventory restricting both source and execution repositories before issue mutation.")
+    parser.add_argument("--worker-notifications", action=argparse.BooleanOptionalAction, default=True, help="Post configured worker result notifications; disable explicitly for quiet bounded tool runs.")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--max-items", type=int, default=3)
     parser.add_argument("--max-per-repo", type=int, default=1)
@@ -1100,7 +1191,11 @@ def main() -> None:
         action="store_true",
         help="Post the triage Teams payload with local TEAMS_WEBHOOK_URL when configured.",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     if not args.once and not args.daemon:
         args.once = True

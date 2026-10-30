@@ -70,6 +70,12 @@ The verifier also checks committed Codex harness freshness, adapter CLI generati
 
 ## Quick Start
 
+For agents using an existing automation runtime, start with `$automation-harness`.
+The shared JSON CLI and local MCP server discover registered runtimes, inspect
+current evidence and blockers, and check installation consistency. Preview
+`python3 scripts/setup_harness_interface.py`, then use `--apply` for a reversible
+account installation. See [Harness agent interface](docs/harness-interface.md).
+
 For everyday orientation and continuity:
 
 - `$start-day` and `$wrap-up`: choose a manageable starting set and save a dependable stopping point.

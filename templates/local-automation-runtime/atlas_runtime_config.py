@@ -43,12 +43,17 @@ def validate_input_path(raw: str | Path) -> Path:
     """Validate an owned non-secret input before a caller reads its contents."""
     source = Path(raw).absolute()
     identity_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
-    allowed_roots = (identity_home, Path("/tmp"))
+    # Some hosts expose the same passwd home as /home/user and /var/home/user.
+    # Accept both spellings of that one directory before resolving the input;
+    # never accept a caller-supplied HOME or another account's directory.
+    canonical_home = Path(os.path.realpath(identity_home))
+    allowed_roots = (identity_home, canonical_home, Path("/tmp"))
     if ".." in source.parts or not any(_within(source, root) for root in allowed_roots):
         raise RuntimeConfigError("input must be inside the current identity home or its temporary work area")
     try:
         source = source.resolve(strict=True)
-        if not any(_within(source, root.resolve()) for root in allowed_roots):
+        resolved_roots = (canonical_home, Path(os.path.realpath("/tmp")))
+        if not any(_within(source, root) for root in resolved_roots):
             raise RuntimeConfigError("input resolves outside the current identity work area")
         if not source.is_file() or source.stat().st_uid != os.getuid():
             raise RuntimeConfigError("input must be a regular file owned by the current identity")

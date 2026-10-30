@@ -155,6 +155,10 @@ def build_dispatch_commands(args: argparse.Namespace, chain_dir: Path, chain_id:
                 "--repos-file",
                 str(shard_file),
             ]
+            if getattr(args, "execution_targets_file", None):
+                cmd.extend(["--execution-targets-file", args.execution_targets_file])
+            if not getattr(args, "worker_notifications", True):
+                cmd.append("--no-worker-notifications")
             if args.publish and not args.dry_run:
                 cmd.extend(
                     [
@@ -1261,6 +1265,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cycles", type=int, default=1)
     parser.add_argument("--repos-file", default=str(common.RUNTIME_DIR / "repos.txt"))
+    parser.add_argument("--execution-targets-file", help="Optional complete owned GitHub execution allowlist; forwarded unchanged rather than narrowed to per-repository dispatch shards.")
+    parser.add_argument("--worker-notifications", action=argparse.BooleanOptionalAction, default=True, help="Post configured worker result notifications; disable for quiet bounded tool runs.")
     parser.add_argument("--required-checks-file", default=str(common.RUNTIME_DIR / "required-checks.json"))
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--max-per-repo", type=int, default=1)

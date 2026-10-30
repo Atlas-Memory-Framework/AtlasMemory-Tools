@@ -12,6 +12,10 @@
       "path": "skills/agent-harness-evals"
     },
     {
+      "name": "automation-harness",
+      "path": "skills/automation-harness"
+    },
+    {
       "name": "automation-decomposition",
       "path": "skills/automation-decomposition"
     },

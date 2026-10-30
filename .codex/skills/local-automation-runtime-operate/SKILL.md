@@ -1,5 +1,5 @@
 ---
-# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:a73b19080dbe9f0fb574375d4c11bdf5a165e8f26ae04a07ae6c93029278fbce
+# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:c19c59d07369aa92a95d8af215d4bf721dfe4d203a947d02ae97b5ad2000ebe1
 # atlas-tools-generated-end
 name: local-automation-runtime-operate
 description: "Operate the local automation runtime: queue issues, run bounded or unattended cycles, long shift supervision, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup."
@@ -8,6 +8,11 @@ description: "Operate the local automation runtime: queue issues, run bounded or
 # Local Automation Runtime Operate
 
 ## Purpose
+
+When the `atlasmemory_tools` MCP server is available, start with
+`harness_discover` and `harness_inspect` to select the registered runtime and
+establish its operating picture. The commands below remain the provider-level
+operations; do not reconstruct runtime location from memory.
 
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
 This skill owns operation of the `atlas-agent-shift` terminal program; there is no separate shift skill. The program is the durable supervisor wrapper, while this skill defines when and how an operator may use it.
