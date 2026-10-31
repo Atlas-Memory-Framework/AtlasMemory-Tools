@@ -1,3 +1,4 @@
+"""Synthetic fixtures only; receipts and role results do not represent host calls."""
 from __future__ import annotations
 
 import copy
@@ -97,7 +98,7 @@ class SupervisedHandoffPureContractTests(unittest.TestCase):
         return {
             "binding": copy.deepcopy(binding),
             "host_receipt": {
-                "invocation_id": "task:actual-123",
+                "invocation_id": "synthetic:fixture-123",
                 "transport": "supervised_in_app",
                 "checkout": binding["checkout"],
                 "revision": binding["revision"],
@@ -312,7 +313,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
             jobs_dir=root / "jobs", templates_dir=RUNTIME / "team-templates")
         return store_path, provider, worker, revision
 
-    def _first_role_result(self, prepared: dict, status: str = "complete", marker: str = "verified") -> bytes:
+    def _first_role_result(self, prepared: dict, status: str = "complete", marker: str = "synthetic verified") -> bytes:
         role_id = prepared["binding"]["role_id"]
         role = next(role for role in self.template.roles if role.id == role_id)
         record = {"role_id": role_id, "status": status,
@@ -321,7 +322,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
             "goal_review": None}
         return json.dumps({"role_results": [record]}, sort_keys=True).encode()
 
-    def _envelope_for(self, prepared: dict, raw: bytes, invocation: str = "task:fixture") -> dict:
+    def _envelope_for(self, prepared: dict, raw: bytes, invocation: str = "synthetic:fixture") -> dict:
         binding = prepared["binding"]
         assignment = binding["role_assignment"]
         return {"binding": binding, "host_receipt": {"invocation_id": invocation,
@@ -427,7 +428,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
                         "evidence": ["Observed each criterion."]} if role.goal_gate else None)}
                 raw = json.dumps({"role_results": [record]}, sort_keys=True).encode("utf-8")
                 receipt = handoff.ingest_handoff(
-                    provider, worker, envelope=self._envelope_for(prepared, raw, f"task:{expected_role}"),
+                    provider, worker, envelope=self._envelope_for(prepared, raw, f"synthetic:{expected_role}"),
                     result_bytes=raw,
                 )
                 self.assertEqual(receipt["status"], "accepted")
@@ -474,7 +475,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
             raw = b'{ "candidate": {"text":"original\\u00e9"}, "n": 1 }\n'
             binding = prepared["binding"]
             assignment = binding["role_assignment"]
-            receipt = {"invocation_id": "task:observed", "transport": "supervised_in_app",
+            receipt = {"invocation_id": "synthetic:capture-fixture", "transport": "supervised_in_app",
                 "checkout": binding["checkout"], "revision": binding["revision"],
                 "model": assignment["model"], "reasoning": assignment["reasoning"]}
             before = store_path.read_bytes()
@@ -506,7 +507,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
             prepared = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
             binding = prepared["binding"]
             assignment = binding["role_assignment"]
-            receipt = {"invocation_id": "task:observed", "transport": "supervised_in_app",
+            receipt = {"invocation_id": "synthetic:capture-fixture", "transport": "supervised_in_app",
                 "checkout": binding["checkout"], "revision": binding["revision"],
                 "model": assignment["model"], "reasoning": assignment["reasoning"]}
             raw = b'{ "candidate": true }\n'
@@ -548,7 +549,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
                 prepared = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
                 binding = prepared["binding"]
                 assignment = binding["role_assignment"]
-                receipt = {"invocation_id": "task:deep", "transport": "supervised_in_app",
+                receipt = {"invocation_id": "synthetic:deep", "transport": "supervised_in_app",
                     "checkout": binding["checkout"], "revision": binding["revision"],
                     "model": assignment["model"], "reasoning": assignment["reasoning"]}
                 raw = b'{ "candidate": "deep" }\n'
@@ -695,8 +696,8 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
             prepared = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
             first = self._first_role_result(prepared, marker="winning result")
             second = self._first_role_result(prepared, marker="conflicting result")
-            first_envelope = self._envelope_for(prepared, first, "task:winner")
-            second_envelope = self._envelope_for(prepared, second, "task:conflict")
+            first_envelope = self._envelope_for(prepared, first, "synthetic:winner")
+            second_envelope = self._envelope_for(prepared, second, "synthetic:conflict")
             original = worker.apply_workflow_role_results
             winner = []
             def interleave(evidence, result_path):
@@ -730,7 +731,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
                         "goal_review": ({"verdict": verdict, "reason": "Reviewed frozen criteria.",
                             "evidence": ["Observed each criterion."]} if role.goal_gate else None)}
                     raw = json.dumps({"role_results": [record]}, sort_keys=True).encode()
-                    envelope = self._envelope_for(prepared, raw, f"task:{expected_role}")
+                    envelope = self._envelope_for(prepared, raw, f"synthetic:{expected_role}")
                     receipt = handoff.ingest_handoff(provider, worker, envelope=envelope, result_bytes=raw)
                     self.assertEqual(receipt["status"], "accepted")
                     for snapshot in old_generations:
@@ -798,7 +799,7 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
                 "goal_review": None}]}, sort_keys=True).encode()
             binding = first["binding"]
             assignment = binding["role_assignment"]
-            envelope = {"binding": binding, "host_receipt": {"invocation_id": "task:fixture",
+            envelope = {"binding": binding, "host_receipt": {"invocation_id": "synthetic:fixture",
                 "transport": "supervised_in_app", "checkout": binding["checkout"],
                 "revision": binding["revision"], "model": assignment["model"],
                 "reasoning": assignment["reasoning"]}, "result_sha256": hashlib.sha256(raw).hexdigest()}
@@ -866,6 +867,594 @@ class SupervisedHandoffPersistenceTests(SupervisedHandoffPureContractTests):
             template_path.write_text(json.dumps(template_data))
             prepared = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
             self.assertEqual(prepared["binding"]["role_id"], "implementation")
+
+    def _ready_fixture(self, root):
+        path, provider, worker, revision = self.make_persistent_fixture(root)
+        payload = json.loads(path.read_text())
+        item = payload["work_items"][0]
+        item["status"] = item["state"] = item["lifecycle"]["state"] = "ready"
+        item.pop("claim")
+        path.write_text(json.dumps(payload))
+        return path, provider, worker, revision
+
+    def test_fresh_oversize_refuses_before_claim_or_job_and_keeps_input(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            payload = json.loads(path.read_text())
+            payload["work_items"][0]["description"] = "synthetic é\n" * 9000
+            path.write_text(json.dumps(payload))
+            before = path.read_bytes()
+            with mock.patch.object(provider, "claim", side_effect=AssertionError("claim called")):
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            self.assertEqual(error.exception.code, "output_size")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse(worker.jobs_dir.exists())
+
+    def test_output_serializer_boundary_and_bounded_file_import(self):
+        import atlas_local_dev as cli
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "reservation.json"
+            for size in (65535, 65536, 65537):
+                value = {"status": "prepared", "binding": {}, "artifacts": {},
+                         "packet": {"evidence": ["é\n\t", {"nested": "x"}]}}
+                baseline = len(handoff.serialize_output(value))
+                value["packet"]["padding"] = "x" * (size - baseline - len(', "padding": ""'))
+                wire = handoff.serialize_output(value)
+                self.assertEqual(len(wire), size)
+                self.assertTrue(wire.endswith(b"\n"))
+                target.write_bytes(wire)
+                if size <= 65536:
+                    self.assertEqual(cli.load_object(target), value)
+                    self.assertEqual(handoff._bounded_prepared(value), value)
+                else:
+                    with self.assertRaises(cli.CLIError):
+                        cli.load_object(target)
+                    with self.assertRaises(handoff.HandoffRefusal):
+                        handoff._bounded_prepared(value)
+
+    def test_real_fresh_output_byte_boundaries_before_claim(self):
+        import atlas_local_dev as cli
+        for size in (65535, 65536, 65537):
+            with self.subTest(size=size), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                path, provider, worker, revision = self._ready_fixture(root)
+                payload = json.loads(path.read_text())
+                payload["work_items"][0]["description"] = "synthetic é\n\t"
+                path.write_text(json.dumps(payload))
+                captured = []
+                def capture(plan):
+                    captured.append(len(handoff.serialize_output(plan)))
+                    raise handoff.HandoffRefusal("measured", "synthetic measurement")
+                with mock.patch.object(handoff, "_bounded_prepared", side_effect=capture):
+                    with self.assertRaises(handoff.HandoffRefusal):
+                        handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                self.assertFalse(worker.jobs_dir.exists())
+                payload["work_items"][0]["description"] += "x" * (size - captured[0])
+                path.write_text(json.dumps(payload))
+                with mock.patch.object(handoff, "_bounded_prepared", side_effect=capture):
+                    with self.assertRaises(handoff.HandoffRefusal):
+                        handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                difference = captured[-1] - size
+                if difference:
+                    payload["work_items"][0]["description"] = payload["work_items"][0]["description"][:-difference]
+                    path.write_text(json.dumps(payload))
+                before = path.read_bytes()
+                if size == 65537:
+                    with self.assertRaises(handoff.HandoffRefusal) as refusal:
+                        handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                    self.assertEqual(refusal.exception.code, "output_size")
+                    self.assertIn("65537 bytes", str(refusal.exception))
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertFalse(worker.jobs_dir.exists())
+                else:
+                    result = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                    wire = handoff.serialize_output(result)
+                    self.assertEqual(len(wire), size)
+                    target = root / "reservation.json"
+                    target.write_bytes(wire)
+                    self.assertEqual(cli.load_object(target), result)
+
+    def test_oversized_existing_pending_remains_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            payload = json.loads(path.read_text())
+            payload["work_items"][0]["description"] = "synthetic historical " * 5000
+            path.write_text(json.dumps(payload))
+            with mock.patch.object(handoff, "_CAPTURE_MAX_BYTES", 1000000):
+                prepared = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            before = path.read_bytes()
+            artifacts = {k: Path(v).read_bytes() for k, v in prepared["artifacts"].items()}
+            with self.assertRaises(handoff.HandoffRefusal) as refusal:
+                handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            self.assertEqual(refusal.exception.code, "output_size")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(artifacts, {k: Path(v).read_bytes() for k, v in prepared["artifacts"].items()})
+
+    def test_late_rollup_refusal_preserves_all_synthetic_prior_results(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            for expected in ("implementation", "test-runner", "code-review", "semantic-alignment"):
+                prepared = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                self.assertEqual(prepared["binding"]["role_id"], expected)
+                role = next(r for r in self.template.roles if r.id == expected)
+                outputs = {k: "synthetic evidence " + "x" * 5100 for k in role.must_produce}
+                record = {"role_id": expected, "status": "complete", "outputs": outputs,
+                          "evidence": ["synthetic evidence"], "notes": "synthetic result",
+                          "contract_issues": [], "goal_review": ({"verdict": "pass", "reason": "synthetic",
+                          "evidence": ["synthetic"]} if role.goal_gate else None)}
+                raw = json.dumps({"role_results": [record]}, sort_keys=True).encode()
+                result = handoff.ingest_handoff(provider, worker, envelope=self._envelope_for(prepared, raw, "synthetic:" + expected), result_bytes=raw)
+                self.assertEqual(result["status"], "accepted")
+            before = path.read_bytes()
+            files_before = {str(p): p.read_bytes() for p in worker.jobs_dir.rglob("*") if p.is_file()}
+            with self.assertRaises(handoff.HandoffRefusal) as refusal:
+                handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            self.assertEqual(refusal.exception.code, "output_size")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(files_before, {str(p): p.read_bytes() for p in worker.jobs_dir.rglob("*") if p.is_file()})
+            item = json.loads(before)["work_items"][0]
+            self.assertEqual(len(item["supervised_handoff_v1"]["accepted"]), 4)
+            self.assertEqual(len(item["workflow_runs"]), 1)
+
+    def test_fresh_single_save_and_exact_reexport(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            save = provider.store.save
+            with mock.patch.object(provider.store, "save", wraps=save) as saving, \
+                 mock.patch.object(provider, "claim", side_effect=AssertionError("early claim")):
+                first = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                self.assertEqual(saving.call_count, 1)
+            item = json.loads(path.read_text())["work_items"][0]
+            self.assertEqual(item["claim"]["claimed_by"], "supervisor:test")
+            self.assertEqual(item["supervised_handoff_v1"]["pending"]["binding"], first["binding"])
+            before = path.read_bytes()
+            second = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            self.assertEqual(handoff.serialize_output(first), handoff.serialize_output(second))
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_fresh_save_failure_reconciles_without_second_save(self):
+        for mode in ("before", "after", "unreadable", "interrupt"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                path, provider, worker, revision = self._ready_fixture(root)
+                original_save, original_load = provider.store.save, provider.store.load
+                before = path.read_bytes()
+                def fail_save(payload):
+                    if mode == "after":
+                        original_save(payload)
+                    if mode == "unreadable":
+                        provider.store.load = mock.Mock(side_effect=OSError("unreadable"))
+                    if mode == "interrupt":
+                        raise KeyboardInterrupt()
+                    raise OSError("synthetic save failure")
+                with mock.patch.object(provider.store, "save", side_effect=fail_save) as save:
+                    with self.assertRaises(handoff.HandoffRefusal) as error:
+                        handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                    self.assertEqual(save.call_count, 1)
+                provider.store.load = original_load
+                expected = {"before": "save_confirmed_not_published", "after": "save_confirmed_published",
+                            "unreadable": "save_unknown", "interrupt": "save_confirmed_not_published"}[mode]
+                self.assertEqual(error.exception.code, expected)
+                diagnostic = next(worker.jobs_dir.glob("*.attempt.json"))
+                self.assertEqual(json.loads(diagnostic.read_text())["outcome"], expected.removeprefix("save_"))
+                if mode != "after":
+                    self.assertEqual(path.read_bytes(), before)
+                else:
+                    first = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                    self.assertEqual(first["binding"]["generation"], 1)
+
+    @unittest.skipUnless(hasattr(__import__("os"), "fork"), "requires process interruption fixture")
+    def test_interrupted_save_retains_unknown_attempt_without_retry(self):
+        import os
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            before = path.read_bytes()
+            child = os.fork()
+            if child == 0:
+                provider.store.save = lambda payload: os._exit(91)
+                handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                os._exit(92)
+            _, status = os.waitpid(child, 0)
+            self.assertEqual(os.waitstatus_to_exitcode(status), 91)
+            self.assertEqual(path.read_bytes(), before)
+            diagnostic = next(worker.jobs_dir.glob("*.attempt.json"))
+            attempt = json.loads(diagnostic.read_text())
+            self.assertEqual(attempt["outcome"], "unknown")
+            self.assertTrue(attempt["save_attempted"])
+            self.assertEqual(len(list(worker.jobs_dir.glob("supervised-*"))), 2)
+
+
+    def test_save_conflict_and_native_tmp_are_preserved_as_uncertain(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            temp_path = path.with_suffix(path.suffix + ".tmp")
+            def conflict(payload):
+                temp_path.write_text("synthetic incomplete native save")
+                changed = json.loads(path.read_text())
+                changed["work_items"][0]["title"] = "concurrent conflicting transition"
+                path.write_text(json.dumps(changed))
+                raise OSError("synthetic save failure")
+            with mock.patch.object(provider.store, "save", side_effect=conflict) as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                self.assertEqual(save.call_count, 1)
+            self.assertEqual(error.exception.code, "save_unknown")
+            self.assertEqual(temp_path.read_text(), "synthetic incomplete native save")
+            self.assertEqual(json.loads(path.read_text())["work_items"][0]["title"], "concurrent conflicting transition")
+            diagnostic = next(worker.jobs_dir.glob("*.attempt.json"))
+            self.assertEqual(json.loads(diagnostic.read_text())["outcome"], "unknown")
+
+
+    def test_running_claim_oversize_and_plan_read_failure_are_inert(self):
+        for case in ("oversize", "read_failure"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                path, provider, worker, revision = self.make_persistent_fixture(root)
+                if case == "oversize":
+                    payload = json.loads(path.read_text())
+                    payload["work_items"][0]["description"] = "synthetic evidence " * 5000
+                    path.write_text(json.dumps(payload))
+                before = path.read_bytes()
+                if case == "read_failure":
+                    patch = mock.patch.object(worker, "plan_workflow_artifacts", side_effect=OSError("synthetic read failure"))
+                else:
+                    patch = contextlib.nullcontext()
+                with patch:
+                    with self.assertRaises((OSError, handoff.HandoffRefusal)):
+                        handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse(worker.jobs_dir.exists())
+
+    def test_final_dependency_change_refuses_without_publishing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            payload = json.loads(path.read_text())
+            payload["work_items"][0]["scheduler"]["depends_on"] = ["dependency"]
+            payload["work_items"].append({"id": "dependency", "status": "done", "state": "done",
+                                           "result": {"status": "complete"}})
+            path.write_text(json.dumps(payload))
+            original_hash = handoff._artifact_hashes
+            def change_dependency(paths):
+                hashes = original_hash(paths)
+                changed = json.loads(path.read_text())
+                changed["work_items"][1]["status"] = changed["work_items"][1]["state"] = "blocked"
+                path.write_text(json.dumps(changed))
+                return hashes
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=change_dependency), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal):
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            item = json.loads(path.read_text())["work_items"][0]
+            self.assertEqual(item["state"], "ready")
+            self.assertNotIn("claim", item)
+            self.assertNotIn("supervised_handoff_v1", item)
+
+    def test_plan_is_read_only_and_exact_bytes_are_published(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            before = path.read_bytes()
+            original = worker.plan_workflow_artifacts
+            plans = []
+            def inspect(*args, **kwargs):
+                result = original(*args, **kwargs)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse(worker.jobs_dir.exists())
+                plans.append(copy.deepcopy(result))
+                return result
+            with mock.patch.object(worker, "plan_workflow_artifacts", side_effect=inspect):
+                output = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            self.assertEqual(len(plans), 1)
+            for key, expected in plans[0]["artifact_bytes"].items():
+                self.assertEqual(Path(output["artifacts"][key]).read_bytes(), expected)
+            packets = json.loads(plans[0]["artifact_bytes"]["team_role_tasks_path"])["tasks"]
+            self.assertEqual(output["packet"], next(p for p in packets if p["role_id"] == output["binding"]["role_id"]))
+            item = json.loads(path.read_text())["work_items"][0]
+            self.assertEqual(handoff.sha256_json(item["claim"]), output["binding"]["claim_fingerprint"])
+
+    def test_each_artifact_failure_and_hash_failure_never_publish(self):
+        for name in ("team-run.json", "team-rollup.md", "team-role-tasks.json", "hash"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                path, provider, worker, revision = self._ready_fixture(root)
+                before = path.read_bytes()
+                original_write, original_hash = handoff._stage_artifact, handoff._artifact_hashes
+                def write(job_dir, job_fd, target, content):
+                    if target == name:
+                        raise OSError("synthetic staging failure")
+                    return original_write(job_dir, job_fd, target, content)
+                def hashes(paths):
+                    actual = original_hash(paths)
+                    if name == "hash":
+                        actual["team_run_path"] = "0" * 64
+                    return actual
+                with mock.patch.object(handoff, "_stage_artifact", write), mock.patch.object(handoff, "_artifact_hashes", hashes), \
+                     mock.patch.object(provider.store, "save") as save:
+                    with self.assertRaises((OSError, handoff.HandoffRefusal)):
+                        handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                    save.assert_not_called()
+                self.assertEqual(path.read_bytes(), before)
+                diagnostic = next(worker.jobs_dir.glob("*.attempt.json"))
+                self.assertEqual(json.loads(diagnostic.read_text())["outcome"], "unpublished")
+
+    def test_final_template_change_refuses_without_queue_save(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            worker.templates_dir = root / "templates"
+            shutil.copytree(RUNTIME / "team-templates", worker.templates_dir)
+            template_path = worker.templates_dir / "work-item-change-lifecycle.json"
+            original_hash = handoff._artifact_hashes
+            before = path.read_bytes()
+            def change_template(paths):
+                result = original_hash(paths)
+                doc = json.loads(template_path.read_text())
+                doc["roles"][0]["label"] = "changed while staging"
+                template_path.write_text(json.dumps(doc))
+                return result
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=change_template), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal):
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(path.read_bytes(), before)
+            diagnostic = next(worker.jobs_dir.glob("*.attempt.json"))
+            self.assertEqual(json.loads(diagnostic.read_text())["phase"], "final_validation")
+
+    def test_final_checkout_revision_change_blocks_fresh_publication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            before = path.read_bytes()
+            original = handoff._artifact_hashes
+            def advance_checkout(paths):
+                hashes = original(paths)
+                subprocess.run(["git", "-C", str(root / "checkout"), "-c", "user.name=Fixture",
+                    "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "synthetic drift"], check=True)
+                return hashes
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=advance_checkout), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(error.exception.code, "revision")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(json.loads(next(worker.jobs_dir.glob("*.attempt.json")).read_text())["outcome"], "unpublished")
+
+    def test_final_context_change_preserves_competing_state_without_claim(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            original = handoff._artifact_hashes
+            changed_bytes = []
+            def change_context(paths):
+                hashes = original(paths)
+                changed = json.loads(path.read_text())
+                changed["work_items"][0]["description"] = "synthetic concurrent context change"
+                path.write_text(json.dumps(changed))
+                changed_bytes.append(path.read_bytes())
+                return hashes
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=change_context), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(error.exception.code, "stale")
+            self.assertEqual(path.read_bytes(), changed_bytes[0])
+            item = json.loads(path.read_text())["work_items"][0]
+            self.assertEqual(item["state"], "ready")
+            self.assertNotIn("claim", item)
+            self.assertNotIn("supervised_handoff_v1", item)
+
+    def test_final_registry_change_blocks_fresh_publication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            registry = root / "registry.json"
+            registry.write_text(json.dumps({"agents": {"implementation": {"description": "synthetic original"}}}))
+            worker.agent_registry_path = registry
+            before = path.read_bytes()
+            original = handoff._artifact_hashes
+            def change_registry(paths):
+                hashes = original(paths)
+                registry.write_text(json.dumps({"agents": {"implementation": {"description": "synthetic changed"}}}))
+                return hashes
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=change_registry), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(error.exception.code, "packet")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(json.loads(next(worker.jobs_dir.glob("*.attempt.json")).read_text())["outcome"], "unpublished")
+
+    def test_final_prior_run_change_blocks_fresh_claim_publication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            first = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            raw = self._first_role_result(first, marker="synthetic result")
+            handoff.ingest_handoff(provider, worker, envelope=self._envelope_for(first, raw, "synthetic:prior"), result_bytes=raw)
+            item = json.loads(path.read_text())["work_items"][0]
+            prior = Path(item["workflow_runs"][-1]["artifacts"]["team_run_path"])
+            prior_bytes = prior.read_bytes()
+            before = path.read_bytes()
+            original = handoff._artifact_hashes
+            def change_prior(paths):
+                hashes = original(paths)
+                prior.write_bytes(prior_bytes + b" ")
+                return hashes
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=change_prior), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(error.exception.code, "run_owner")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(prior.read_bytes(), prior_bytes + b" ")
+            current = json.loads(path.read_text())["work_items"][0]
+            self.assertEqual(current.get("claim"), item.get("claim"))
+            self.assertNotIn("pending", current["supervised_handoff_v1"])
+
+    def test_attempt_path_collisions_never_modify_prior_evidence(self):
+        import uuid
+        nonce = uuid.UUID("12345678-1234-4234-8234-123456789abc")
+        for collision in ("directory", "diagnostic", "diagnostic_symlink"):
+            with self.subTest(collision=collision), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                path, provider, worker, revision = self._ready_fixture(root)
+                worker.jobs_dir.mkdir()
+                gen = handoff.sha256_json({"id": "WI-PERSIST", "generation": 1, "nonce": str(nonce)})
+                job = worker.jobs_dir / ("supervised-" + gen[:32])
+                diagnostic = job.with_name(job.name + ".attempt.json")
+                sentinel = root / "prior-evidence"
+                sentinel.write_bytes(b"existing unrelated evidence")
+                if collision == "directory":
+                    job.mkdir()
+                    (job / "prior").write_bytes(b"existing job artifact")
+                    diagnostic.write_bytes(b"existing diagnostic")
+                elif collision == "diagnostic":
+                    diagnostic.write_bytes(b"existing diagnostic")
+                else:
+                    diagnostic.symlink_to(sentinel)
+                queue_before = path.read_bytes()
+                diagnostic_before = diagnostic.read_bytes()
+                with mock.patch.object(handoff.uuid, "uuid4", return_value=nonce), \
+                     mock.patch.object(provider.store, "save") as save:
+                    with self.assertRaises(OSError):
+                        handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                    save.assert_not_called()
+                self.assertEqual(path.read_bytes(), queue_before)
+                self.assertEqual(diagnostic.read_bytes(), diagnostic_before)
+                self.assertEqual(sentinel.read_bytes(), b"existing unrelated evidence")
+                if collision == "directory":
+                    self.assertEqual((job / "prior").read_bytes(), b"existing job artifact")
+                if collision == "diagnostic_symlink":
+                    self.assertTrue(diagnostic.is_symlink())
+
+    def test_replaced_attempt_directory_is_never_written(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            before = path.read_bytes()
+            original = handoff._stage_artifact
+            replacement = []
+            def replace_directory(job_dir, job_fd, name, content):
+                job_dir.rename(job_dir.with_name(job_dir.name + "-moved"))
+                job_dir.mkdir()
+                (job_dir / "prior").write_bytes(b"synthetic competing job")
+                replacement.append(job_dir)
+                return original(job_dir, job_fd, name, content)
+            with mock.patch.object(handoff, "_stage_artifact", side_effect=replace_directory), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(error.exception.code, "attempt_directory")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual({p.name: p.read_bytes() for p in replacement[0].iterdir()},
+                             {"prior": b"synthetic competing job"})
+
+
+    def test_replaced_attempt_evidence_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            before = path.read_bytes()
+            original = handoff._artifact_hashes
+            replaced = []
+            def replace_diagnostic(paths):
+                hashes = original(paths)
+                diagnostic = next(worker.jobs_dir.glob("*.attempt.json"))
+                diagnostic.unlink()
+                diagnostic.write_bytes(b"synthetic competing evidence")
+                replaced.append(diagnostic)
+                return hashes
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=replace_diagnostic), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(error.exception.code, "attempt_evidence")
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(replaced[0].read_bytes(), b"synthetic competing evidence")
+
+    def test_fresh_staged_artifact_change_after_hash_blocks_save(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            before = path.read_bytes()
+            original = handoff._artifact_hashes
+            calls = []
+            def mutate_after_first_hash(paths):
+                hashes = original(paths)
+                calls.append(1)
+                if len(calls) == 1:
+                    staged = Path(paths["team_run_path"])
+                    staged.write_bytes(staged.read_bytes() + b" ")
+                return hashes
+            with mock.patch.object(handoff, "_artifact_hashes", side_effect=mutate_after_first_hash), \
+                 mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(handoff.HandoffRefusal) as error:
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(error.exception.code, "artifact")
+            self.assertGreaterEqual(len(calls), 2)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(json.loads(next(worker.jobs_dir.glob("*.attempt.json")).read_text())["outcome"], "unpublished")
+
+    def test_synthetic_prepare_capture_import_and_replay_chain(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            prepared = handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+            raw = self._first_role_result(prepared, marker="synthetic fixture result")
+            envelope = self._envelope_for(prepared, raw, "synthetic:fixture-invocation")
+            captured = handoff.capture_host_return(provider, worker, expected_reservation=prepared,
+                host_receipt=envelope["host_receipt"], dispatched_packet_sha256=prepared["binding"]["packet_hash"],
+                result_bytes=raw)
+            self.assertEqual(captured["result_bytes"], raw)
+            self.assertEqual(captured["envelope"], envelope)
+            accepted = handoff.ingest_handoff(provider, worker, envelope=captured["envelope"], result_bytes=captured["result_bytes"])
+            self.assertEqual(accepted["status"], "accepted")
+            committed = path.read_bytes()
+            self.assertEqual(handoff.ingest_handoff(provider, worker, envelope=captured["envelope"], result_bytes=raw)["status"], "duplicate")
+            self.assertEqual(path.read_bytes(), committed)
+            changed = raw + b" "
+            conflict = copy.deepcopy(captured["envelope"])
+            conflict["result_sha256"] = hashlib.sha256(changed).hexdigest()
+            with self.assertRaises(handoff.HandoffRefusal):
+                handoff.ingest_handoff(provider, worker, envelope=conflict, result_bytes=changed)
+            self.assertEqual(path.read_bytes(), committed)
+
+    def test_failed_stage_retains_only_new_unpublished_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path, provider, worker, revision = self._ready_fixture(root)
+            before = path.read_bytes()
+            original_write = handoff._stage_artifact
+            def fail_write(job_dir, job_fd, target, content):
+                if target == "team-rollup.md":
+                    raise OSError("synthetic stage failure")
+                return original_write(job_dir, job_fd, target, content)
+            with mock.patch.object(handoff, "_stage_artifact", fail_write), mock.patch.object(provider.store, "save") as save:
+                with self.assertRaises(OSError):
+                    handoff.prepare_handoff(provider, worker, source_id="WI-PERSIST", expected_revision=revision)
+                save.assert_not_called()
+            self.assertEqual(path.read_bytes(), before)
+            diagnostic = next(worker.jobs_dir.glob("*.attempt.json"))
+            self.assertEqual(json.loads(diagnostic.read_text())["outcome"], "unpublished")
+            self.assertTrue(next(worker.jobs_dir.glob("supervised-*/team-run.json")).exists())
 
 
 if __name__ == "__main__":

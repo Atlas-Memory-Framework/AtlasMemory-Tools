@@ -41,9 +41,14 @@ class OutputError(Exception):
     pass
 
 
+def serialize_output(value):
+    return (json.dumps(value, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n").encode("utf-8")
+
+
 def emit(value):
     try:
-        print(json.dumps(value, sort_keys=True, ensure_ascii=True, allow_nan=False), flush=True)
+        sys.stdout.write(serialize_output(value).decode("utf-8"))
+        sys.stdout.flush()
     except OSError:
         raise OutputError from None
 
@@ -299,10 +304,7 @@ def do_prepare(args, api):
         if (len(pending) != 1 or pending[0][0] != args.id
                 or pending[0][1].get("binding", {}).get("supervisor_id") != args.owner):
             raise CLIError("pending_conflict", "another handoff is pending store-wide")
-    elif operation.ready:
-        if provider.claim(operation) is None:
-            raise CLIError("claim", "work item is no longer eligible")
-    elif (wi.item_state(item) != "running" or not isinstance(item.get("claim"), dict)
+    elif not operation.ready and (wi.item_state(item) != "running" or not isinstance(item.get("claim"), dict)
           or item["claim"].get("claimed_by") != args.owner):
         raise CLIError("claim", "item is not eligible or this supervisor's running claim")
     # This maintained API independently verifies checkout root/HEAD and pending ownership.
@@ -382,8 +384,8 @@ def main(argv=None):
         return 2
     except Exception as exc:
         # API refusals carry safe codes; do not echo arbitrary input or local payloads.
-        return error_exit(getattr(exc, "code", "runtime_refusal"),
-                          "installed runtime refused the operation")
+        message = str(exc) if getattr(exc, "code", "") == "output_size" else "installed runtime refused the operation"
+        return error_exit(getattr(exc, "code", "runtime_refusal"), message)
 
 
 if __name__ == "__main__":
