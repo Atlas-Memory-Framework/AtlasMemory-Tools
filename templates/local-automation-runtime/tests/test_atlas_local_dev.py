@@ -1,3 +1,4 @@
+"""Synthetic fixtures only; receipts and role results do not represent host calls."""
 from __future__ import annotations
 
 import copy
@@ -368,6 +369,49 @@ print(json.dumps(item))
         self.assertEqual(recovered["binding"], pending["binding"])
         self.assertEqual(self.snapshot(), before)
 
+    def test_partial_stdout_recovers_exact_planned_bytes_and_refuses_partial_import(self):
+        _, revision, task_path = self.make_intake()
+        self.ok("add", "--task", str(task_path))
+        planned_path = self.root / "synthetic-planned-wire.json"
+        partial_path = self.root / "synthetic-partial-wire.json"
+        code = """
+import pathlib, sys
+import atlas_local_dev as cli, atlas_supervised_handoff as handoff
+runtime, state, revision, planned, partial = sys.argv[1:]
+original_bound = handoff._bounded_prepared
+def record_plan(value):
+    pathlib.Path(planned).write_bytes(cli.serialize_output(value))
+    return original_bound(value)
+handoff._bounded_prepared = record_plan
+class PartialFailure:
+    def write(self, value):
+        pathlib.Path(partial).write_bytes(value.encode('utf-8')[:120])
+        raise OSError('synthetic partial stdout failure')
+    def flush(self):
+        pass
+sys.stdout = PartialFailure()
+raise SystemExit(cli.main(['--runtime-dir', runtime, '--state-dir', state,
+                           'prepare', '--id', 'WI-CLI', '--revision', revision]))
+"""
+        failed = subprocess.run([sys.executable, "-B", "-c", code, str(self.runtime), str(self.state),
+                                 revision, str(planned_path), str(partial_path)], env=self.env,
+                                capture_output=True, text=True)
+        self.assertEqual(failed.returncode, 2, failed.stderr)
+        planned = planned_path.read_bytes()
+        partial = partial_path.read_bytes()
+        self.assertGreater(len(partial), 0)
+        self.assertLess(len(partial), len(planned))
+        self.assertEqual(partial, planned[:len(partial)])
+        before = self.snapshot()
+        recovered = self.run_cli("prepare", "--id", "WI-CLI", "--revision", revision)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(recovered.stdout.encode("utf-8"), planned)
+        self.assertEqual(self.snapshot(), before)
+        reservation = json.loads(recovered.stdout)
+        paths = self.import_files(reservation)
+        self.refused(*self.import_args((partial_path, paths[1], paths[2])), code="invalid_json")
+        self.assertEqual(self.snapshot(), before)
+
     def test_global_pending_refuses_other_item_before_claim(self):
         first_checkout, revision, first = self.make_intake()
         second_checkout, second_revision, second = self.make_intake("WI-OTHER")
@@ -391,22 +435,22 @@ print(json.dumps(item))
 import pathlib, sys
 import atlas_local_dev as cli, atlas_work_items as wi, atlas_supervised_handoff as handoff
 runtime, state, first_revision, second_revision = sys.argv[1:]
-original_claim = wi.AtlasWorkItemOperationProvider.claim
+original_plan = wi.LocalCommandOperationWorker.plan_workflow_artifacts
 triggered = False
-def competing_prepare(self, operation):
+def competing_prepare(self, operation, *args, **kwargs):
+    plan = original_plan(self, operation, *args, **kwargs)
     global triggered
     if not triggered:
         triggered = True
-        items = {wi.item_id(item): item for item in self.store.load()["work_items"]}
-        assert original_claim(self, self.project(items["WI-FIRST"], items)) is not None
+        provider = wi.AtlasWorkItemOperationProvider(wi.AtlasWorkItemStore(pathlib.Path(state)/"work-items.json"), claimed_by="operator:atlas-daily-dev")
         worker = wi.LocalCommandOperationWorker(
             command=None, jobs_dir=pathlib.Path(state)/"jobs",
             templates_dir=pathlib.Path(runtime)/"team-templates")
         reservation = handoff.prepare_handoff(
-            self, worker, source_id="WI-FIRST", expected_revision=first_revision)
+            provider, worker, source_id="WI-FIRST", expected_revision=first_revision)
         print("COMPETING_PENDING=" + reservation["binding"]["handoff_id"], file=sys.stderr)
-    return original_claim(self, operation)
-wi.AtlasWorkItemOperationProvider.claim = competing_prepare
+    return plan
+wi.LocalCommandOperationWorker.plan_workflow_artifacts = competing_prepare
 raise SystemExit(cli.main([
     "--runtime-dir", runtime, "--state-dir", state,
     "prepare", "--id", "WI-SECOND", "--revision", second_revision]))
@@ -415,7 +459,7 @@ raise SystemExit(cli.main([
             [sys.executable, "-B", "-c", code, str(self.runtime), str(self.state),
              first_revision, second_revision], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertEqual(json.loads(result.stdout)["error"]["code"], "claim")
+        self.assertEqual(json.loads(result.stdout)["error"]["code"], "pending")
         items = {item["id"]: item for item in
                  json.loads((self.state / "work-items.json").read_text())["work_items"]}
         pending = items["WI-FIRST"]["supervised_handoff_v1"]["pending"]
@@ -499,6 +543,42 @@ assert p.claim(p.project(i)) is not None
         for raw in (b'{}' + b' ' * 65535, b'{"role_results":[],"role_results":[]}', b'{"x":Infinity}'):
             paths[2].write_bytes(raw)
             self.refused(*self.import_args(paths))
+
+    def test_refused_oversize_prepare_never_calls_synthetic_host(self):
+        _, revision, task_path = self.make_intake()
+        task = json.loads(task_path.read_text())
+        task["goal"] = "é" * 10500
+        task_path.write_text(json.dumps(task))
+        self.assertLessEqual(task_path.stat().st_size, cli.MAX_INPUT)
+        self.ok("add", "--task", str(task_path))
+        before = self.snapshot()
+        synthetic_host = mock.Mock(side_effect=AssertionError("synthetic host must not be invoked"))
+        result = self.run_cli("prepare", "--id", "WI-CLI", "--revision", revision)
+        if result.returncode == 0:
+            synthetic_host(json.loads(result.stdout))
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stdout)["error"]["code"], "output_size")
+        synthetic_host.assert_not_called()
+        self.assertEqual(self.snapshot(), before)
+        refused = self.run_cli("prepare", "--id", "WI-CLI", "--revision", "f" * 40)
+        if refused.returncode == 0:
+            synthetic_host(json.loads(refused.stdout))
+        self.assertEqual(refused.returncode, 2)
+        self.assertEqual(json.loads(refused.stdout)["error"]["code"], "revision")
+        synthetic_host.assert_not_called()
+        self.assertEqual(self.snapshot(), before)
+
+    def test_original_result_65537_rejected_on_first_import_and_replay(self):
+        _, _, reservation = self.prepared()
+        paths = self.import_files(reservation)
+        original = paths[2].read_bytes()
+        paths[2].write_bytes(original.ljust(65537, b" "))
+        self.refused(*self.import_args(paths), code="invalid_input")
+        paths[2].write_bytes(original.ljust(65536, b" "))
+        self.assertEqual(self.ok(*self.import_args(paths))["status"], "accepted")
+        self.assertEqual(self.ok(*self.import_args(paths))["status"], "duplicate")
+        paths[2].write_bytes(original.ljust(65537, b" "))
+        self.refused(*self.import_args(paths), code="invalid_input")
 
     def test_live_return_refuses_advanced_head_without_import_writes(self):
         checkout, revision, reservation = self.prepared()
