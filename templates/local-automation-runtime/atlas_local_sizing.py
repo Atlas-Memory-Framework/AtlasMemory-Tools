@@ -262,6 +262,63 @@ SOURCE_REVIEWED_UNITS_V3 = MappingProxyType({
 
 
 
+# A separately reviewed, source-owned bounded repair disposition. This does not
+# remove history from semantic_subject_sha256 or from the fresh sizing subject.
+SOURCE_REVIEWED_REWORK_V1 = MappingProxyType({
+    "max_reworks": 1,
+    "review_evidence": (
+        MappingProxyType({"artifact": ".automation/atlasmemory-tools/launch-readiness/security/source-rework-design-review.json",
+                          "sha256": "cc085626ea16eff8d1e7aaae733a1ac7f646b244780f8674f885d01d8dd32d1c"}),
+        MappingProxyType({"artifact": ".automation/atlasmemory-tools/launch-readiness/goal-review/source-rework-design-review.json",
+                          "sha256": "e0c9cea96db9c8ab3f30339174e53ee1ead32ec8e75ac0b21e30ccf0e9b50119"}),
+    ),
+})
+
+
+def _digest_string(value: Any) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value))
+
+
+def _source_reviewed_rework(context: dict[str, Any], record: Any) -> bool:
+    """Validate the maintained projection's proof before comparing base semantics.
+
+    qualify is a pure predicate, not receipt authentication. work_item_context
+    constructs the receipt from native accepted history; clean intake cannot
+    supply that history. The actual complete attempt remains in the packet and
+    in its full-context sizing review.
+    """
+    attempt = context.get("rework")
+    if (SOURCE_REVIEWED_REWORK_V1["max_reworks"] != 1 or not isinstance(attempt, dict)
+            or set(attempt) != {"reason", "evidence", "prior_goal_review", "native_rework_receipt"}):
+        return False
+    review = attempt.get("prior_goal_review")
+    receipt = attempt.get("native_rework_receipt")
+    if (not isinstance(attempt["reason"], str) or not attempt["reason"].strip()
+            or not isinstance(attempt["evidence"], list) or not attempt["evidence"]
+            or any(not isinstance(x, str) or not x.strip() for x in attempt["evidence"])
+            or not isinstance(review, dict) or set(review) != {"verdict", "reason", "evidence"}
+            or not isinstance(review["verdict"], str) or review["verdict"] not in {"fail", "inconclusive"}
+            or not isinstance(review["reason"], str) or not review["reason"].strip()
+            or not isinstance(review["evidence"], list) or not review["evidence"]
+            or any(not isinstance(x, str) or not x.strip() for x in review["evidence"])):
+        return False
+    fields = {"schema", "work_item_id", "rework_count", "prior_handoff_id",
+              "prior_result_sha256", "prior_context_sha256", "prior_goal_context_sha256", "prior_semantic_sha256",
+              "prior_handoff_contract_sha256", "prior_goal_contract_sha256"}
+    if (not isinstance(receipt, dict) or set(receipt) != fields
+            or receipt["schema"] != "source-reviewed-native-rework.v1"
+            or type(receipt["rework_count"]) is not int or receipt["rework_count"] != 1
+            or receipt["work_item_id"] != context.get("work_item_id")
+            or not isinstance(receipt["prior_handoff_id"], str) or not receipt["prior_handoff_id"].strip()
+            or any(not _digest_string(receipt[field]) for field in fields if field.endswith("sha256"))
+            or receipt["prior_semantic_sha256"] != record["semantic_context_sha256"]):
+        return False
+    base = dict(context)
+    base.pop("rework")  # Only the audited native envelope, never arbitrary fields.
+    return semantic_subject_sha256(base) == record["semantic_context_sha256"]
+
+
 def semantic_subject_sha256(context: dict[str, Any]) -> str:
     """Hash complete semantics, excluding only late-bound execution identity/review."""
     if not isinstance(context, dict) or not isinstance(context.get("local_execution_v1"), dict):
@@ -286,7 +343,8 @@ def _source_reviewed_unit(context: dict[str, Any]) -> tuple[Any, bool]:
     if record is None:
         return None, False
     try:
-        exact = semantic_subject_sha256(context) == record["semantic_context_sha256"]
+        exact = (semantic_subject_sha256(context) == record["semantic_context_sha256"]
+                 if "rework" not in context else _source_reviewed_rework(context, record))
     except ValueError:
         return record, False
     contract = context.get("local_execution_v1")
@@ -654,6 +712,12 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
             "review_evidence": [dict(evidence) for evidence in source_record["review_evidence"]],
             "authority": "Sizing disposition only; existing effect and dispatch controls still apply.",
         }
+        if "rework" in context:
+            result["source_reviewed_admission"]["bounded_rework"] = {
+                "attempt_semantic_sha256": semantic_subject_sha256(context),
+                "native_rework_receipt": dict(context["rework"]["native_rework_receipt"]),
+                "review_evidence": [dict(e) for e in SOURCE_REVIEWED_REWORK_V1["review_evidence"]],
+            }
     if status == "qualified" and reviewed_match:
         result["reviewed_supervisor_admission"] = {
             "package_id": context["package_id"],

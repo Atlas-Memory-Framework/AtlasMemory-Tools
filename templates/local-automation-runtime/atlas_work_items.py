@@ -393,6 +393,85 @@ def event(
     return payload
 
 
+def _native_source_rework_receipt(item: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Project one preserved independent failure; never read a caller receipt.
+
+    Hashes correlate native queue records. They are not signatures and cannot
+    establish authenticity for a caller that can rewrite the runtime store.
+    """
+    invalid = {"invalid_native_history": True}
+    try:
+        import atlas_local_sizing as sizing
+        uncertainty = item.get("process_uncertainty")
+        if isinstance(uncertainty, dict) and uncertainty.get("status") == "unresolved":
+            return invalid
+        prior = item["previous_attempts"]
+        if (type(prior) is not list or len(prior) != 1
+                or type(item["lifecycle"]["rework_count"]) is not int
+                or item["lifecycle"]["rework_count"] != 1):
+            return invalid
+        previous = prior[0]["result"]
+        evidence = previous["evidence"]
+        context = evidence["work_item_context"]
+        goal = evidence["goal_acceptance"]
+        supervised = evidence["supervised_handoff"]
+        binding = supervised["binding"]
+        accepted = item["supervised_handoff_v1"]["accepted"][binding["handoff_id"]]
+        accepted_binding = dict(accepted["binding"])
+        binding_hash = accepted_binding.pop("binding_hash")
+        def digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                            ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+        source_admission = evidence["local_sizing"]["source_reviewed_admission"]
+        record = sizing.SOURCE_REVIEWED_UNITS_V3.get(current.get("package_id"))
+        if record is None or "rework" in context:
+            return invalid
+        prior_context_hash = digest(context)
+        base = dict(current)
+        base.pop("rework", None)
+        if (previous["status"] != "blocked" or evidence.get("rework_count") != 0
+                or type(evidence.get("rework_count")) is not int
+                or evidence.get("goal_review_required") is not True
+                or not isinstance(goal.get("verdict"), str)
+                or goal.get("verdict") not in {"fail", "inconclusive"}
+                or goal.get("role_id") != "semantic-alignment"
+                or goal.get("context_hash") != content_hash(context)
+                or goal.get("contract_hash") != evidence.get("contract_hash")
+                or binding != accepted_binding or binding_hash != digest(accepted_binding)
+                or binding.get("context_hash") != prior_context_hash
+                or binding.get("work_item_id") != item_id(item)
+                or binding.get("role_id") != "semantic-alignment"
+                or binding.get("role_assignment", {}).get("purpose") != "goal-review"
+                or type(binding.get("rework_count")) is not int or binding["rework_count"] != 0
+                or accepted.get("host_receipt") != supervised.get("host_receipt")
+                or accepted.get("result_sha256") != supervised.get("result_sha256")
+                or accepted["acknowledgement"].get("status") != "accepted"
+                or accepted["acknowledgement"].get("item_status") != "blocked"
+                or accepted["acknowledgement"].get("work_item_id") != item_id(item)
+                or accepted["acknowledgement"].get("handoff_id") != binding["handoff_id"]
+                or accepted["acknowledgement"].get("result_sha256") != supervised.get("result_sha256")
+                or accepted["acknowledgement"].get("original_result_sha256") != supervised.get("result_sha256")
+                or evidence["local_sizing"].get("status") != "qualified"
+                or evidence["local_sizing"].get("policy_id") != sizing.SOURCE_REVIEWED_POLICY_ID
+                or source_admission.get("package_id") != current.get("package_id")
+                or source_admission.get("complexity_flags") != base["local_execution_v1"]["complexity_flags"]
+                or source_admission.get("sizing_subject_sha256") != sizing.sizing_subject_sha256(context)
+                or sizing.semantic_subject_sha256(context) != record["semantic_context_sha256"]
+                or sizing.semantic_subject_sha256(base) != record["semantic_context_sha256"]
+                or source_admission.get("semantic_context_sha256") != record["semantic_context_sha256"]):
+            return invalid
+        return {"schema": "source-reviewed-native-rework.v1", "work_item_id": item_id(item),
+                "rework_count": 1, "prior_handoff_id": binding["handoff_id"],
+                "prior_result_sha256": supervised["result_sha256"],
+                "prior_context_sha256": prior_context_hash,
+                "prior_goal_context_sha256": content_hash(context),
+                "prior_semantic_sha256": source_admission["semantic_context_sha256"],
+                "prior_handoff_contract_sha256": binding["contract_hash"],
+                "prior_goal_contract_sha256": goal["contract_hash"]}
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError, RecursionError):
+        return invalid
+
+
 def work_item_context(item: dict[str, Any]) -> dict[str, Any]:
     source_id = item_id(item)
     scheduler = item.get("scheduler") if isinstance(item.get("scheduler"), dict) else {}
@@ -481,6 +560,14 @@ def work_item_context(item: dict[str, Any]) -> dict[str, Any]:
         review = previous_evidence.get("goal_acceptance")
         context["rework"] = {"reason": attempt.get("reason"), "evidence": attempt.get("evidence"),
             "prior_goal_review": {key: review.get(key) for key in ("verdict", "reason", "evidence")} if isinstance(review, dict) else None}
+        if (isinstance(context.get("local_execution_v1"), dict)
+                and context["local_execution_v1"].get("policy_id") == atlas_local_sizing.SOURCE_REVIEWED_POLICY_ID):
+            context["rework"]["native_rework_receipt"] = _native_source_rework_receipt(item, context)
+    elif (isinstance(context.get("local_execution_v1"), dict)
+          and context["local_execution_v1"].get("policy_id") == atlas_local_sizing.SOURCE_REVIEWED_POLICY_ID
+          and (item.get("lifecycle", {}).get("rework_count", 0) != 0
+               or ("previous_attempts" in item and (not isinstance(prior, list) or bool(prior))))):
+        context["rework"] = {"invalid_native_history": True}
     return context
 
 
@@ -989,6 +1076,9 @@ class AtlasWorkItemOperationProvider:
                 raise ValueError("unresolved process uncertainty cannot be explicitly reworked")
             if item_state(item) != "blocked":
                 raise ValueError("only blocked items can be reworked")
+            pending = item.get("supervised_handoff_v1", {}).get("pending")
+            if pending is not None:
+                raise ValueError("an unresolved supervised handoff cannot be explicitly reworked")
             lifecycle = item.setdefault("lifecycle", {})
             if lifecycle.get("rework_count", 0) != 0:
                 raise ValueError("rework budget exhausted (one explicit rework maximum)")

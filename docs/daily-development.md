@@ -199,3 +199,30 @@ cd "$TOOLS"
 ```
 
 Tests install temporary runtime copies and Git checkouts, restart the CLI as real subprocesses, exercise the maintained lifecycle and replay/refusal paths, and install tripwires for sockets, databases and non-Git process execution. They fill the emitted templates with synthetic results through the goal gate, verify exact original-byte retention, and check that refused malformed imports leave queue/job bytes unchanged. They also distinguish a refused nonstring evidence output from an imported unexpected string output that blocks the workflow. A deterministic competing-prepare regression covers the previously reproduced scan/claim race and verifies that the unrelated item stays ready without a claim while the first reservation remains replayable. Synthetic fixture results verify adapter behavior; they do not establish model quality or real task acceptance.
+
+### One native same-scope rework for source-reviewed units
+
+The source-owned bounded repair disposition permits at most one rework of a
+registered v3 unit after an imported independent goal verdict of `fail` or
+`inconclusive`. Use the maintained `requeue_for_rework` API with reason and
+linked evidence only after the prior handoff was consumed. The existing native
+one-rework limit remains. Unresolved process uncertainty and an outstanding
+handoff prohibit requeue; a valid new pending handoff remains replayable.
+
+The projection checks the prior native result, original accepted goal-role
+receipt, actual prior context, source-semantic record and both context/contract
+hash conventions. The new packet retains failure history and its derived native
+receipt. Full semantic and sizing hashes retain that complete attempt. The
+source matcher compares unchanged base semantics only after validating this
+explicit envelope; it does not discard arbitrary caller history. A new
+independent sizing review must bind the complete attempted context before
+prepare can succeed. Clean intake cannot supply previous attempts or lifecycle
+state to manufacture native origin. These hashes correlate local trusted state;
+they are not signatures or proof against an actor that can rewrite the store.
+
+Changing spec, scope, requirements, routes, flags, plan or package requires a new
+reviewed disposition; a stronger model or a retry is no exemption. A failure
+before an independent accepted goal receipt exists is not covered by this
+capability. Keep those attempts blocked for explicit investigation. Native
+rework qualification and offline lifecycle fixtures establish no application
+result or unattended execution permission.

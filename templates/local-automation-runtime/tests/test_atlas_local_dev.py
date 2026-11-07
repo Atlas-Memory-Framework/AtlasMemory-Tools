@@ -178,6 +178,106 @@ print(json.dumps({"task":item,"record":record}))
         self.assertEqual(reservation["packet"]["work_item_context"]["local_execution_v1"]["complexity_flags"],
                          ["security_or_authority"])
 
+    def test_source_reviewed_native_rework_preserves_history_and_pending_replay(self):
+        checkout, revision, path = self.make_intake(policy="local-reviewed-unit-v2")
+        task = json.loads(path.read_text())
+        task["metadata"]["local_execution_v1"]["sizing_review"]["rationale"] += " café → bounded"
+        task["metadata"].update(package_id="SYNTHETIC-NATIVE-REWORK", manifest_leaf_id=task["id"],
+                                package_hash="sha256:" + "c" * 64)
+        task["metadata"]["local_execution_v1"].update(
+            policy_id="local-source-reviewed-unit-v3", complexity_flags=["security_or_authority"])
+        code = """
+import json,sys,atlas_work_items as wi,atlas_local_sizing as sz
+item=json.load(sys.stdin);ctx=wi.work_item_context(item)
+item['metadata']['local_execution_v1']['sizing_review']['subject_sha256']=sz.sizing_subject_sha256(ctx)
+print(json.dumps({'task':item,'record':{'semantic_context_sha256':sz.semantic_subject_sha256(ctx),
+ 'complexity_flags':['security_or_authority'],'review_evidence':[{'artifact':'synthetic-only','sha256':'e'*64}]}}))
+"""
+        value = json.loads(subprocess.run([sys.executable, "-B", "-c", code], input=json.dumps(task),
+                                         capture_output=True, text=True, env=self.env, check=True).stdout)
+        task = value['task']
+        with (self.runtime / "atlas_local_sizing.py").open("a") as stream:
+            stream.write("\nSOURCE_REVIEWED_UNITS_V3=MappingProxyType(" + repr({task['metadata']['package_id']:value['record']}) + ")\n")
+        path.write_text(json.dumps(task));self.ok("add", "--task", str(path))
+        first_replay = None
+        for role in ("implementation", "test-runner", "code-review", "semantic-alignment"):
+            reservation = self.ok("prepare", "--id", task['id'], "--revision", revision)
+            self.assertEqual(reservation['binding']['role_id'], role)
+            files = self.import_files(reservation)
+            if role == "implementation":
+                first_replay = [self.root / ("initial-"+str(i)+".json") for i in range(3)]
+                for source,dest in zip(files,first_replay):dest.write_bytes(source.read_bytes())
+            if role == "semantic-alignment":
+                result = json.loads(files[2].read_text());result['role_results'][0]['goal_review'].update(
+                    verdict='fail',reason='Synthetic fixture caught a same-scope negative behavior.')
+                files[2].write_text(json.dumps(result))
+            self.ok(*self.import_args(files))
+        self.assertEqual(self.ok('status')['work_items'][0]['state'],'blocked')
+        requeue = """
+import json,sys,atlas_work_items as wi,atlas_local_sizing as sz
+store=wi.AtlasWorkItemStore(sys.argv[1]);provider=wi.AtlasWorkItemOperationProvider(store,claimed_by='operator:atlas-daily-dev')
+i=provider.requeue_for_rework('WI-CLI',reason='Repair the independent negative in unchanged scope.',evidence=['synthetic-native-failure'])
+c=wi.work_item_context(i)
+print(json.dumps({'context':c,'subject':sz.sizing_subject_sha256(c)}))
+"""
+        value = json.loads(subprocess.run([sys.executable, '-B','-c',requeue,str(self.state/'work-items.json')],
+                                         capture_output=True,text=True,env=self.env,check=True).stdout)
+        context=value['context'];receipt=context['rework']['native_rework_receipt']
+        self.assertEqual(receipt['schema'],'source-reviewed-native-rework.v1')
+        self.assertEqual(receipt['rework_count'],1)
+        self.assertNotEqual(receipt['prior_context_sha256'],receipt['prior_goal_context_sha256'])
+        self.assertEqual(context['rework']['prior_goal_review']['verdict'],'fail')
+        self.assertNotEqual(receipt['prior_handoff_contract_sha256'],receipt['prior_goal_contract_sha256'])
+        # Old sizing cannot silently carry acceptance across the new attempt.
+        refused=self.run_cli('prepare','--id',task['id'],'--revision',revision)
+        self.assertEqual(refused.returncode,2)
+        repair = """
+import sys,atlas_work_items as wi,atlas_local_sizing as sz
+store=wi.AtlasWorkItemStore(sys.argv[1])
+def review(i):
+ c=wi.work_item_context(i)
+ i['metadata']['local_execution_v1']['sizing_review']={'reviewer':'independent synthetic rework reviewer',
+  'rationale':'Same scoped failure with preserved native history fits one reviewed rework.',
+  'subject_sha256':sz.sizing_subject_sha256(c)}
+ return i
+store.update_item('WI-CLI',review)
+"""
+        subprocess.run([sys.executable,'-B','-c',repair,str(self.state/'work-items.json')],env=self.env,check=True)
+        reservation=self.ok('prepare','--id',task['id'],'--revision',revision)
+        self.assertEqual(reservation['binding']['rework_count'],1)
+        self.assertEqual(reservation,self.ok('prepare','--id',task['id'],'--revision',revision))
+        projected=reservation['packet']['work_item_context'];self.assertEqual(projected['rework'],context['rework'])
+        # Validate real projected native state against mutations in fresh subprocesses.
+        mutation_code = """
+import copy,json,sys,atlas_work_items as wi,atlas_local_sizing as sz
+p=json.load(open(sys.argv[1]));original=p['work_items'][0]
+changes=[lambda i:i['lifecycle'].update(rework_count=2),
+ lambda i:i.update(process_uncertainty={'status':'unresolved'}),
+ lambda i:i['previous_attempts'].append(copy.deepcopy(i['previous_attempts'][0])),
+ lambda i:i['previous_attempts'][0]['result']['evidence']['goal_acceptance'].update(verdict='pass'),
+ lambda i:i['previous_attempts'][0]['result']['evidence']['goal_acceptance'].update(verdict=[]),
+ lambda i:i['previous_attempts'][0]['result']['evidence']['supervised_handoff'].update(result_sha256='f'*64),
+ lambda i:i['previous_attempts'][0]['result']['evidence']['work_item_context'].update(goal='Different semantics remain forbidden.'),
+ lambda i:i.update(spec_hash='sha256:'+'f'*64),
+ lambda i:i.update(previous_attempts={}),
+ lambda i:i['supervised_handoff_v1'].update(accepted={})]
+for change in changes:
+ i=copy.deepcopy(original);change(i);c=wi.work_item_context(i)
+ c['local_execution_v1']['sizing_review']['subject_sha256']=sz.sizing_subject_sha256(c)
+ assert sz.qualify(c)['status']=='blocked',c
+print(len(changes))
+"""
+        result=subprocess.run([sys.executable,'-B','-c',mutation_code,str(self.state/'work-items.json')],
+                              capture_output=True,text=True,env=self.env,check=True)
+        self.assertEqual(result.stdout.strip(),'10')
+        for role in ('implementation','test-runner','code-review','semantic-alignment','evidence-rollup'):
+            if role!='implementation':reservation=self.ok('prepare','--id',task['id'],'--revision',revision)
+            self.assertEqual(reservation['binding']['role_id'],role)
+            self.ok(*self.import_args(self.import_files(reservation)))
+        self.assertEqual(self.ok('status')['work_items'][0]['state'],'done')
+        before=self.snapshot();self.assertEqual(self.ok(*self.import_args(first_replay))['status'],'duplicate')
+        self.assertEqual(self.snapshot(),before)
+
     def prepared(self, policy="local-luna-unit-v1"):
         checkout, revision, task = self.make_intake(policy=policy)
         self.ok("add", "--task", str(task))
