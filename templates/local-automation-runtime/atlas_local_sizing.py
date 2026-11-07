@@ -18,6 +18,7 @@ from typing import Any
 POLICY_ID = "local-luna-unit-v1"
 POLICY_VERSION = 1
 REVIEWED_POLICY_ID = "local-reviewed-unit-v2"
+SOURCE_REVIEWED_POLICY_ID = "local-source-reviewed-unit-v3"
 REVIEWED_FIELDS = {"implementation_model", "review_model", "sizing_review"}
 IMPLEMENTATION_MODELS = {"gpt-6-luna": "medium", "gpt-6.1-sol": "high", "gpt-6.1-terra": "high"}
 REVIEW_MODELS = {"gpt-6.1-sol": "high", "gpt-6.1-terra": "high"}
@@ -135,6 +136,174 @@ REVIEWED_SUPERVISOR_PACKETS_V1 = MappingProxyType({
         "review_evidence": _SUPERVISOR_EVIDENCE,
     }),
 })
+
+
+# Source-owned dispositions, never loaded from intake, environment or a task path.
+# Each entry freezes the complete reviewed semantics. Only checkout path/revision
+# and the fresh sizing review may vary; their full values remain bound by the
+# ordinary sizing subject and are verified again by the supervised handoff.
+# No record admits new effects, grants build approval or changes a runtime route.
+# Evidence paths resolve in the reviewed engineering workspace, not in the runtime.
+_ENGINEERING_UNIT_REVIEWS_V3 = (
+    MappingProxyType({
+        "artifact": ".automation/atlasmemory-tools/dispatch-remediation/security/semantic-review.json",
+        "sha256": "1baf495a05a922612d8ec7f78dcad8eac7e8900342d454ad2f9042c98bc2e80b",
+    }),
+    MappingProxyType({
+        "artifact": ".automation/atlasmemory-tools/dispatch-remediation/goal-review/semantic-dispositions-19.json",
+        "sha256": "c83b1c272cd180627358ee5d37c4ba5db31a84f75061d0e7b5a48cbea030a98e",
+    }),
+    MappingProxyType({
+        "artifact": ".automation/atlasmemory-tools/dispatch-remediation/security/final-context-attestation.json",
+        "sha256": "02763e1231463ca5f83483058d9b26c9f1e3f60ab4e2502a09b73ad38d636a88",
+    }),
+    MappingProxyType({
+        "artifact": ".automation/atlasmemory-tools/dispatch-remediation/goal-review/final-context-attestation.json",
+        "sha256": "f11c84d3d1ada8494e1a2c3f7edcd8d5197723aba5099fade03546698572d175",
+    }),
+)
+SOURCE_REVIEWED_UNITS_V3 = MappingProxyType({
+    "engineering-mp12/M12-B01": MappingProxyType({
+        "semantic_context_sha256": "526b7c12ae8567c008d9ffdc6341bfe2038d9ab69a248e9b538367f5efd23f59",
+        "complexity_flags": ('new_dependency_or_service',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-B03": MappingProxyType({
+        "semantic_context_sha256": "2c114c9f928cbf01b0a94018a2fb8a5ad9b690749df86e49aad57e059501ef46",
+        "complexity_flags": ('security_or_authority',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-B04": MappingProxyType({
+        "semantic_context_sha256": "93ab734e1c7ecbeb6d51216a0898568af34cc67bc5c162110a661e25a0bf8d93",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-B06": MappingProxyType({
+        "semantic_context_sha256": "101fadd2a1530cd63a2008b0fff610c7ae12896a92bdbedb3286f78d9909f9c4",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-C03": MappingProxyType({
+        "semantic_context_sha256": "eb6b390f1375c2017a5bb05c43ebb515201a3eab2ef552e5f770fa0edb720a0d",
+        "complexity_flags": ('security_or_authority',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-C04": MappingProxyType({
+        "semantic_context_sha256": "de42402e9554f709a66238ea5dc523b4907bf2d93a6f6206b2430d5c8b8d0b3e",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-C08": MappingProxyType({
+        "semantic_context_sha256": "043bcf13169ae2594cb403ee98258fdbf8fe471225f475d163c344603c7ba1e3",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-C06": MappingProxyType({
+        "semantic_context_sha256": "da9720cc54a8abe2d652ff61cc99c30c1d47a0895cba9e91a5639d26143cc2bc",
+        "complexity_flags": ('security_or_authority',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-P01": MappingProxyType({
+        "semantic_context_sha256": "dff16d84ef9f326e0a99fedc588c58d4ffb139c7d23b74d0a83c686cb2503c65",
+        "complexity_flags": ('migration',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-P02": MappingProxyType({
+        "semantic_context_sha256": "68b21799647a17d17862ad74f150bdde65922e4a6c2dfe5c18d247721beadbbf",
+        "complexity_flags": ('migration',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-P03": MappingProxyType({
+        "semantic_context_sha256": "b5c4cbe7390dea2f3fb674e61873398012cc453c19b695a33126a2b3ab9cf934",
+        "complexity_flags": ('security_or_authority',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-P06": MappingProxyType({
+        "semantic_context_sha256": "acd0425b60bd5179257024318baf4dae51d25236ff7aa9bd62663193dff48673",
+        "complexity_flags": ('security_or_authority',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-P07": MappingProxyType({
+        "semantic_context_sha256": "dcbe1a6fda3d1a8c887e3d699d42285afba8155307c486a7d375c7658b728299",
+        "complexity_flags": ('security_or_authority',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-P08": MappingProxyType({
+        "semantic_context_sha256": "8bdb1c3ed9cc1bc9288d36220baa47eab468c2b17357ecfe916e7a88cb7834ac",
+        "complexity_flags": ('migration',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-E01": MappingProxyType({
+        "semantic_context_sha256": "571f18e30ad07fdf6b1c6bb5c7033f8ada49cd0bda52c432524c67df7eefa2fd",
+        "complexity_flags": ('security_or_authority',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-E02": MappingProxyType({
+        "semantic_context_sha256": "58db003e6894760dffafcc7611bec9eaa4d399c82768065354768fb8ffdae9fa",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-E03": MappingProxyType({
+        "semantic_context_sha256": "b3f0a04d151a617e2ebc74edd2ee037fa8cfec6f8c4aa9130983d831058fc058",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-Q01": MappingProxyType({
+        "semantic_context_sha256": "ea8f280ab2e145632f7f961adccd6232d49f4dfe61fc60feab11371c1b5f1153",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+    "engineering-mp12/M12-B05": MappingProxyType({
+        "semantic_context_sha256": "47c4f956e23c58cbc3900a97dcf1b80bbdd6b880a6993b4fe31f5a63a00e3d18",
+        "complexity_flags": ('cross_component_protocol',),
+        "review_evidence": _ENGINEERING_UNIT_REVIEWS_V3,
+    }),
+})
+
+
+
+def semantic_subject_sha256(context: dict[str, Any]) -> str:
+    """Hash complete semantics, excluding only late-bound execution identity/review."""
+    if not isinstance(context, dict) or not isinstance(context.get("local_execution_v1"), dict):
+        raise ValueError("work-item context and local_execution_v1 must be objects")
+    subject = dict(context)
+    subject.pop("execution_repo", None)
+    subject.pop("base_branch", None)
+    contract = dict(context["local_execution_v1"])
+    contract.pop("sizing_review", None)
+    subject["local_execution_v1"] = contract
+    try:
+        encoded = json.dumps(subject, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("work-item context must be canonical JSON") from exc
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _source_reviewed_unit(context: dict[str, Any]) -> tuple[Any, bool]:
+    package_id = context.get("package_id")
+    record = SOURCE_REVIEWED_UNITS_V3.get(package_id) if isinstance(package_id, str) else None
+    if record is None:
+        return None, False
+    try:
+        exact = semantic_subject_sha256(context) == record["semantic_context_sha256"]
+    except ValueError:
+        return record, False
+    contract = context.get("local_execution_v1")
+    path, revision = context.get("execution_repo"), context.get("base_branch")
+    full_revision = (isinstance(revision, str) and len(revision) in (40, 64)
+                     and all(char in "0123456789abcdef" for char in revision))
+    # No filesystem discovery here. Actual checkout root and HEAD are checked
+    # independently by prepare_handoff before a role can be dispatched.
+    absolute_path = (isinstance(path, str) and path.startswith("/") and not path.startswith("//")
+                     and not any(ord(char) < 32 or 0xD800 <= ord(char) <= 0xDFFF for char in path)
+                     and str(PurePosixPath(path)) == path
+                     and ".." not in PurePosixPath(path).parts)
+    exact = (exact and full_revision and absolute_path
+             and contract.get("complexity_flags") == list(record["complexity_flags"])
+             and contract.get("role_purposes") == {
+                 role["role_id"]: role["purpose"] for role in _SUPERVISOR_ROLES})
+    return record, exact
 
 
 def sizing_subject_sha256(context: dict[str, Any]) -> str:
@@ -301,7 +470,11 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
         reasons.append("reviewed supervisor packet context does not match its frozen metadata")
 
     policy = contract.get("policy_id")
-    is_v2 = policy == REVIEWED_POLICY_ID
+    is_v3 = policy == SOURCE_REVIEWED_POLICY_ID
+    is_v2 = isinstance(policy, str) and policy in {REVIEWED_POLICY_ID, SOURCE_REVIEWED_POLICY_ID}
+    source_record, source_match = _source_reviewed_unit(context) if is_v3 else (None, False)
+    if is_v3 and not source_match:
+        reasons.append("source-reviewed unit does not match frozen semantics and execution identity")
     fields = CONTRACT_FIELDS | REVIEWED_FIELDS if is_v2 else CONTRACT_FIELDS
     unknown = sorted((str(key) for key in set(contract).difference(fields)))
     missing = sorted(fields.difference(contract))
@@ -309,8 +482,8 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
         reasons.append("unknown local_execution_v1 field(s): " + ", ".join(str(key) for key in unknown))
     if missing:
         reasons.append("missing local_execution_v1 field(s): " + ", ".join(missing))
-    if not isinstance(policy, str) or policy not in {POLICY_ID, REVIEWED_POLICY_ID}:
-        reasons.append(f"unsupported policy_id; expected {POLICY_ID} or {REVIEWED_POLICY_ID}")
+    if not isinstance(policy, str) or policy not in {POLICY_ID, REVIEWED_POLICY_ID, SOURCE_REVIEWED_POLICY_ID}:
+        reasons.append(f"unsupported policy_id; expected {POLICY_ID}, {REVIEWED_POLICY_ID} or {SOURCE_REVIEWED_POLICY_ID}")
     if is_v2:
         _validate_sizing_review(context, contract, reasons)
 
@@ -325,9 +498,12 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
         role_purposes = {role_id.strip(): purpose for role_id, purpose in raw_purposes.items()}
         if any(purpose not in PURPOSES for purpose in role_purposes.values()):
             reasons.append("role_purposes contains an unknown purpose")
-    records = _role_records(roles, reasons, strict_aliases=reviewed_match)
+    records = _role_records(roles, reasons, strict_aliases=reviewed_match or is_v3)
     if roles is None:
-        if reviewed_match:
+        if is_v3:
+            records = [{"role_id": role["role_id"], "goal_gate": role["goal_gate"]}
+                       for role in _SUPERVISOR_ROLES]
+        elif reviewed_match:
             records = [
                 {"role_id": role["role_id"], "goal_gate": role["goal_gate"]}
                 for role in reviewed_packet["roles"]
@@ -349,6 +525,12 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
         expected_alias_roles = {r["role_id"] for r in reviewed_packet["roles"]}
         if set(role_purposes) != expected_alias_roles:
             reasons.append("reviewed supervisor packet must retain all five role purposes")
+    if is_v3 and roles is not None:
+        admitted_roles = {(role["role_id"], role["goal_gate"]) for role in _SUPERVISOR_ROLES}
+        if any((record["role_id"], record["goal_gate"]) not in admitted_roles
+               or record["raw_role_id"] != record["role_id"]
+               or not record["goal_gate_present"] for record in records):
+            reasons.append("selected roles must be an exact subset of the source-reviewed unit roles")
     if not records:
         reasons.append("at least one selected role is required")
 
@@ -439,14 +621,14 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
         "complexity_flags": len(flags) if flags is not None else None,
     }
     if reasons:
-        return {"status": "blocked", "policy_id": policy if isinstance(policy, str) and policy in (POLICY_ID, REVIEWED_POLICY_ID) else None, "policy_version": 2 if is_v2 else POLICY_VERSION,
+        return {"status": "blocked", "policy_id": policy if isinstance(policy, str) and policy in (POLICY_ID, REVIEWED_POLICY_ID, SOURCE_REVIEWED_POLICY_ID) else None, "policy_version": 3 if is_v3 else 2 if is_v2 else POLICY_VERSION,
                 "reasons": reasons, "assignments": {}, "observed_counts": counts}
 
     budget_coding = full_packet_coding or coding_count > 0
     oversized = budget_coding and bool(paths is not None and len(paths) > 4)
     oversized = oversized or budget_coding and bool(criteria_values is not None and len(criteria_values) > 3)
     oversized = oversized or budget_coding and bool(interfaces is not None and len(interfaces) > 1)
-    needs_decomposition = (coding_count > 0 or full_packet_coding) and bool(questions or (flags and not reviewed_match))
+    needs_decomposition = (coding_count > 0 or full_packet_coding) and bool(questions or (flags and not (reviewed_match or source_match)))
     if oversized:
         status = "split_required"
         reasons.append("bounded scope exceeds the local unit policy")
@@ -460,9 +642,18 @@ def qualify(context: dict[str, Any], roles: list[dict[str, Any]] | None = None) 
     permitted = assignments if status == "qualified" else {
         role_id: route for role_id, route in assignments.items() if route["purpose"] == "decomposition"
     } if status == "decomposition_required" else {}
-    result = {"status": status, "policy_id": policy, "policy_version": 2 if is_v2 else POLICY_VERSION,
+    result = {"status": status, "policy_id": policy, "policy_version": 3 if is_v3 else 2 if is_v2 else POLICY_VERSION,
               "reasons": reasons, "assignments": permitted,
               "observed_counts": counts}
+    if status == "qualified" and source_match:
+        result["source_reviewed_admission"] = {
+            "package_id": context["package_id"],
+            "semantic_context_sha256": source_record["semantic_context_sha256"],
+            "sizing_subject_sha256": sizing_subject_sha256(context),
+            "complexity_flags": list(source_record["complexity_flags"]),
+            "review_evidence": [dict(evidence) for evidence in source_record["review_evidence"]],
+            "authority": "Sizing disposition only; existing effect and dispatch controls still apply.",
+        }
     if status == "qualified" and reviewed_match:
         result["reviewed_supervisor_admission"] = {
             "package_id": context["package_id"],

@@ -98,6 +98,37 @@ daily status
 
 A changed context requires a fresh sizing review/hash. An existing operator task using `local-luna-unit-v1` remains compatible: its fixed route is Luna/medium for implementation/validation and Sol/high for review. Its contract omits the v2 model/review fields. Neither policy permits unresolved complexity to become coding work silently. Resolve questions, split oversized scope, or obtain an explicit new sizing decision before dispatch. A reviewed stronger model does not expand write/effect authority.
 
+### Source-reviewed complexity dispositions
+
+`local-source-reviewed-unit-v3` is a separate, explicit policy for source-owned,
+independently reviewed unit dispositions. It accepts no caller-supplied waiver
+or review registry path. The installed `atlas_local_sizing.py` must contain the
+exact package ID and semantic hash in `SOURCE_REVIEWED_UNITS_V3`. An empty or
+unknown entry fails closed. Preserve genuine complexity flags in every task.
+
+The source record freezes the complete projected work-item context except
+`execution_repo`, `base_branch` and `local_execution_v1.sizing_review`. These are
+the only late-bound inputs. The actual work-item ID is included in the v3
+context. Goals, criteria, dependencies, validation, scope, model routes, flags,
+workflow request and plan/package/spec bindings remain hash-bound. Any semantic
+change needs another independent source disposition and a reviewed runtime
+upgrade into a new pinned directory; intake metadata cannot create one.
+
+Use the same v2 contract fields and independent task-specific sizing review.
+Its full sizing subject still binds the real isolated checkout path and Git SHA.
+The supervised handoff independently verifies the actual checkout root and HEAD.
+Four files, three criteria, one changed interface, no unresolved questions and
+the five independent lifecycle roles remain required, including when requesting
+only one review role. An interface label does not prove that the work changes
+only one protocol; semantic sizing must assess the actual contract boundaries.
+
+A `source_reviewed_admission` result records the retained flags, frozen semantic
+hash, full sizing subject and source review references. It is a sizing
+disposition. It grants no application build, dispatch, migration, provider,
+unattended, merge or publication authority. Existing permission and effect
+controls, authentic host receipts, objective validation and independent goal
+acceptance still apply. The general v1 and v2 complexity rejections are unchanged.
+
 `add` checks substantive goal/criteria, full scheduler SHA, absolute checkout path, qualification for the selected template roles and current scheduler readiness, then appends one ready item with one creation event under the store lock. Duplicate IDs and caller-owned runtime state are refused. Input files must be strict JSON objects of at most 65,536 bytes; duplicate keys and nonfinite numbers are refused. Errors are JSON with exit code 2.
 
 `status` is read-only: it does not create a directory, queue or lock, claim work or reconcile state. It reports scheduler state/readiness/blockers, pending handoff ID, role, owner and next action. An uninitialized queue is an observation, not an error.

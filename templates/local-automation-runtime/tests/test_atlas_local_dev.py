@@ -130,6 +130,54 @@ print(json.dumps(item))
             task = json.loads(result.stdout)
         return checkout, revision, self.write_json(ident + ".json", task)
 
+    def test_source_reviewed_v3_uses_full_context_and_real_checkout_head(self):
+        checkout, revision, path = self.make_intake(policy="local-reviewed-unit-v2")
+        task = json.loads(path.read_text())
+        task["metadata"].update(package_id="SYNTHETIC-V3/CLI", manifest_leaf_id=task["id"],
+                                package_hash="sha256:" + "c" * 64)
+        task["metadata"]["local_execution_v1"].update(
+            policy_id="local-source-reviewed-unit-v3", complexity_flags=["security_or_authority"])
+        # Install one synthetic source-owned disposition into this test's private
+        # runtime. The task cannot nominate a registry path or supply the record.
+        code = """
+import json,sys,atlas_work_items,atlas_local_sizing
+item=json.load(sys.stdin)
+context=atlas_work_items.work_item_context(item)
+item["metadata"]["local_execution_v1"]["sizing_review"]["subject_sha256"]=atlas_local_sizing.sizing_subject_sha256(context)
+record={"semantic_context_sha256":atlas_local_sizing.semantic_subject_sha256(context),
+        "complexity_flags":("security_or_authority",),
+        "review_evidence":({"artifact":"synthetic-review.json","sha256":"e"*64},)}
+print(json.dumps({"task":item,"record":record}))
+"""
+        result = subprocess.run([sys.executable, "-B", "-c", code], input=json.dumps(task),
+                                capture_output=True, text=True, env=self.env, check=True)
+        synthetic = json.loads(result.stdout)
+        task, record = synthetic["task"], synthetic["record"]
+        source = self.runtime / "atlas_local_sizing.py"
+        with source.open("a") as stream:
+            stream.write("\nSOURCE_REVIEWED_UNITS_V3 = MappingProxyType(" + repr({task["metadata"]["package_id"]: record}) + ")\n")
+        path.write_text(json.dumps(task))
+        changed = copy.deepcopy(task)
+        changed["id"] = "DIFFERENT-IDENTITY"
+        changed_path = self.write_json("changed-identity.json", changed)
+        self.refused("add", "--task", str(changed_path), code="task_qualification")
+        self.ok("add", "--task", str(path))
+        # An authentic full SHA in intake does not replace the independent
+        # checkout/HEAD check performed by the maintained handoff API.
+        (checkout / "advanced.txt").write_text("head moved\n")
+        self.git(checkout, "add", "advanced.txt")
+        self.git(checkout, "commit", "-qm", "advance synthetic checkout")
+        result = self.run_cli("prepare", "--id", task["id"], "--revision", revision)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("supervised_handoff_v1", json.loads((self.state / "work-items.json").read_text())["work_items"][0])
+        # Restore only this disposable fixture checkout to the reviewed source.
+        self.git(checkout, "checkout", "-q", revision)
+        reservation = self.ok("prepare", "--id", task["id"], "--revision", revision)
+        self.assertEqual(reservation["binding"]["revision"], revision)
+        self.assertEqual(reservation["binding"]["role_assignment"]["model"], "gpt-6.1-sol")
+        self.assertEqual(reservation["packet"]["work_item_context"]["local_execution_v1"]["complexity_flags"],
+                         ["security_or_authority"])
+
     def prepared(self, policy="local-luna-unit-v1"):
         checkout, revision, task = self.make_intake(policy=policy)
         self.ok("add", "--task", str(task))

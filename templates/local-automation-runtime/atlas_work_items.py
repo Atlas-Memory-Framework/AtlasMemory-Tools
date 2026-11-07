@@ -449,7 +449,11 @@ def work_item_context(item: dict[str, Any]) -> dict[str, Any]:
         import atlas_local_sizing
         contract = metadata["local_execution_v1"]
         allowed = atlas_local_sizing.CONTRACT_FIELDS
-        v2 = isinstance(contract, dict) and contract.get("policy_id") == atlas_local_sizing.REVIEWED_POLICY_ID
+        v2 = (isinstance(contract, dict) and isinstance(contract.get("policy_id"), str)
+              and contract["policy_id"] in {atlas_local_sizing.REVIEWED_POLICY_ID,
+                                            atlas_local_sizing.SOURCE_REVIEWED_POLICY_ID})
+        if isinstance(contract, dict) and contract.get("policy_id") == atlas_local_sizing.SOURCE_REVIEWED_POLICY_ID:
+            context["work_item_id"] = source_id
         if v2:
             allowed = allowed | atlas_local_sizing.REVIEWED_FIELDS
         review = contract.get("sizing_review") if v2 else None
