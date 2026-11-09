@@ -898,6 +898,7 @@ class AzureBoardsProvider:
         timelines = []
         fetched_builds = []
         if build_ids:
+            build_bindings = []
             selected = set()
             for build_id in build_ids:
                 if type(build_id) is int and 0 < build_id <= 2**31 - 1:
@@ -912,15 +913,25 @@ class AzureBoardsProvider:
             accepted = []
             for build_id in selected:
                 if build_id not in listed_ids:
+                    native = None
                     try:
                         native = client.request("GET", f"_apis/build/builds/{build_id}", fresh=True)
                         row = _selected_build_row(native, build_id, repository_data.get("id"))
                     except AzureError:
                         row = None
+                    build_bindings.append(_bounded_build_binding(_selected_build_binding(native, build_id, repository_data.get("id"))))
                     if row is None:
                         blockers.append("selected-build-metadata-unavailable")
                         continue
                     fetched_builds.append(row)
+                else:
+                    rows = [_selected_build_binding(item, build_id, repository_data.get("id"))
+                            for item in builds.items if type(item.get("id")) is int and item["id"] == build_id]
+                    binding = rows[0]
+                    if any(item != binding for item in rows[1:]):
+                        binding = {"build_id": build_id, "bindings_complete": False,
+                                   "binding_missing_fields": [], "binding_malformed_fields": ["build.id"]}
+                    build_bindings.append(_bounded_build_binding(binding))
                 accepted.append(build_id)
             selected = accepted
         else:
@@ -957,8 +968,66 @@ class AzureBoardsProvider:
                 "builds": [{key: item.get(key) for key in ("id", "buildNumber", "status", "result", "sourceBranch", "sourceVersion", "queueTime", "startTime", "finishTime")}
                            for item in builds.items] + fetched_builds, "timelines": timelines,
                 "timeline_scope": "explicit-build-ids" if build_ids else "first-ten-listed-builds",
+                **({"build_bindings": build_bindings} if build_ids else {}),
                 "deployment_authority": False}
 
+
+
+
+_BUILD_BINDING_FIELDS = ("build.definition_id", "build.definition_revision", "build.id", "build.repository_id")
+
+
+def _bounded_build_binding(row: dict) -> dict:
+    def size(value):
+        return len(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8"))
+    if size(row) <= 512:
+        return row
+    fallback = {"build_id": row["build_id"], "bindings_complete": False,
+                "binding_missing_fields": list(_BUILD_BINDING_FIELDS), "binding_malformed_fields": []}
+    assert size(fallback) <= 512
+    return fallback
+
+
+def _selected_build_binding(native: Any, build_id: int, repository_id: Any) -> dict:
+    """Retain only same-row native identity bindings, independent of other families."""
+    row = {"build_id": build_id, "bindings_complete": False,
+           "binding_missing_fields": [], "binding_malformed_fields": []}
+    missing, malformed = row["binding_missing_fields"], row["binding_malformed_fields"]
+    if not isinstance(native, dict):
+        missing.extend(_BUILD_BINDING_FIELDS)
+        return row
+
+    def positive_id(value):
+        return type(value) is int and 0 < value <= 2**31 - 1
+
+    native_id = native.get("id")
+    id_valid = positive_id(native_id) and native_id == build_id
+    if not id_valid:
+        (missing if native_id is None else malformed).append("build.id")
+    repository = native.get("repository")
+    native_repository_id = repository.get("id") if isinstance(repository, dict) else None
+    repository_valid = (isinstance(repository_id, str) and _PROJECT_GUID.fullmatch(repository_id)
+                        and isinstance(native_repository_id, str) and _PROJECT_GUID.fullmatch(native_repository_id)
+                        and native_repository_id.lower() == repository_id.lower())
+    if not repository_valid:
+        absent = repository is None or (isinstance(repository, dict) and native_repository_id is None)
+        (missing if absent else malformed).append("build.repository_id")
+    definition = native.get("definition")
+    values = {}
+    for native_key, key in (("id", "definition_id"), ("revision", "definition_revision")):
+        value = definition.get(native_key) if isinstance(definition, dict) else None
+        if isinstance(definition, dict) and positive_id(value):
+            values[key] = value
+        else:
+            absent = definition is None or (isinstance(definition, dict) and value is None)
+            (missing if absent else malformed).append("build." + key)
+    if id_valid and repository_valid:
+        row["repository_id"] = native_repository_id.lower()
+        row.update(values)
+    row["binding_missing_fields"] = sorted(set(missing))
+    row["binding_malformed_fields"] = sorted(set(malformed))
+    row["bindings_complete"] = not missing and not malformed
+    return row
 
 
 # Published positive UTC insertion dates, IANA leapseconds update 2026-07-06.

@@ -654,6 +654,153 @@ class SelectedBuildAcquisitionTests(unittest.TestCase):
         report = az.AzureBoardsProvider(client).repository_evidence("Website", build_ids=ids, fresh=fresh)
         return report, client.request.call_args_list[1:]
 
+    def test_binding_sidecar_matches_frozen_planning_examples_without_extra_gets(self):
+        repository_id = "11111111-2222-3333-4444-555555555555"
+        valid = {"build_id": 9, "repository_id": repository_id, "definition_id": 7,
+                 "definition_revision": 3, "bindings_complete": True,
+                 "binding_missing_fields": [], "binding_malformed_fields": []}
+        missing_revision = {"build_id": 9, "repository_id": repository_id, "definition_id": 7,
+                            "bindings_complete": False, "binding_missing_fields": ["build.definition_revision"],
+                            "binding_malformed_fields": []}
+        foreign = {"build_id": 9, "bindings_complete": False, "binding_missing_fields": [],
+                   "binding_malformed_fields": ["build.repository_id"]}
+        for listed in (False, True):
+            for native, expected in ((self.build(repository={"id": repository_id}, definition={"id": 7, "revision": 3}), valid),
+                                     (self.build(repository={"id": repository_id}, definition={"id": 7}), missing_revision),
+                                     (self.build(repository={"id": OTHER_PROJECT_GUID}, definition={"id": 7, "revision": 3}), foreign)):
+                with self.subTest(listed=listed, native=native):
+                    report, calls = self.inspect([9], listed=[native] if listed else [], metadata={9: native}, repository_id=repository_id)
+                    self.assertEqual(report["build_bindings"], [expected])
+                    self.assertEqual(len(calls), 1 if listed or expected == foreign else 2)
+                    self.assertEqual(calls[0].args[1], "_apis/build/builds/9/timeline" if listed else "_apis/build/builds/9")
+                    self.assertEqual(report["complete"], listed or expected != foreign)
+                    if listed and expected == foreign:
+                        self.assertEqual(len(report["builds"]), 1)
+                        self.assertEqual(len(report["timelines"]), 1)
+
+    def test_binding_definition_missing_and_malformed_values_do_not_change_acquisition(self):
+        for definition, missing, malformed in ((None, ["build.definition_id", "build.definition_revision"], []),
+                ({}, ["build.definition_id", "build.definition_revision"], []),
+                ({"id": 7, "revision": None}, ["build.definition_revision"], []),
+                ("PRIVATE_SENTINEL", [], ["build.definition_id", "build.definition_revision"]),
+                ([], [], ["build.definition_id", "build.definition_revision"])):
+            with self.subTest(definition=definition):
+                report, calls = self.inspect([9], metadata={9: self.build(definition=definition)})
+                row = report["build_bindings"][0]
+                self.assertTrue(report["complete"])
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(row["binding_missing_fields"], missing)
+                self.assertEqual(row["binding_malformed_fields"], malformed)
+                self.assertFalse(row["bindings_complete"])
+                self.assertEqual(row["repository_id"], PROJECT_GUID.lower())
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(row))
+        for field, code in (("id", "definition_id"), ("revision", "definition_revision")):
+            for value in (True, False, 0, -1, 2**31, 1.0, "7", [], {}, "PRIVATE_SENTINEL"):
+                with self.subTest(field=field, value=value):
+                    definition = {"id": 7, "revision": 3, field: value}
+                    report, calls = self.inspect([9], metadata={9: self.build(definition=definition)})
+                    row = report["build_bindings"][0]
+                    self.assertEqual(row["binding_malformed_fields"], ["build." + code])
+                    self.assertNotIn(code, row)
+                    self.assertTrue(report["complete"])
+                    self.assertEqual(len(calls), 2)
+        report, _ = self.inspect([9], metadata={9: self.build(definition={"id": 2**31 - 1, "revision": 2**31 - 1})})
+        self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+        self.assertEqual(report["build_bindings"][0]["definition_revision"], 2**31 - 1)
+
+    def test_binding_identity_failures_strip_all_values_and_keep_fixed_diagnostics(self):
+        cases = [(self.build(id=None), ["build.id"], []),
+                 (self.build(repository=None), ["build.repository_id"], []),
+                 (self.build(repository={}), ["build.repository_id"], []),
+                 (self.build(repository={"id": None}), ["build.repository_id"], [])]
+        cases += [(self.build(id=value), [], ["build.id"]) for value in (True, 9.0, "9", 0, -1, 10, 2**31)]
+        cases += [(self.build(repository=value), [], ["build.repository_id"]) for value in ([], "PRIVATE_SENTINEL", {"id": OTHER_PROJECT_GUID}, {"id": 7}, {"id": PROJECT_GUID + "\n"})]
+        for native, missing, malformed in cases:
+            native["definition"] = {"id": 7, "revision": 3}
+            with self.subTest(native=native):
+                report, calls = self.inspect([9], metadata={9: native})
+                self.assertEqual(report["build_bindings"], [{"build_id": 9, "bindings_complete": False,
+                    "binding_missing_fields": missing, "binding_malformed_fields": malformed}])
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(report["builds"], [])
+                self.assertEqual(report["timelines"], [])
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report["build_bindings"]))
+        report, _ = self.inspect([9], repository_id="invalid-selected-repository", metadata={9: self.build(definition={"id": 7, "revision": 3})})
+        self.assertEqual(report["build_bindings"][0]["binding_malformed_fields"], ["build.repository_id"])
+        self.assertNotIn("repository_id", report["build_bindings"][0])
+
+    def test_binding_unavailable_and_rejected_acquisition_are_distinct(self):
+        for native in (None, [], "PRIVATE_SENTINEL", az.AzureError("PRIVATE_SENTINEL")):
+            with self.subTest(native=native):
+                report, calls = self.inspect([9], metadata={9: native})
+                self.assertEqual(report["build_bindings"], [{"build_id": 9, "bindings_complete": False,
+                    "binding_missing_fields": ["build.definition_id", "build.definition_revision", "build.id", "build.repository_id"],
+                    "binding_malformed_fields": []}])
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report))
+        for changes in ({"sourceVersion": "bad"}, {"sourceBranch": "bad"}, {"status": "unknown"}, {"result": "unknown"}):
+            with self.subTest(changes=changes):
+                native = self.build(definition={"id": 7, "revision": 3}, **changes)
+                report, calls = self.inspect([9], metadata={9: native})
+                self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+                self.assertFalse(report["complete"])
+                self.assertEqual(report["builds"], [])
+                self.assertEqual(report["timelines"], [])
+                self.assertEqual(len(calls), 1)
+
+    def test_duplicate_binding_rows_normalize_before_conflict_detection(self):
+        first = self.build(definition={"id": 7, "revision": 3})
+        same = self.build(repository={"id": PROJECT_GUID.lower(), "private": "PRIVATE_SENTINEL"},
+                          definition={"id": 7, "revision": 3, "name": "PRIVATE_SENTINEL"})
+        report, calls = self.inspect([9, 9], listed=[first, same])
+        self.assertEqual(len(report["build_bindings"]), 1)
+        self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+        self.assertEqual(len(report["builds"]), 2)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report["build_bindings"]))
+        for different in (self.build(definition={"id": 8, "revision": 3}), self.build(definition={"id": 7}),
+                          self.build(repository={"id": OTHER_PROJECT_GUID}, definition={"id": 7, "revision": 3})):
+            with self.subTest(different=different):
+                report, calls = self.inspect([9], listed=[first, different])
+                self.assertEqual(report["build_bindings"], [{"build_id": 9, "bindings_complete": False,
+                    "binding_missing_fields": [], "binding_malformed_fields": ["build.id"]}])
+                self.assertTrue(report["complete"])
+                self.assertEqual(len(report["builds"]), 2)
+                self.assertEqual(len(calls), 1)
+
+    def test_binding_selection_count_privacy_and_per_row_byte_bounds(self):
+        report, calls = self.inspect([33, *range(32, 0, -1), 1, True, "2", 0])
+        rows = report["build_bindings"]
+        self.assertEqual([row["build_id"] for row in rows], list(range(1, 33)))
+        self.assertEqual(len(calls), 64)
+        sizes = [len(json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")) for row in rows]
+        self.assertTrue(all(size <= 512 for size in sizes))
+        self.assertLessEqual(sum(sizes), 16384)
+        native = self.build(definition={"id": 7, "revision": 3, "name": "PRIVATE_SENTINEL" * 10000},
+                            repository={"id": PROJECT_GUID, "url": "PRIVATE_SENTINEL" * 10000},
+                            queueTime="1991-01-01T00:59:60+01:00")
+        report, _ = self.inspect([9], metadata={9: native})
+        self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+        self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report["build_bindings"]))
+        self.assertEqual(report["builds"][0]["queueTime"], native["queueTime"])
+        fallback = az._bounded_build_binding({"build_id": 9, "repository_id": "PRIVATE_SENTINEL" * 1000})
+        self.assertEqual(fallback, {"build_id": 9, "bindings_complete": False,
+            "binding_missing_fields": ["build.definition_id", "build.definition_revision", "build.id", "build.repository_id"],
+            "binding_malformed_fields": []})
+        self.assertLessEqual(len(json.dumps(fallback, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")), 512)
+        report, calls = self.inspect([False, "9", 0])
+        self.assertEqual(report["build_bindings"], [])
+        self.assertEqual(calls, [])
+
+    def test_binding_legacy_no_selection_omits_sidecar_and_preserves_exact_shape(self):
+        native = self.build(definition={"id": 7, "revision": 3})
+        report, calls = self.inspect([], listed=[native])
+        self.assertNotIn("build_bindings", report)
+        self.assertEqual(set(report), {"complete", "blockers", "observed_at", "repository", "base_refs", "pull_requests",
+            "policies", "policy_evaluations", "builds", "timelines", "timeline_scope", "deployment_authority"})
+        self.assertTrue(report["complete"])
+        self.assertEqual(len(calls), 1)
+
     def test_missing_feature_build_is_acquired_fresh_before_timeline(self):
         report, calls = self.inspect([9], fresh=False)
         self.assertEqual(calls, [mock.call("GET", "_apis/build/builds/9", fresh=True),
