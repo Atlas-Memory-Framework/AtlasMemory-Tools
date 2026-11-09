@@ -15,6 +15,8 @@ import pathlib
 import shutil
 import subprocess
 import time
+import os
+import stat
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -758,80 +760,208 @@ def _validate_delta_review_pilot_completion(item: dict[str, Any], *, expected_ch
         raise HandoffRefusal("pilot_acceptance", f"delta-review pilot acceptance failed: {exc}") from exc
 
 
+def serialize_output(value: Any) -> bytes:
+    from atlas_local_dev import serialize_output as serialize
+    return serialize(value)
+
+
+def _bounded_prepared(value: dict[str, Any]) -> dict[str, Any]:
+    size = len(serialize_output(value))
+    if size > _CAPTURE_MAX_BYTES:
+        identity = value.get("binding", {}).get("work_item_id", "unknown")
+        identity = re.sub(r"[^A-Za-z0-9_.-]", "_", str(identity))[:128]
+        raise HandoffRefusal("output_size", f"prepare {identity}: {size} bytes; limit {_CAPTURE_MAX_BYTES}")
+    return value
+
+
+def _attempt_evidence(path: pathlib.Path, fd: int, *, phase: str, binding: dict[str, Any],
+                      output: bytes, save_attempted: bool, outcome: str, error: str = "") -> None:
+    # Update only the exclusively created file while its name still identifies it.
+    owned = os.fstat(fd)
+    named = os.stat(path, follow_symlinks=False)
+    if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+            or (named.st_dev, named.st_ino) != (owned.st_dev, owned.st_ino)):
+        raise HandoffRefusal("attempt_evidence", "attempt evidence identity changed")
+    value = {"phase": phase, "binding_hash": binding["binding_hash"],
+             "output_sha256": hashlib.sha256(output).hexdigest(),
+             "save_attempted": save_attempted, "outcome": outcome, "error": error}
+    content = (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.ftruncate(fd, 0)
+    remaining = memoryview(content)
+    while remaining:
+        count = os.write(fd, remaining)
+        if count <= 0:
+            raise OSError("attempt evidence write failed")
+        remaining = remaining[count:]
+
+
+def _stage_artifact(job_dir: pathlib.Path, job_fd: int, name: str, content: bytes) -> None:
+    owned = os.fstat(job_fd)
+    named = os.stat(job_dir, follow_symlinks=False)
+    if (not stat.S_ISDIR(named.st_mode) or (named.st_dev, named.st_ino) != (owned.st_dev, owned.st_ino)):
+        raise HandoffRefusal("attempt_directory", "attempt directory identity changed")
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=job_fd)
+    try:
+        remaining = memoryview(content)
+        while remaining:
+            count = os.write(fd, remaining)
+            if count <= 0:
+                raise OSError("staged artifact write failed")
+            remaining = remaining[count:]
+    finally:
+        os.close(fd)
+
+
 def prepare_handoff(provider: Any, worker: Any, *, source_id: str, expected_revision: str) -> dict[str, Any]:
-    """Persist one owned role reservation before the supervisor dispatches it."""
+    """Plan privately, stage exact artifacts, then publish claim and reservation once."""
     owner = _require_worker(provider, worker)
     payload = provider.store.load()
     item = _item(payload, source_id)
     state = _state(item)
-    captured_state_hash = sha256_json(state)
+    original_item_hash = sha256_json(item)
     pending = copy.deepcopy(state.get("pending"))
     if pending is not None:
         _assert_global_pending(payload, source_id=source_id, expected_pending=pending)
-        return _validate_pending_return(provider, worker, item, pending, owner=owner,
-                                        expected_revision=expected_revision)
+        return _bounded_prepared(_validate_pending_return(provider, worker, item, pending,
+                                  owner=owner, expected_revision=expected_revision))
     _assert_global_pending(payload, source_id=source_id)
-    claim = item.get("claim")
-    if atlas_work_items.item_state(item) != "running" or not isinstance(claim, dict) or claim.get("claimed_by") != owner:
-        raise HandoffRefusal("claim_owner", "item must have an active claim owned by this supervisor")
-    operation = provider.project(item, {atlas_work_items.item_id(v): v for v in payload["work_items"]})
+    by_id = {atlas_work_items.item_id(v): v for v in payload["work_items"]}
+    operation = provider.project(item, by_id)
+    fresh = operation.ready
+    planned_item = copy.deepcopy(item)
+    if fresh:
+        claimed_at = atlas_work_items.now_rfc3339()
+        claim = {"claimed_by": owner, "claimed_at": claimed_at, "pid": os.getpid(),
+                 "operation": operation.to_dict()}
+        planned_item["status"] = planned_item["state"] = "running"
+        lifecycle = planned_item.setdefault("lifecycle", {})
+        if isinstance(lifecycle, dict):
+            lifecycle.update(state="running", claimed_at=claimed_at)
+        planned_item["claim"] = claim
+        planned_item.setdefault("evidence", []).append(atlas_work_items.event(
+            "claim", status="running", operation_id=operation.operation_id, evidence=claim))
+    else:
+        claim = planned_item.get("claim")
+        if (atlas_work_items.item_state(planned_item) != "running" or not isinstance(claim, dict)
+                or claim.get("claimed_by") != owner):
+            raise HandoffRefusal("claim_owner", "item is not ready or owned by this supervisor")
+    if not fresh and provider.scheduler_prerequisites(item, by_id):
+        raise HandoffRefusal("stale", "running claim prerequisites are no longer satisfied")
+    operation = provider.project(planned_item, by_id)
     checkout, revision = _observe(operation, expected_revision)
-    prior_hash, prior_path = _verified_prior_run(item, worker.jobs_dir)
-    state = _state(item)
+    prior_hash, _ = _verified_prior_run(planned_item, worker.jobs_dir)
     generation = int(state.get("last_generation", 0)) + 1
     handoff_id = str(uuid.uuid4())
     gen = sha256_json({"id": source_id, "generation": generation, "nonce": handoff_id})
     job_dir = worker.jobs_dir.resolve() / ("supervised-" + gen[:32])
-    job_dir.mkdir(parents=True, exist_ok=False)
-    private_store_path = job_dir / "queue.json"
-    private_store_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    workflow = worker.plan_workflow_artifacts(operation, job_dir, gen[:16], provider.store.path,
+                                               store_payload=payload)
+    if "artifact_bytes" not in workflow:
+        raise HandoffRefusal("workflow", "workflow planning failed")
+    evidence, artifact_bytes = workflow["evidence"], workflow["artifact_bytes"]
+    template = next(t for t in atlas_workflows.load_team_templates(worker.templates_dir)
+                    if t.id == evidence["team_template"])
+    run = atlas_workflows.TeamRun.from_dict(json.loads(artifact_bytes["team_run_path"]))
+    packets = json.loads(artifact_bytes["team_role_tasks_path"])["tasks"]
+    role = _eligible_role(template, run)
+    packet = next(p for p in packets if p.get("role_id") == role.id)
+    prepared = prepare_role_handoff(item=planned_item, claim=claim, supervisor_id=owner,
+        context=operation.work_item_context, template=template, run=run, checkout=checkout,
+        revision=revision, generation=generation, handoff_id=handoff_id,
+        prior_run_snapshot_hash=prior_hash, packet_override=packet)
+    paths = {key: evidence[key] for key in artifact_bytes}
+    hashes = {key: hashlib.sha256(value).hexdigest() for key, value in artifact_bytes.items()}
+    state.update(last_generation=generation)
+    pending_record = {**prepared, "state": "pending", "artifacts": paths, "artifact_hashes": hashes,
+        "workflow_evidence": evidence, "source_item_hash": _source_hash(planned_item),
+        "prior_state_hash": sha256_json(state)}
+    state["pending"] = pending_record
+    output = {"status": "prepared", **prepared, "artifacts": paths}
+    _bounded_prepared(output)
+    output_bytes = serialize_output(output)
+    diagnostic = job_dir.with_name(job_dir.name + ".attempt.json")
+    phase = "stage"
+    save_attempted = False
+    diagnostic_fd = None
+    job_fd = None
     try:
-        evidence = worker.write_workflow_artifacts(operation, job_dir, gen[:16], private_store_path)
-        if evidence.get("workflow_error") or not evidence.get("team_run_path"):
-            raise HandoffRefusal("workflow", evidence.get("workflow_error", "workflow artifacts unavailable"))
-        template = next(t for t in atlas_workflows.load_team_templates(worker.templates_dir) if t.id == evidence["team_template"])
-        run = atlas_workflows.load_team_run(evidence["team_run_path"])
-        packet_document = json.loads(pathlib.Path(evidence["team_role_tasks_path"]).read_text())
-        packet_list = packet_document.get("tasks", []) if isinstance(packet_document, dict) else []
-        eligible_role = _eligible_role(template, run)
-        packet = next((p for p in packet_list if isinstance(p, dict)
-                       and p.get("role_id") == eligible_role.id), None)
-        if packet is None:
-            raise HandoffRefusal("packet", "maintained eligible role packet is unavailable")
-        prepared = prepare_role_handoff(item=item, claim=claim, supervisor_id=owner,
-            context=operation.work_item_context, template=template, run=run, checkout=checkout,
-            revision=revision, generation=generation, handoff_id=handoff_id,
-            prior_run_snapshot_hash=prior_hash, packet_override=packet)
-        paths = {key: evidence[key] for key in ("team_run_path", "team_rollup_path", "team_role_tasks_path")}
-        hashes = _artifact_hashes(paths)
-        state.update(last_generation=generation)
-        pending_record = {**prepared, "state": "pending", "artifacts": paths, "artifact_hashes": hashes,
-            "workflow_evidence": evidence, "source_item_hash": _source_hash(item),
-            "prior_state_hash": sha256_json(state)}
-        state["pending"] = pending_record
+        job_dir.mkdir(parents=True, exist_ok=False)
+        job_fd = os.open(job_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        diagnostic_fd = os.open(diagnostic, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        _attempt_evidence(diagnostic, diagnostic_fd, phase="stage", binding=prepared["binding"],
+                          output=output_bytes, save_attempted=False, outcome="unpublished")
+        for key, content in artifact_bytes.items():
+            target = pathlib.Path(paths[key])
+            if target.parent != job_dir:
+                raise HandoffRefusal("artifact", "planned artifact is outside the attempt directory")
+            _stage_artifact(job_dir, job_fd, target.name, content)
+        if _artifact_hashes(paths) != hashes:
+            raise HandoffRefusal("artifact", "staged artifact hash differs from plan")
+        phase = "final_validation"
+        with provider.store.lock():
+            latest = provider.store.load()
+            current = _item(latest, source_id)
+            _assert_global_pending(latest, source_id=source_id)
+            current_by_id = {atlas_work_items.item_id(v): v for v in latest["work_items"]}
+            if sha256_json(current) != original_item_hash:
+                raise HandoffRefusal("stale", "work item changed during staging")
+            if (fresh and not provider.project(current, current_by_id).ready) or (
+                    not fresh and provider.scheduler_prerequisites(current, current_by_id)):
+                raise HandoffRefusal("stale", "readiness changed during staging")
+            staged = copy.deepcopy(planned_item)
+            staged["supervised_handoff_v1"] = state
+            _validate_pending_return(provider, worker, staged, pending_record, owner=owner,
+                                     expected_revision=expected_revision)
+            pre_save_hash = sha256_json(latest)
+            current.clear()
+            current.update(staged)
+            _attempt_evidence(diagnostic, diagnostic_fd, phase="save", binding=prepared["binding"],
+                              output=output_bytes, save_attempted=True, outcome="unknown")
+            save_attempted = True
+            try:
+                provider.store.save(latest)
+            except BaseException:
+                outcome = "unknown"
+                try:
+                    observed = provider.store.load()
+                    observed_item = _item(observed, source_id)
+                    if sha256_json(observed) == pre_save_hash:
+                        _assert_global_pending(observed, source_id=source_id)
+                        outcome = "confirmed_not_published"
+                    elif observed_item == staged:
+                        observed_by_id = {atlas_work_items.item_id(v): v for v in observed["work_items"]}
+                        if provider.scheduler_prerequisites(observed_item, observed_by_id):
+                            raise HandoffRefusal("stale", "publication prerequisites changed")
+                        _assert_global_pending(observed, source_id=source_id, expected_pending=pending_record)
+                        _validate_pending_return(provider, worker, observed_item, pending_record,
+                                                 owner=owner, expected_revision=expected_revision)
+                        outcome = "confirmed_published"
+                except Exception:
+                    pass
+                try:
+                    _attempt_evidence(diagnostic, diagnostic_fd, phase="save", binding=prepared["binding"],
+                                      output=output_bytes, save_attempted=True, outcome=outcome)
+                except Exception:
+                    pass
+                raise HandoffRefusal("save_" + outcome, "save outcome requires operator reconciliation") from None
+        _attempt_evidence(diagnostic, diagnostic_fd, phase="saved", binding=prepared["binding"],
+                          output=output_bytes, save_attempted=True, outcome="confirmed_published")
+    except Exception as exc:
+        if not save_attempted and diagnostic_fd is not None:
+            try:
+                _attempt_evidence(diagnostic, diagnostic_fd, phase=phase, binding=prepared["binding"],
+                                  output=output_bytes, save_attempted=False, outcome="unpublished",
+                                  error=getattr(exc, "code", type(exc).__name__))
+            except Exception:
+                pass
+        raise
     finally:
-        private_store_path.unlink(missing_ok=True)
-        private_store_path.with_suffix(private_store_path.suffix + ".lock").unlink(missing_ok=True)
-    with provider.store.lock():
-        latest = provider.store.load()
-        current = _item(latest, source_id)
-        current_state = _state(current)
-        if current_state.get("pending"):
-            found = current_state["pending"]
-            _assert_global_pending(latest, source_id=source_id, expected_pending=found)
-            return _validate_pending_return(provider, worker, current, found, owner=owner,
-                                            expected_revision=expected_revision)
-        _assert_global_pending(latest, source_id=source_id)
-        if (_source_hash(current) != pending_record["source_item_hash"]
-                or sha256_json(_state(current)) != captured_state_hash):
-            raise HandoffRefusal("stale", "work item changed while staging the reservation")
-        staged_current = copy.deepcopy(current)
-        staged_current["supervised_handoff_v1"] = state
-        _validate_pending_return(provider, worker, staged_current, pending_record, owner=owner,
-                                 expected_revision=expected_revision)
-        current["supervised_handoff_v1"] = state
-        provider.store.save(latest)
-    return {"status": "prepared", "binding": prepared["binding"], "packet": prepared["packet"], "artifacts": paths}
+        if diagnostic_fd is not None:
+            os.close(diagnostic_fd)
+        if job_fd is not None:
+            os.close(job_fd)
+    return output
 
 
 def ingest_handoff(provider: Any, worker: Any, *, envelope: dict[str, Any], result_bytes: bytes) -> dict[str, Any]:

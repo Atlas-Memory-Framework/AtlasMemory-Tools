@@ -1620,12 +1620,13 @@ class LocalCommandOperationWorker:
             },
         )
 
-    def write_workflow_artifacts(
+    def plan_workflow_artifacts(
         self,
         operation: OperationState,
         job_dir: pathlib.Path,
         job_id: str,
         store_path: pathlib.Path,
+        *, store_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if self.templates_dir is None or not self.templates_dir.exists():
             return {}
@@ -1694,7 +1695,7 @@ class LocalCommandOperationWorker:
         rework_count = operation.metadata.get("rework_count", 0)
         try:
             previous_run = self.load_resumable_team_run(store_path, operation.source_id, template.id,
-                contract_hash=fingerprint, rework_count=rework_count, required=goal_required)
+                contract_hash=fingerprint, rework_count=rework_count, required=goal_required, store_payload=store_payload)
         except (ValueError, OSError, json.JSONDecodeError) as exc:
             return {"workflow_error": str(exc), "goal_review_required": goal_required, "contract_hash": fingerprint}
         team_run = previous_run or atlas_workflows.TeamRun.start(
@@ -1707,17 +1708,14 @@ class LocalCommandOperationWorker:
         run_path = job_dir / "team-run.json"
         rollup_path = job_dir / "team-rollup.md"
         role_tasks_path = job_dir / "team-role-tasks.json"
-        run_path.write_text(json.dumps(team_run.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        rollup_path.write_text(team_run.rollup_markdown(template), encoding="utf-8")
-        atlas_workflows.write_role_task_packets(
-            role_tasks_path,
-            template,
-            team_run,
-            registry=registry,
-            agent_root=self.agent_root,
-            work_item_context=operation.work_item_context,
-        )
-        return {
+        artifact_bytes = {
+            "team_run_path": (json.dumps(team_run.to_dict(), indent=2, sort_keys=True) + "\n").encode("utf-8"),
+            "team_rollup_path": team_run.rollup_markdown(template).encode("utf-8"),
+            "team_role_tasks_path": (json.dumps({"tasks": atlas_workflows.role_task_packets(
+                template, team_run, registry=registry, agent_root=self.agent_root,
+                work_item_context=operation.work_item_context)}, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        }
+        evidence = {
             "team_template": template.id,
             "workflow_kind": template.workflow_kind,
             "local_sizing": sizing,
@@ -1740,6 +1738,16 @@ class LocalCommandOperationWorker:
             "agent_registry_path": str(self.agent_registry_path) if self.agent_registry_path else "",
             "agent_root": str(self.agent_root) if self.agent_root else "",
         }
+        return {"evidence": evidence, "artifact_bytes": artifact_bytes}
+
+    def write_workflow_artifacts(self, operation: OperationState, job_dir: pathlib.Path,
+                                 job_id: str, store_path: pathlib.Path) -> dict[str, Any]:
+        plan = self.plan_workflow_artifacts(operation, job_dir, job_id, store_path)
+        if "artifact_bytes" not in plan:
+            return plan
+        for key, content in plan["artifact_bytes"].items():
+            pathlib.Path(plan["evidence"][key]).write_bytes(content)
+        return plan["evidence"]
 
     def load_resumable_team_run(
         self,
@@ -1747,11 +1755,12 @@ class LocalCommandOperationWorker:
         source_id: str,
         template_id: str,
         *, contract_hash: str | None = None, rework_count: int = 0, required: bool = False,
+        store_payload: dict[str, Any] | None = None,
     ) -> Any:
         try:
             import atlas_workflows
 
-            payload = AtlasWorkItemStore(store_path).load()
+            payload = store_payload if store_payload is not None else AtlasWorkItemStore(store_path).load()
             item = next(
                 (candidate for candidate in payload.get("work_items", []) if item_id(candidate) == source_id),
                 None,
