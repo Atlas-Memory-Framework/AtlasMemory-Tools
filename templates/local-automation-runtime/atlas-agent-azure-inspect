@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
+import math
 import pathlib
 import sys
 
@@ -18,6 +21,358 @@ from atlas_azure_devops import (AzureBoardsProvider, AzureDevOpsClient, AzureErr
 from atlas_runtime_config import RuntimeConfigError, load_runtime_config, require_capability, validate_input_path
 
 
+# The complete pretty record includes its newline and leaves collector headroom.
+_STDOUT_LIMIT = 245760
+_ARGUMENT_ERROR = (b'{"complete":false,"eligible_count":0,"error":'
+                   b'"Azure inspection arguments are invalid."}\n')
+_OPERATION_ERROR = (b'{"complete":false,"eligible_count":0,"error":'
+                    b'"Azure inspection failed validation or could not complete; '
+                    b'no mutation was attempted."}\n')
+
+
+def _compact(value):
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"),
+                       ensure_ascii=True, allow_nan=False) + "\n").encode("ascii")
+
+
+def _omitted_report(mode, observed):
+    # Fixed omission evidence: no values or counts are copied from the report.
+    coverage = {"bound_count": 0, "byte_capped": True, "count_capped": False,
+                "malformed_count": None, "omitted_count": None, "projected_count": 0,
+                "returned_count": None, "upstream_complete": False}
+    repository = {
+        "base_refs": [],
+        "binding_coverage": {key: dict(coverage) for key in
+                             ("builds", "observation", "pull_requests", "timelines")},
+        "binding_coverage_complete": False, "binding_malformed_fields": [],
+        "binding_missing_fields": ["observation.coverage"], "bindings_complete": False,
+        "blocker_codes": ["observation-byte-budget-exhausted"],
+        "budget": {"aggregate_truncated": True, "public_byte_limit": 98304,
+                   "public_bytes": None, "reader_byte_limit": 98304,
+                   "reader_bytes": None, "report_omitted": True},
+        "builds": [], "complete": False, "coverage": {}, "deployment_authority": False,
+        "evidence_contract": "atlas-tools.azure-observation.v1", "missing_fields": [],
+        "observed": observed, "omitted_fields": [], "policies": [],
+        "policy_evaluations": [], "projection_complete": False, "pull_requests": [],
+        "reported_complete": None, "repository_matches_profile": False,
+        "request_ids_invalid_count": None, "requested_build_ids": [],
+        "requested_build_ids_omitted_count": None, "selected_build_ids": [],
+        "selected_build_ids_truncated": True, "selected_builds_without_definition": [],
+        "selected_builds_without_metadata": [], "selected_builds_without_repository": [],
+        "selected_builds_without_source": [], "selected_builds_without_timeline": [],
+        "timelines": []}
+    return {"blockers": ["observation-byte-budget-exhausted"], "complete": False,
+            "dependency_complete": False, "eligible_count": 0, "inspection_mode": mode,
+            "items": [], "repository_evidence": repository}
+
+
+# Precompute all emergency records before processing any input or encoder failure.
+_FALLBACKS = {(mode, observed): _compact(_omitted_report(mode, observed))
+              for mode, observed in (("dry-run", False), ("offline-snapshot", False),
+                                     ("live-read-only", False), ("live-read-only", True))}
+
+
+def _validate_json(value, ancestors):
+    kind = type(value)
+    if kind is str:
+        value.encode("utf-8")  # Reject surrogate code points, including in keys.
+    elif value is None or kind is bool or kind is int:
+        return
+    elif kind is float:
+        if not math.isfinite(value):
+            raise ValueError
+    elif kind is dict or kind is list:
+        identity = id(value)
+        if identity in ancestors:
+            raise ValueError
+        ancestors.add(identity)
+        try:
+            if kind is dict:
+                for key, item in value.items():
+                    if type(key) is not str:
+                        raise ValueError
+                    _validate_json(key, ancestors)
+                    _validate_json(item, ancestors)
+            else:
+                for item in value:
+                    _validate_json(item, ancestors)
+        finally:
+            ancestors.remove(identity)
+    else:
+        raise ValueError
+
+
+def render_inspection_report(report, *, inspection_mode, repository_observed):
+    """Prepare one bounded record without writing or converting arbitrary objects."""
+    try:
+        if (type(report) is not dict or type(inspection_mode) is not str
+                or type(repository_observed) is not bool
+                or (inspection_mode, repository_observed) not in _FALLBACKS):
+            raise ValueError
+        _validate_json(report, set())
+        if report.get("inspection_mode") != inspection_mode:
+            raise ValueError
+        candidate = (json.dumps(report, indent=2, sort_keys=True, ensure_ascii=True,
+                                allow_nan=False) + "\n").encode("utf-8")
+        if len(candidate) > _STDOUT_LIMIT:
+            candidate = _FALLBACKS[inspection_mode, repository_observed]
+        return candidate, b"", 0
+    except Exception:
+        return b"", _OPERATION_ERROR, 2
+
+
+class _ArgumentFailure(Exception):
+    pass
+
+
+class _PublicationFailure(Exception):
+    """Publication is unavailable; never replace it with an opposite record."""
+
+
+class _PublicationRefused(_PublicationFailure):
+    pass
+
+
+class _ClosureUncertain(_PublicationFailure):
+    pass
+
+
+class _DiscardSink:
+    __slots__ = ()
+
+    def write(self, text):
+        return len(text)
+
+    def flush(self):
+        pass
+
+
+_PUBLICATION_MINT = object()
+_QUALIFIED_MEMORY_RUNTIME = ("cpython", (3, 14, 8))
+
+
+class _OwnedGrant:
+    __slots__ = ("text", "buffer", "raw", "closefd", "origin", "state", "close_attempts", "_mint")
+
+    def __init__(self, text, buffer, raw, closefd, origin, *, _mint=None):
+        if _mint is not _PUBLICATION_MINT:
+            raise _PublicationRefused
+        self.text, self.buffer, self.raw = text, buffer, raw
+        self.closefd, self.origin = closefd, origin
+        self.state, self.close_attempts, self._mint = "ready", 0, _mint
+
+
+class _PublicationContext:
+    __slots__ = ("stdout", "stderr", "stdout_grant", "stderr_grant", "_mint")
+
+    def __init__(self, stdout, stderr, stdout_grant, stderr_grant, *, _mint=None):
+        if _mint is not _PUBLICATION_MINT:
+            raise _PublicationRefused
+        self.stdout, self.stderr = stdout, stderr
+        self.stdout_grant, self.stderr_grant = stdout_grant, stderr_grant
+        self._mint = _mint
+
+
+def publication_context(stdout, stderr, *, stdout_grant=None, stderr_grant=None):
+    """Bind targets to explicit grants; this factory itself grants no ownership."""
+    if stdout is stderr:
+        if stdout_grant is None:
+            stdout_grant = stderr_grant
+        elif stderr_grant is None:
+            stderr_grant = stdout_grant
+        elif stdout_grant is not stderr_grant:
+            raise _PublicationRefused
+    return _PublicationContext(stdout, stderr, stdout_grant, stderr_grant,
+                               _mint=_PUBLICATION_MINT)
+
+
+def _empty_instance_dict(value, *, file_name=False):
+    # Exact immutable built-in types are checked before this lookup.
+    attributes = object.__getattribute__(value, "__dict__")
+    if type(attributes) is not dict:
+        raise _PublicationRefused
+    if not dict.__len__(attributes):
+        return
+    if (not file_name or any(type(key) is not str for key in attributes)
+            or set(attributes) != {"name"}
+            or type(dict.__getitem__(attributes, "name")) not in (str, int)):
+        raise _PublicationRefused
+
+
+def _owned_shape(text):
+    if type(text) is not io.TextIOWrapper:
+        raise _PublicationRefused
+    _empty_instance_dict(text)
+    if io.TextIOWrapper.encoding.__get__(text) not in ("ascii", "utf-8", "UTF-8", "utf8"):
+        raise _PublicationRefused
+    buffer = io.TextIOWrapper.buffer.__get__(text)
+    if type(buffer) is not io.BufferedWriter:
+        raise _PublicationRefused
+    _empty_instance_dict(buffer)
+    raw = io.BufferedWriter.raw.__get__(buffer)
+    if type(raw) is not io.FileIO:
+        raise _PublicationRefused
+    _empty_instance_dict(raw, file_name=True)
+    return buffer, raw
+
+
+def _raw_closefd(raw):
+    return io.FileIO.closefd.__get__(raw)
+
+
+def _raw_closed(raw):
+    return io.FileIO.closed.__get__(raw)
+
+
+def _close_raw(raw):
+    io.FileIO.close(raw)
+
+
+def grant_owned_stream(text, *, terminal_close=False, all_aliases=False,
+                       descriptor_exclusive=False, stable_exclusive_use=False,
+                       expected_closefd=None, byte_preserving_ascii=False):
+    """Trusted caller grants terminal closure/data loss for the complete graph.
+
+    All aliases/descriptor users must be covered and stable/exclusive through
+    publication. The caller knows LF-only construction and must not reconfigure
+    or mutate the graph/grant. These assertions are authority, not type inference.
+    """
+    assertions = (terminal_close, all_aliases, descriptor_exclusive,
+                  stable_exclusive_use, byte_preserving_ascii)
+    if not all(value is True for value in assertions):
+        raise _PublicationRefused
+    buffer, raw = _owned_shape(text)
+    actual = _raw_closefd(raw)
+    if type(expected_closefd) is not bool or actual is not expected_closefd:
+        raise _PublicationRefused
+    return _OwnedGrant(text, buffer, raw, actual, "trusted-caller", _mint=_PUBLICATION_MINT)
+
+
+def _admit_memory(text, grant):
+    if grant is not None or (sys.implementation.name, tuple(sys.version_info[:3])) != _QUALIFIED_MEMORY_RUNTIME:
+        raise _PublicationRefused
+    try:
+        # Never materialize __dict__, probe-write or present snapshot contents.
+        state = io.StringIO.__getstate__(text)
+    except Exception:
+        raise _PublicationRefused from None
+    if type(state) is not tuple or len(state) != 4:
+        raise _PublicationRefused
+    contents, newline, position, attributes = state
+    if (type(contents) is not str or len(contents) != 0
+            or type(newline) is not str or newline != "\n"
+            or type(position) is not int or position != 0
+            or (attributes is not None and (type(attributes) is not dict or dict.__len__(attributes) != 0))):
+        raise _PublicationRefused
+
+
+def _admit_owned(text, grant):
+    if (type(grant) is not _OwnedGrant or grant._mint is not _PUBLICATION_MINT
+            or grant.text is not text or grant.state != "ready"
+            or type(grant.origin) is not str or grant.origin not in ("trusted-caller", "dedicated-cli")):
+        raise _PublicationRefused
+    buffer, raw = _owned_shape(text)
+    if buffer is not grant.buffer or raw is not grant.raw or _raw_closefd(raw) is not grant.closefd:
+        raise _PublicationRefused
+
+
+def _admit_target(text, grant):
+    if type(text) is io.StringIO:
+        _admit_memory(text, grant)
+        return "memory"
+    _admit_owned(text, grant)
+    return "owned"
+
+
+def _resolve_publication(publication):
+    if publication is None:
+        return publication_context(sys.stdout, sys.stderr)
+    if type(publication) is not _PublicationContext or publication._mint is not _PUBLICATION_MINT:
+        raise _PublicationRefused
+    return publication
+
+
+def _preflight_memory_pair(publication):
+    for text, grant in ((publication.stdout, publication.stdout_grant),
+                        (publication.stderr, publication.stderr_grant)):
+        if type(text) is io.StringIO:
+            _admit_memory(text, grant)
+
+
+def _abort_owned(grant):
+    # Keep all three strong references until closed state has been proved.
+    grant.state = "failed"
+    grant.close_attempts += 1
+    try:
+        _close_raw(grant.raw)
+    except (OSError, ValueError):
+        pass
+    if (not _raw_closed(grant.raw) or not io.BufferedWriter.closed.__get__(grant.buffer)
+            or not io.TextIOWrapper.closed.__get__(grant.text)):
+        grant.state = "closure-uncertain"
+        # No safe-release or clean-shutdown claim; do not retry a close.
+        raise _ClosureUncertain from None
+    grant.state = "closed-confirmed"
+    if sys.stdout is grant.text:
+        sys.stdout = _DiscardSink()
+    if sys.stderr is grant.text:
+        sys.stderr = _DiscardSink()
+
+
+def _publish_text(text, value, grant=None):
+    mode = _admit_target(text, grant)
+    try:
+        if mode == "memory":
+            io.StringIO.write(text, value)
+            io.StringIO.flush(text)
+        else:
+            io.TextIOWrapper.write(text, value)
+            io.TextIOWrapper.flush(text)
+    except (OSError, ValueError):
+        if mode == "owned":
+            _abort_owned(grant)
+        raise _PublicationFailure from None
+
+
+class _InspectionParser(argparse.ArgumentParser):
+    def __init__(self, *args, publication, **kwargs):
+        self._publication = publication
+        super().__init__(*args, **kwargs)
+
+    def error(self, message):
+        raise _ArgumentFailure
+
+    def print_help(self, file=None):
+        context = self._publication
+        text = context.stdout if file is None else file
+        grant = (context.stdout_grant if text is context.stdout else
+                 context.stderr_grant if text is context.stderr else None)
+        _publish_text(text, self.format_help(), grant)
+
+    def _print_message(self, message, file=None):
+        if message:
+            context = self._publication
+            text = context.stderr if file is None else file
+            grant = (context.stdout_grant if text is context.stdout else
+                     context.stderr_grant if text is context.stderr else None)
+            _publish_text(text, message, grant)
+
+
+def _new_cli_publication():
+    # Only the dedicated standalone entry owns this fresh graph. Never adopt sys
+    # streams. Its trusted launch excludes independent buffered startup writers,
+    # concurrent use, and descriptor close/reuse. Numeric fds stay process-owned.
+    channels = []
+    for descriptor in (1, 2):
+        raw = io.FileIO(descriptor, "wb", closefd=False)
+        buffer = io.BufferedWriter(raw)
+        text = io.TextIOWrapper(buffer, encoding="ascii", newline="\n")
+        grant = _OwnedGrant(text, buffer, raw, False, "dedicated-cli", _mint=_PUBLICATION_MINT)
+        channels.append((text, grant))
+    return publication_context(channels[0][0], channels[1][0],
+                               stdout_grant=channels[0][1], stderr_grant=channels[1][1])
+
+
 def _read_json(path):
     if path is None:
         return None
@@ -27,8 +382,9 @@ def _read_json(path):
         raise AzureError("Cannot read the supplied non-secret inspection JSON input.") from None
 
 
-def build_parser():
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser(*, publication=None):
+    parser = _InspectionParser(prog="atlas-agent-azure-inspect", description=__doc__,
+                               publication=_resolve_publication(publication))
     parser.add_argument("--config", required=True, help="Explicit non-secret provider JSON configuration.")
     parser.add_argument("--runtime-dir", help="Existing runtime directory within this identity; required for live reads.")
     parser.add_argument("--ids", help="Comma-separated Azure work-item numbers or namespaced IDs.")
@@ -44,51 +400,85 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+def _construct_report(args):
+    config = load_runtime_config(args.config, runtime_dir=args.runtime_dir, require_runtime=args.live_read)
+    if config.provider != "azure-devops":
+        raise AzureError("Azure inspection requires the explicit azure-devops provider.")
+    require_capability(config, "read")
+    repository = config.repository
+    manifest, supplement, authority = (_read_json(args.expected_manifest), _read_json(args.supplement), _read_json(args.authority))
+    requested = args.ids.split(",") if args.ids else list((manifest or {}).get("dependencies", {}))
+    ids = sorted({numeric_issue_id(repository["organization"], repository["project"], value.strip()) for value in requested})
+    if not ids:
+        raise AzureError("Provide explicit work-item IDs or a versioned dependency manifest.")
+    repository_observed = False
+    if args.snapshot:
+        report = project_snapshot(_read_json(args.snapshot), organization=repository["organization"],
+                                  project=repository["project"], expected_manifest=manifest,
+                                  supplement=supplement, authority=authority)
+        inspection_mode = "offline-snapshot"
+    elif args.live_read:
+        client = AzureDevOpsClient(repository["organization"], repository["project"], config.runtime_dir,
+                                   headers=azure_cli_headers(), capabilities={"read"})
+        provider = AzureBoardsProvider(client)
+        report = provider.inspect(ids, expected_manifest=manifest, supplement=supplement, authority=authority, fresh=True)
+        builds = [int(value) for value in args.build_ids.split(",")] if args.build_ids else []
+        repository_report = provider.repository_evidence(repository["name"],
+            base_branch="refs/heads/" + repository["base_branch"].removeprefix("refs/heads/"), build_ids=builds)
+        if type(report) is not dict or type(repository_report) is not dict:
+            raise AzureError("Invalid inspection response.")
+        report["repository_evidence"] = repository_report
+        repository_observed = True
+        inspection_mode = "live-read-only"
+    else:
+        inspection_mode = "dry-run"
+        report = {"inspection_mode": "dry-run", "ids": ids, "eligible_count": 0,
+                  "complete": False, "dependency_complete": False,
+                  "blockers": ["inspection-not-executed", "execution-authority-not-established"],
+                  "effects": [], "planned_reads": ["expanded-work-item-closure", "fresh-revision-recheck",
+                      "repository", "base-ref", "pull-requests", "policies", "builds", "timelines"]}
+    if type(report) is not dict:
+        raise AzureError("Invalid inspection response.")
+    report["inspection_mode"] = inspection_mode
+    report["effective_configuration"] = config.report()
+    return render_inspection_report(report, inspection_mode=inspection_mode,
+                                    repository_observed=repository_observed)
+
+
+def main(argv=None, *, publication=None):
     try:
-        config = load_runtime_config(args.config, runtime_dir=args.runtime_dir, require_runtime=args.live_read)
-        if config.provider != "azure-devops":
-            raise AzureError("Azure inspection requires the explicit azure-devops provider.")
-        require_capability(config, "read")
-        repository = config.repository
-        manifest, supplement, authority = (_read_json(args.expected_manifest), _read_json(args.supplement), _read_json(args.authority))
-        requested = args.ids.split(",") if args.ids else list((manifest or {}).get("dependencies", {}))
-        ids = sorted({numeric_issue_id(repository["organization"], repository["project"], value.strip()) for value in requested})
-        if not ids:
-            raise AzureError("Provide explicit work-item IDs or a versioned dependency manifest.")
-        if args.snapshot:
-            report = project_snapshot(_read_json(args.snapshot), organization=repository["organization"],
-                                      project=repository["project"], expected_manifest=manifest,
-                                      supplement=supplement, authority=authority)
-            report["inspection_mode"] = "offline-snapshot"
-        elif args.live_read:
-            client = AzureDevOpsClient(repository["organization"], repository["project"], config.runtime_dir,
-                                       headers=azure_cli_headers(), capabilities={"read"})
-            provider = AzureBoardsProvider(client)
-            report = provider.inspect(ids, expected_manifest=manifest, supplement=supplement, authority=authority, fresh=True)
-            builds = [int(value) for value in args.build_ids.split(",")] if args.build_ids else []
-            report["repository_evidence"] = provider.repository_evidence(repository["name"],
-                base_branch="refs/heads/" + repository["base_branch"].removeprefix("refs/heads/"), build_ids=builds)
-            report["inspection_mode"] = "live-read-only"
-        else:
-            report = {"inspection_mode": "dry-run", "ids": ids, "eligible_count": 0,
-                      "complete": False, "dependency_complete": False,
-                      "blockers": ["inspection-not-executed", "execution-authority-not-established"],
-                      "effects": [], "planned_reads": ["expanded-work-item-closure", "fresh-revision-recheck",
-                          "repository", "base-ref", "pull-requests", "policies", "builds", "timelines"]}
-        report["effective_configuration"] = config.report()
-        print(json.dumps(report, indent=2, sort_keys=True))
-        return 0
-    except (AzureError, RuntimeConfigError) as error:
-        print(json.dumps({"error": str(error), "complete": False, "eligible_count": 0}), file=sys.stderr)
+        context = _resolve_publication(publication)
+        _preflight_memory_pair(context)
+    except Exception:
         return 2
-    except (ValueError, TypeError, AttributeError):
-        # Remote bodies, input text and credential subprocess output are never echoed.
-        print(json.dumps({"error": "Azure inspection failed validation or could not complete; no mutation was attempted.",
-                          "complete": False, "eligible_count": 0}), file=sys.stderr)
+    try:
+        args = build_parser(publication=context).parse_args(argv)
+        sink = _DiscardSink()
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            stdout, stderr, code = _construct_report(args)
+    except _PublicationFailure:
         return 2
+    except _ArgumentFailure:
+        stdout, stderr, code = b"", _ARGUMENT_ERROR, 2
+    except Exception:
+        stdout, stderr, code = b"", _OPERATION_ERROR, 2
+    try:
+        if stdout:
+            _publish_text(context.stdout, stdout.decode("ascii"), context.stdout_grant)
+        elif stderr:
+            _publish_text(context.stderr, stderr.decode("ascii"), context.stderr_grant)
+    except _PublicationFailure:
+        return 2
+    return code
+
+
+def _cli_entry():
+    try:
+        context = _new_cli_publication()
+    except Exception:
+        return 2
+    return main(publication=context)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_cli_entry())
