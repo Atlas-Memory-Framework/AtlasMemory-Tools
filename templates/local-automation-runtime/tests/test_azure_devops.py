@@ -792,12 +792,17 @@ class SelectedBuildAcquisitionTests(unittest.TestCase):
         self.assertEqual(report["build_bindings"], [])
         self.assertEqual(calls, [])
 
-    def test_binding_legacy_no_selection_omits_sidecar_and_preserves_exact_shape(self):
+    def test_binding_legacy_no_selection_omits_explicit_sidecar_and_preserves_fields(self):
         native = self.build(definition={"id": 7, "revision": 3})
         report, calls = self.inspect([], listed=[native])
         self.assertNotIn("build_bindings", report)
-        self.assertEqual(set(report), {"complete", "blockers", "observed_at", "repository", "base_refs", "pull_requests",
-            "policies", "policy_evaluations", "builds", "timelines", "timeline_scope", "deployment_authority"})
+        self.assertNotIn("build_source_bindings", report)
+        self.assertNotIn("build_time_bindings", report)
+        self.assertEqual(set(report["default_build_bindings"]), {"repository_definition", "source", "time"})
+        self.assertEqual(report["builds"], [{key: native.get(key) for key in (
+            "id", "buildNumber", "status", "result", "sourceBranch", "sourceVersion", "queueTime", "startTime", "finishTime")}])
+        self.assertEqual(report["timeline_scope"], "first-ten-listed-builds")
+        self.assertEqual(report["requested_build_ids"], [])
         self.assertTrue(report["complete"])
         self.assertEqual(len(calls), 1)
 
@@ -1211,6 +1216,575 @@ class SelectedBuildAcquisitionTests(unittest.TestCase):
             self.assertEqual(report["builds"][0][key], native[key])
         encoded = json.dumps(report["builds"][0], sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")
         self.assertLessEqual(len(encoded), 2048)
+
+class ConsolidatedReaderTests(unittest.TestCase):
+    """Real reader + fake transport: native evidence is never a public fixture."""
+    def build(self, number=9, **changes):
+        return {"id": number, "repository": {"id": PROJECT_GUID.upper()},
+                "definition": {"id": 7, "revision": 3}, "sourceVersion": "a" * 40,
+                "sourceBranch": "refs/heads/PRIVATE_SENTINEL/é", "status": "completed", "result": "failed",
+                "queueTime": "2026-11-09T15:00:00Z", "startTime": "2026-11-09T15:01:00Z",
+                "finishTime": "2026-11-09T15:02:00Z", **changes}
+
+    def pr(self, **changes):
+        return {"pullRequestId": 4, "status": "active", "isDraft": False,
+                "sourceRefName": "refs/heads/PRIVATE_SENTINEL/é", "targetRefName": "refs/heads/develop",
+                "lastMergeSourceCommit": {"commitId": "a" * 40}, "lastMergeTargetCommit": {"commitId": "b" * 40},
+                **changes}
+
+    def records(self):
+        return [{"id": self.guid(1), "type": "Stage", "state": "completed", "result": "skipped", "identifier": "stage"},
+                {"id": self.guid(2), "parentId": self.guid(1), "type": "Job", "state": "completed", "result": "failed", "identifier": "job", "attempt": 2},
+                {"id": self.guid(3), "parentId": self.guid(2), "type": "Task", "state": "inProgress", "result": None}]
+
+    @staticmethod
+    def guid(number):
+        return "00000000-0000-0000-0000-%012x" % number
+
+    def observe(self, *, ids=(9,), listed=(), metadata=None, records=None, prs=None,
+                repository=None, configured="Website", incomplete=()):
+        client = types.SimpleNamespace(clock=Clock(), organization="Instablinds", project="Instablinds")
+        repository = {"id": PROJECT_GUID, "project": {"id": OTHER_PROJECT_GUID}} if repository is None else repository
+        def request(method, path, **kwargs):
+            self.assertEqual(method, "GET")
+            if path.startswith("_apis/git/repositories/"):
+                return deepcopy(repository)
+            if path.endswith("/timeline"):
+                value = self.records() if records is None else records
+                if isinstance(value, Exception):
+                    raise value
+                return deepcopy(value if isinstance(value, dict) else {"records": value})
+            number = int(path.rsplit("/", 1)[-1])
+            value = self.build(number) if metadata is None else metadata[number]
+            if isinstance(value, Exception):
+                raise value
+            return deepcopy(value)
+        def paged(path, **kwargs):
+            if path.endswith("/refs"):
+                values, family = [{"name": "refs/heads/develop", "objectId": "b" * 40}], "refs"
+            elif path.endswith("/pullrequests"):
+                values, family = [self.pr()] if prs is None else prs, "prs"
+            elif path == "_apis/build/builds":
+                values, family = list(listed), "builds"
+            else:
+                values, family = [], "policies"
+            return az.ReadCollection(items=deepcopy(values), complete=family not in incomplete)
+        client.request = mock.Mock(side_effect=request)
+        client.paged = mock.Mock(side_effect=paged)
+        result = az.AzureBoardsProvider(client).repository_evidence(configured, build_ids=ids)
+        return result, client
+
+    def test_complete_native_observation_retains_failed_skipped_and_running_states(self):
+        report, client = self.observe()
+        self.assertTrue(report["complete"])
+        self.assertTrue(report["binding_coverage_complete"])
+        self.assertTrue(report["bindings_complete"])
+        self.assertEqual(report["build_time_bindings"][0], {"build_id": 9, "status": "completed", "result": "failed",
+            "queue_time": "2026-11-09T15:00:00Z", "start_time": "2026-11-09T15:01:00Z", "finish_time": "2026-11-09T15:02:00Z",
+            "bindings_complete": True, "binding_missing_fields": [], "binding_malformed_fields": []})
+        timeline = report["timeline_bindings"][0]
+        self.assertTrue(timeline["bindings_complete"])
+        self.assertEqual([r.get("result") for r in timeline["records"]], ["skipped", "failed", None])
+        self.assertEqual([r.get("state") for r in timeline["records"]], ["completed", "completed", "inProgress"])
+        self.assertFalse(report["deployment_authority"])
+        self.assertEqual([c.args[1] for c in client.request.call_args_list], ["_apis/git/repositories/Website", "_apis/build/builds/9", "_apis/build/builds/9/timeline"])
+        self.assertFalse(any("definition" in c.args[0] for c in client.paged.call_args_list))
+        self.assertEqual(report["budget"]["reader_bytes"], az._repository_binding_size(report))
+        self.assertIsNone(report["budget"]["public_bytes"])
+        for key in ("observation", "pull_requests", "builds", "timelines"):
+            self.assertEqual(report["binding_coverage"][key], {"returned_count": 1, "projected_count": 1,
+                "bound_count": 1, "malformed_count": 0, "omitted_count": 0, "upstream_complete": True,
+                "count_capped": False, "byte_capped": False})
+
+    def test_build_time_requiredness_and_optional_native_invalidity(self):
+        for state in az._BUILD_STATUSES:
+            for result in (None, "none", "succeeded", "failed", "canceled"):
+                native = self.build(status=state, result=result, startTime=None, finishTime=None)
+                row = az._build_time_binding(native, 9, PROJECT_GUID)
+                expected = []
+                if state in ("completed", "inProgress", "cancelling"):
+                    expected.append("build.start_time")
+                if state == "completed":
+                    expected.append("build.finish_time")
+                    if result in (None, "none"):
+                        expected.append("build.result")
+                with self.subTest(state=state, result=result):
+                    self.assertEqual(row["binding_missing_fields"], sorted(expected))
+                    self.assertEqual(row["bindings_complete"], not expected)
+                    if state != "completed":
+                        self.assertEqual(row["result"], result)
+        for key in ("queueTime", "startTime", "finishTime"):
+            for value in (True, 1, [], {}, "PRIVATE_SENTINEL", "2026-02-30T00:00:00Z", "2028-12-31T23:59:60Z", "x" * 65):
+                native = self.build(status="notStarted", **{key: value})
+                report, _ = self.observe(metadata={9: native})
+                row = report["build_time_bindings"][0]
+                with self.subTest(key=key, value=value):
+                    code = {"queueTime": "queue_time", "startTime": "start_time", "finishTime": "finish_time"}[key]
+                    self.assertEqual(row["binding_malformed_fields"], ["build." + code])
+                    self.assertNotIn(code, row)
+                    self.assertFalse(report["bindings_complete"])
+                    self.assertNotIn("PRIVATE_SENTINEL", json.dumps(row))
+        native = self.build(queueTime="1991-01-01T00:59:60+01:00")
+        report, _ = self.observe(metadata={9: native})
+        self.assertEqual(report["build_time_bindings"][0]["queue_time"], native["queueTime"])
+        self.assertTrue(report["build_time_bindings"][0]["bindings_complete"])
+        for state in (None, [], {}, "PRIVATE_SENTINEL"):
+            row = az._build_time_binding(self.build(status=state, startTime=None, finishTime=None), 9, PROJECT_GUID)
+            self.assertEqual(row["binding_missing_fields"], ["build.status"] if state is None else [])
+            self.assertEqual(row["binding_malformed_fields"], [] if state is None else ["build.status"])
+
+    def test_native_time_precedes_fetched_legacy_sanitization(self):
+        native = self.build(status="notStarted", startTime="PRIVATE_SENTINEL", finishTime=None)
+        report, _ = self.observe(metadata={9: native})
+        self.assertIsNone(report["builds"][0]["startTime"])
+        self.assertEqual(report["build_time_bindings"][0]["binding_malformed_fields"], ["build.start_time"])
+        self.assertTrue(report["complete"])
+        self.assertTrue(report["binding_coverage_complete"])
+        self.assertFalse(report["bindings_complete"])
+
+    def test_pr_native_requiredness_digests_and_malformed_optional(self):
+        digest = "d8f2d99dcb8151ef9a5d5aaa0b7445a4507d2cd979934c9dd2784a37fea6bf54"
+        for state in ("active", "abandoned", "completed"):
+            for draft in (False, True):
+                report, _ = self.observe(prs=[self.pr(status=state, isDraft=draft)])
+                row = report["pr_bindings"][0]
+                self.assertEqual(row["source_ref_sha256"], digest)
+                self.assertEqual(row["binding_missing_fields"], ["pr.merge_commit_sha"] if state == "completed" else [])
+                self.assertEqual(row["bindings_complete"], state != "completed")
+        for key, value, code in (("lastMergeCommit", [], "pr.merge_commit_sha"),
+                                 ("lastMergeCommit", {"commitId": "PRIVATE_SENTINEL"}, "pr.merge_commit_sha"),
+                                 ("lastMergeSourceCommit", {"commitId": True}, "pr.source_commit_sha"),
+                                 ("sourceRefName", "refs/heads/\x00", "pr.source_ref_sha256"),
+                                 ("targetRefName", "refs/", "pr.target_ref_sha256")):
+            report, _ = self.observe(prs=[self.pr(**{key: value})])
+            row = report["pr_bindings"][0]
+            self.assertEqual(row["binding_malformed_fields"], [code])
+            self.assertFalse(row["bindings_complete"])
+            self.assertNotIn("PRIVATE_SENTINEL", json.dumps(row))
+        for value in (None, False, 0, -1, 1.0, "4", 2147483648):
+            report, _ = self.observe(prs=[self.pr(pullRequestId=value)])
+            self.assertEqual(report["pr_bindings"], [])
+            self.assertEqual(report["binding_coverage"]["pull_requests"]["malformed_count"], 1)
+            self.assertFalse(report["binding_coverage_complete"])
+
+    def test_duplicate_family_conflicts_never_choose_a_winner(self):
+        first = self.pr()
+        other = self.pr(lastMergeSourceCommit={"commitId": "c" * 40})
+        for values in ([first, other], [other, first]):
+            report, _ = self.observe(prs=values)
+            self.assertEqual(report["pr_bindings"], [{"pull_request_id": 4, "bindings_complete": False,
+                "binding_missing_fields": [], "binding_malformed_fields": ["pr.id"]}])
+            self.assertEqual(len(report["pull_requests"]), 2)
+            self.assertFalse(report["binding_coverage_complete"])
+            self.assertEqual(report["binding_coverage"]["pull_requests"]["malformed_count"], 2)
+        report, _ = self.observe(prs=[first, deepcopy(first)])
+        self.assertEqual(len(report["pr_bindings"]), 1)
+        first, second = self.build(), self.build(startTime="2026-11-09T15:01:01Z")
+        report, client = self.observe(listed=[first, second])
+        self.assertEqual(report["build_time_bindings"], [{"build_id": 9, "bindings_complete": False,
+            "binding_missing_fields": [], "binding_malformed_fields": ["build.id"]}])
+        self.assertTrue(report["build_source_bindings"][0]["bindings_complete"])
+        self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+        self.assertEqual(len(client.request.call_args_list), 2)
+
+    def test_default_transport_uses_only_actual_first_ten_selected_rows(self):
+        builds = [self.build(i) for i in range(1, 12)]
+        report, client = self.observe(ids=[], listed=builds)
+        self.assertEqual(report["requested_build_ids"], [])
+        self.assertEqual(report["timeline_scope"], "first-ten-listed-builds")
+        for key in ("build_bindings", "build_source_bindings", "build_time_bindings"):
+            self.assertNotIn(key, report)
+        self.assertEqual(set(report["default_build_bindings"]), {"repository_definition", "source", "time"})
+        for rows in report["default_build_bindings"].values():
+            self.assertEqual([r["build_id"] for r in rows], list(range(1, 11)))
+        self.assertEqual(len(client.request.call_args_list), 11)
+        report, _ = self.observe(ids=[], listed=[self.build(id=True), self.build(id=0), self.build(9)])
+        for rows in report["default_build_bindings"].values():
+            self.assertEqual([r["build_id"] for r in rows], [9])
+        self.assertFalse(report["binding_coverage_complete"])
+        self.assertIn("observation.request_ids", report["binding_malformed_fields"])
+        # A duplicate outside the selected first ten cannot change their facts.
+        builds = [self.build(i) for i in range(1, 11)] + [self.build(1, sourceVersion="b" * 40)]
+        report, _ = self.observe(ids=[], listed=builds)
+        self.assertEqual(report["default_build_bindings"]["source"][0]["source_commit_sha"], "a" * 40)
+
+    def test_request_repository_and_unknown_collection_coverage(self):
+        report, client = self.observe(ids=[False, "9", 0, -1, 1.0, 2147483648])
+        self.assertEqual(report["request_ids_invalid_count"], 6)
+        self.assertEqual(report["requested_build_ids"], [])
+        self.assertEqual(report["timeline_scope"], "explicit-build-ids")
+        self.assertEqual(len(client.request.call_args_list), 1)
+        self.assertNotIn("default_build_bindings", report)
+        report, _ = self.observe(configured=OTHER_PROJECT_GUID)
+        self.assertIn("observation.repository_id", report["binding_malformed_fields"])
+        self.assertEqual(report["repository_id"], PROJECT_GUID)
+        self.assertFalse(report["bindings_complete"])
+        for family in ("refs", "prs", "policies", "builds"):
+            report, _ = self.observe(incomplete=(family,))
+            self.assertFalse(report["binding_coverage_complete"])
+            self.assertFalse(report["bindings_complete"])
+
+    def test_full_native_relation_digest_facts_and_canonical_identities(self):
+        records = self.records()
+        records[0]["id"] = records[0]["id"].upper()
+        report, _ = self.observe(records=records)
+        container = report["timeline_bindings"][0]
+        index = [{"native_position": i, "id": record["id"].lower(), "type": record["type"],
+                  "parent_id": record.get("parentId")} for i, record in enumerate(records)]
+        import hashlib
+        digest = hashlib.sha256(json.dumps(index, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+        self.assertEqual(container["native_parent_index_sha256"], digest)
+        self.assertEqual(len(container["parent_validation_facts"]), 2)
+        for fact, child, parent, kind in zip(container["parent_validation_facts"], (2, 3), (1, 2), ("Stage", "Job")):
+            self.assertEqual(fact, {"schema_version": "atlas-tools.azure-parent-validation.v1", "build_id": 9,
+                "child_id": self.guid(child), "parent_id": self.guid(parent), "parent_type": kind,
+                "child_occurrences": 1, "parent_occurrences": 1, "resolution": "resolved", "acyclic": True,
+                "index_sha256": digest, "native_record_count": 3})
+            self.assertLessEqual(len(az._compact_binding_bytes(fact)), 512)
+        private = json.dumps(container)
+        for sentinel in ("PRIVATE_SENTINEL", "identifier\"", "startTime", "errorCount", "log"):
+            self.assertNotIn(sentinel, private)
+
+    def test_native_parent_missing_duplicate_type_and_full_cycle_failures(self):
+        for mutation, resolution, parent_count, missing in (
+                (lambda r: r.pop(0), "missing", 0, True),
+                (lambda r: r.append(deepcopy(r[0])), "ambiguous", 2, False),
+                (lambda r: r[0].update(type="Task"), "invalid", 1, False),
+                (lambda r: r[0].update(parentId=self.guid(2)), "invalid", 1, False),
+                (lambda r: r[1].update(parentId=self.guid(2)), "invalid", 1, False)):
+            records = self.records()
+            mutation(records)
+            report, _ = self.observe(records=records)
+            container = report["timeline_bindings"][0]
+            job = next(r for r in container["records"] if r.get("id") == self.guid(2))
+            fact = next(f for f in container["parent_validation_facts"] if f["child_id"] == self.guid(2))
+            self.assertEqual(fact["resolution"], resolution)
+            self.assertEqual(fact["parent_occurrences"], parent_count)
+            self.assertFalse(fact["acyclic"])
+            self.assertFalse(job["bindings_complete"])
+            self.assertIn("timeline.parent_resolution", job["binding_missing_fields" if missing else "binding_malformed_fields"])
+        # The entire chain is inspected, including a cycle well beyond the cap.
+        records = [{"id": self.guid(1), "parentId": self.guid(500), "type": "Job", "state": "pending", "identifier": "child"}]
+        records += [{"id": self.guid(i), "parentId": self.guid(i+1), "type": "Phase", "state": "pending"} for i in range(500, 1600)]
+        records.append({"id": self.guid(1600), "parentId": self.guid(1500), "type": "Phase", "state": "pending"})
+        typed, _ = az._typed_timeline({"records": records}, 9, True)
+        self.assertEqual(typed["returned_record_count"], 1102)
+        self.assertFalse(typed["records"][0]["bindings_complete"])
+        self.assertEqual(typed["parent_validation_facts"][0]["resolution"], "invalid")
+        self.assertFalse(typed["parent_validation_facts"][0]["acyclic"])
+
+    def test_typed_diagnostics_survive_legacy_timeline_rejection(self):
+        for key, value, code in (("state", "PRIVATE_SENTINEL", "timeline.state"),
+                                 ("result", "PRIVATE_SENTINEL", "timeline.result"),
+                                 ("id", [], "timeline.id")):
+            records = self.records()
+            records[0][key] = value
+            report, _ = self.observe(records=records)
+            self.assertEqual(report["timelines"], [])
+            self.assertEqual(len(report["timeline_bindings"]), 1)
+            self.assertFalse(report["complete"])
+            self.assertIn(code, report["timeline_bindings"][0]["binding_malformed_fields"])
+            self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report["timeline_bindings"]))
+        for key, value, code in (("type", "PRIVATE_SENTINEL", "timeline.type"),
+                                 ("attempt", True, "timeline.attempt"),
+                                 ("identifier", "", "timeline.identifier_sha256"),
+                                 ("parentId", "bad", "timeline.parent_id")):
+            records = self.records()
+            records[0][key] = value
+            report, _ = self.observe(records=records)
+            container = report["timeline_bindings"][0]
+            self.assertIn(code, container["binding_malformed_fields"])
+            self.assertFalse(container["bindings_complete"])
+            if key == "type":
+                self.assertTrue(container["states_recognized"])
+                self.assertEqual(set(container["records"][0]), {"id", "bindings_complete", "binding_missing_fields", "binding_malformed_fields"})
+        records = self.records()
+        records[0].pop("identifier")
+        records[0]["name"] = "PRIVATE_SENTINEL"
+        report, _ = self.observe(records=records)
+        self.assertIn("timeline.identifier_sha256", report["timeline_bindings"][0]["records"][0]["binding_missing_fields"])
+
+    def test_foreign_listed_build_cannot_attach_typed_children_or_facts(self):
+        report, client = self.observe(listed=[self.build(repository={"id": OTHER_PROJECT_GUID})])
+        self.assertEqual(len(report["timelines"]), 1)  # inherited legacy guard
+        self.assertEqual(len(client.request.call_args_list), 2)
+        container = report["timeline_bindings"][0]
+        self.assertFalse(container["bindings_complete"])
+        self.assertEqual(container["parent_validation_facts"], [])
+        self.assertTrue(all("timeline.build_id" in r["binding_malformed_fields"] for r in container["records"]))
+
+    def test_record_count_cap_uses_native_order_digest_and_full_state_denominator(self):
+        records = [{"id": self.guid(i), "type": "Stage", "identifier": "stage-%d" % i, "state": "completed", "result": "skipped"} for i in range(257, 0, -1)]
+        records[0]["state"] = "PRIVATE_SENTINEL"
+        typed, positions = az._typed_timeline({"records": records}, 9, True)
+        self.assertEqual(typed["record_count"], 257)
+        self.assertEqual(typed["returned_record_count"], 257)
+        self.assertEqual(typed["projected_record_count"], 256)
+        self.assertEqual([r["id"] for r in typed["records"]], [self.guid(i) for i in range(1, 257)])
+        self.assertEqual(positions, list(range(256, 0, -1)))
+        self.assertFalse(typed["states_recognized"])
+        self.assertIn("timeline.state", typed["binding_malformed_fields"])
+        report, _ = self.observe(records=records)
+        self.assertTrue(report["binding_coverage"]["timelines"]["count_capped"])
+        self.assertTrue(report["timeline_bindings"][0]["records_truncated"])
+        self.assertEqual(report["timeline_bindings"][0]["record_count"], 257)
+        self.assertLessEqual(report["budget"]["reader_bytes"], 98304)
+        self.assertFalse(report["binding_coverage_complete"])
+
+    def test_byte_omission_preserves_actual_omitted_parent_fact_and_legacy_pairing(self):
+        records = [{"id": self.guid(1), "parentId": self.guid(999), "type": "Job", "identifier": "child", "state": "pending"}]
+        records += [{"id": self.guid(i), "type": "Stage", "identifier": "stage-%d" % i, "state": "completed", "result": "skipped"} for i in range(2, 180)]
+        records.append({"id": self.guid(999), "type": "Stage", "identifier": "parent", "state": "pending"})
+        report, _ = self.observe(records=list(reversed(records)))
+        container = report["timeline_bindings"][0]
+        self.assertTrue(report["budget"]["aggregate_truncated"])
+        self.assertTrue(report["binding_coverage"]["timelines"]["byte_capped"])
+        self.assertFalse(report["binding_coverage"]["timelines"]["count_capped"])
+        self.assertEqual(container["record_count"], len(records))
+        self.assertEqual(container["returned_record_count"], len(records))
+        self.assertEqual(container["projected_record_count"], len(container["records"]))
+        self.assertNotIn(self.guid(999), [r["id"] for r in container["records"]])
+        self.assertTrue(container["records"][0]["bindings_complete"])
+        self.assertEqual(container["parent_validation_facts"][0]["parent_id"], self.guid(999))
+        self.assertEqual(container["parent_validation_facts"][0]["parent_occurrences"], 1)
+        self.assertEqual(container["parent_validation_facts"][0]["resolution"], "resolved")
+        self.assertEqual(container["parent_validation_facts"][0]["native_record_count"], len(records))
+        self.assertFalse(container["bindings_complete"])
+        self.assertFalse(report["bindings_complete"])
+        self.assertEqual({r["id"] for r in report["timelines"][0]["records"]}, {r["id"] for r in container["records"]})
+        # Legacy retained native order is preserved while typed GUID order sorts.
+        self.assertEqual([r["id"] for r in report["timelines"][0]["records"]], list(reversed([r["id"] for r in container["records"]])))
+        self.assertEqual(report["budget"]["reader_bytes"], az._repository_binding_size(report))
+        # One more tail record plus its legacy copy would exceed the envelope.
+        restored = deepcopy(report)
+        next_native = records[len(container["records"])]
+        typed, _ = az._typed_timeline({"records": [next_native]}, 9, True)
+        restored["timeline_bindings"][0]["records"].append(typed["records"][0])
+        restored["timelines"][0]["records"].append({key: next_native.get(key) for key in (
+            "id", "parentId", "type", "state", "result", "startTime", "finishTime", "errorCount", "warningCount")})
+        restored["timeline_bindings"][0]["projected_record_count"] += 1
+        self.assertGreater(az._reader_byte_count(restored), 98304)
+
+    def test_count_and_byte_fitting_retains_deterministic_32_by_256_prefix(self):
+        records = [{"id": self.guid(i), "type": "Stage", "identifier": "x" * 256,
+                    "state": "completed", "result": "skipped"} for i in range(1, 257)]
+        report, client = self.observe(ids=list(range(1, 33)), records=records)
+        self.assertEqual(len(client.request.call_args_list), 65)
+        self.assertEqual(report["requested_build_ids"], list(range(1, 33)))
+        self.assertTrue(report["budget"]["aggregate_truncated"])
+        self.assertFalse(report["binding_coverage_complete"])
+        self.assertFalse(report["bindings_complete"])
+        self.assertEqual(report["binding_coverage"]["timelines"]["returned_count"], 32)
+        self.assertEqual(report["binding_coverage"]["timelines"]["projected_count"], 32)
+        self.assertFalse(report["binding_coverage"]["timelines"]["count_capped"])
+        self.assertTrue(report["binding_coverage"]["timelines"]["byte_capped"])
+        self.assertEqual(report["budget"]["reader_bytes"], az._repository_binding_size(report))
+        self.assertLessEqual(report["budget"]["reader_bytes"], 98304)
+        retained = [(row["build_id"], record["id"]) for row in report["timeline_bindings"] for record in row["records"]]
+        native = [(number, self.guid(i)) for number in range(1, 33) for i in range(1, 257)]
+        self.assertEqual(retained, native[:len(retained)])
+        for typed, legacy in zip(report["timeline_bindings"], report["timelines"]):
+            self.assertEqual(typed["record_count"], 256)
+            self.assertEqual(typed["returned_record_count"], 256)
+            self.assertEqual(len(typed["records"]), len(legacy["records"]))
+
+    def test_native_invalid_build_identity_and_failed_repository_are_explicit(self):
+        for number in (True, 1.0, "9", 0, -1, 2147483648):
+            report, _ = self.observe(ids=[], listed=[self.build(id=number)])
+            self.assertEqual(report["timeline_bindings"], [])
+            self.assertTrue(all(not rows for rows in report["default_build_bindings"].values()))
+            self.assertFalse(report["binding_coverage_complete"])
+        report, _ = self.observe(metadata={9: self.build(10)})
+        self.assertEqual(report["binding_coverage"]["builds"]["malformed_count"], 1)
+        self.assertFalse(report["binding_coverage_complete"])
+        for repository, malformed in (({}, False), ({"id": None}, False), ({"id": 0}, True), ({"id": False}, True), ({"id": ""}, True)):
+            report, client = self.observe(repository=repository)
+            self.assertFalse(report["observed"])
+            self.assertEqual(len(client.request.call_args_list), 1)
+            self.assertFalse(report["budget"]["report_omitted"])
+            self.assertIn("observation.repository_id", report["binding_malformed_fields" if malformed else "binding_missing_fields"])
+            self.assertEqual(report["binding_missing_fields"], sorted(report["binding_missing_fields"]))
+
+    def test_missing_required_data_is_distinct_from_malformed_object_count(self):
+        native = self.build(queueTime=None, definition={"id": 7})
+        report, _ = self.observe(metadata={9: native})
+        self.assertFalse(report["bindings_complete"])
+        self.assertTrue(report["binding_coverage_complete"])
+        self.assertEqual(report["binding_coverage"]["builds"]["malformed_count"], 0)
+        self.assertIn("build.queue_time", report["binding_missing_fields"])
+        self.assertIn("build.definition_revision", report["binding_missing_fields"])
+        self.assertEqual(report["binding_malformed_fields"], [])
+
+    def test_cached_whole_serialization_matches_standard_pretty_bytes(self):
+        frozen = {"z": ["é", "e\u0301", "\n", "\x00", None, True, 1, 1.5], "a": {"id": "a" * 40}}
+        encoder = az._PrivatePrettySerializer([frozen])
+        evidence = {"repository_evidence": {"mutable": [frozen, {"native": frozen}], "counter": 0}}
+        for counter in (0, 9, 10, 98304):
+            evidence["repository_evidence"]["counter"] = counter
+            expected = json.dumps(evidence, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False)
+            self.assertEqual(encoder(evidence), expected)
+        evidence["repository_evidence"]["mutable"].pop()
+        self.assertEqual(encoder(evidence), json.dumps(evidence, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False))
+        self.assertEqual(encoder({}), "{}")
+        self.assertEqual(encoder([]), "[]")
+
+    def test_parent_facts_consume_aggregate_bytes_and_leave_with_exact_children(self):
+        records = [{"id": self.guid(i), "parentId": self.guid(999), "type": "Job", "identifier": "job-%d" % i,
+                    "state": "pending"} for i in range(1, 181)]
+        records.append({"id": self.guid(999), "type": "Stage", "identifier": "root", "state": "pending"})
+        report, _ = self.observe(records=records)
+        container = report["timeline_bindings"][0]
+        self.assertEqual(container["returned_record_count"], 181)
+        self.assertLess(len(container["records"]), 181)
+        self.assertEqual([f["child_id"] for f in container["parent_validation_facts"]], [r["id"] for r in container["records"]])
+        self.assertTrue(all(r["bindings_complete"] for r in container["records"]))
+        self.assertTrue(all(f["resolution"] == "resolved" and f["acyclic"] and f["native_record_count"] == 181
+                            and f["index_sha256"] == container["native_parent_index_sha256"]
+                            and len(az._compact_binding_bytes(f)) <= 512 for f in container["parent_validation_facts"]))
+        self.assertEqual(report["budget"]["reader_bytes"], az._repository_binding_size(report))
+        self.assertTrue(report["binding_coverage"]["timelines"]["byte_capped"])
+        self.assertFalse(report["binding_coverage"]["timelines"]["count_capped"])
+        self.assertNotIn(self.guid(999), [r["id"] for r in container["records"]])
+
+    def test_actual_repository_fitting_exact_boundary_then_one_byte_over(self):
+        base, _ = self.observe(listed=[self.build(buildNumber="")], records=[], prs=[])
+        size = base["budget"]["reader_bytes"]
+        padding = "x" * (98304 - size - (len(str(98304)) - len(str(size))))
+        exact, _ = self.observe(listed=[self.build(buildNumber=padding)], records=[], prs=[])
+        self.assertEqual(exact["budget"]["reader_bytes"], 98304)
+        self.assertEqual(az._repository_binding_size(exact), 98304)
+        self.assertFalse(exact["budget"]["aggregate_truncated"])
+        self.assertTrue(exact["bindings_complete"])
+        over, _ = self.observe(listed=[self.build(buildNumber=padding + "x")], records=[], prs=[])
+        self.assertTrue(over["budget"]["aggregate_truncated"])
+        self.assertEqual(over["timeline_bindings"], [])
+        self.assertEqual(over["timelines"], [])
+        self.assertEqual(over["builds"][0]["buildNumber"], padding + "x")
+        self.assertLessEqual(over["budget"]["reader_bytes"], 98304)
+        self.assertFalse(over["bindings_complete"])
+
+    def test_whole_parent_omission_removes_binding_sidecars_and_preserves_counts(self):
+        for ids in ((9,), ()):
+            report, _ = self.observe(ids=ids, listed=[self.build(buildNumber="x" * 100000)])
+            self.assertEqual(report["builds"], [])
+            self.assertEqual(report["pull_requests"], [])
+            self.assertEqual(report["pr_bindings"], [])
+            self.assertEqual(report["timeline_bindings"], [])
+            self.assertEqual(report["timelines"], [])
+            if ids:
+                for key in ("build_bindings", "build_source_bindings", "build_time_bindings"):
+                    self.assertEqual(report[key], [])
+                for suffix in ("metadata", "timeline", "repository", "definition", "source"):
+                    self.assertEqual(report["selected_builds_without_" + suffix], [9])
+            else:
+                self.assertTrue(all(not rows for rows in report["default_build_bindings"].values()))
+            for key in ("builds", "pull_requests", "timelines"):
+                coverage = report["binding_coverage"][key]
+                self.assertEqual(coverage["returned_count"], 1)
+                self.assertEqual(coverage["projected_count"], 0)
+                self.assertEqual(coverage["omitted_count"], 1)
+                self.assertTrue(coverage["byte_capped"])
+                self.assertEqual(coverage["malformed_count"], 0)
+
+    def test_rejected_legacy_metadata_does_not_erase_independent_valid_bindings(self):
+        report, _ = self.observe(metadata={9: self.build(sourceVersion="bad")})
+        self.assertEqual(report["selected_builds_without_metadata"], [9])
+        self.assertEqual(report["selected_builds_without_source"], [9])
+        self.assertEqual(report["selected_builds_without_repository"], [])
+        self.assertEqual(report["selected_builds_without_definition"], [])
+        self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+        self.assertFalse(report["bindings_complete"])
+        for changes in ({"status": "abandoned"}, {"isDraft": True}):
+            report, _ = self.observe(prs=[self.pr(), self.pr(**changes)])
+            self.assertEqual(report["pr_bindings"], [{"pull_request_id": 4, "bindings_complete": False,
+                "binding_missing_fields": [], "binding_malformed_fields": ["pr.id"]}])
+
+    def test_exact_revised_timeline_fixture_and_native_index_normalization(self):
+        records = self.records()
+        records[0].update(identifier="PRIVATE_SENTINEL.Stage", attempt=1, result="succeeded")
+        records[1].update(identifier="PRIVATE_SENTINEL.Job", result="succeeded")
+        records[2].update(state="completed", result="succeeded")
+        report, _ = self.observe(records=records)
+        container = report["timeline_bindings"][0]
+        self.assertEqual(set(container), {"build_id", "record_count", "returned_record_count", "projected_record_count",
+            "states_recognized", "records_truncated", "records", "bindings_complete", "binding_missing_fields",
+            "binding_malformed_fields", "native_parent_index_sha256", "parent_validation_facts"})
+        self.assertEqual(container["native_parent_index_sha256"], "af166f0eccdde323e2b70248277ed83b59f178ffea68c8cb9d144fee25f69a4a")
+        self.assertEqual(container["records"][0]["identifier_sha256"], "6b27dff2c21aa7b1a0e478b4781ed8be168c4d6dc2ef5510a2af40d2c5244a68")
+        self.assertEqual(container["records"][1]["identifier_sha256"], "670827e831da41b79957612af487e0b3569de26a3083a2f7dbcffc9ac36ddcec")
+        raw = [{"id": "bad", "type": [], "parentId": False, "state": "pending"}, None]
+        container, _ = az._typed_timeline({"records": raw}, 9, True)
+        import hashlib
+        normalized = [{"native_position": i, "id": None, "type": None, "parent_id": None} for i in range(2)]
+        digest = hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+        self.assertEqual(container["native_parent_index_sha256"], digest)
+        self.assertFalse(container["bindings_complete"])
+        self.assertEqual(container["parent_validation_facts"], [])
+        self.assertEqual(container["returned_record_count"], 2)
+        self.assertIn("timeline.records", container["binding_malformed_fields"])
+
+    def test_duplicate_unknown_type_tail_does_not_remove_another_child_fact(self):
+        records = [{"id": self.guid(1), "parentId": self.guid(999), "type": "Job", "identifier": "job", "attempt": 1, "state": "pending"},
+                   {"id": self.guid(1), "parentId": self.guid(999), "type": "unknown", "attempt": 2, "state": "pending"},
+                   {"id": self.guid(999), "type": "Stage", "identifier": "root", "state": "pending"}]
+        saw_single_child = False
+        for padding in range(90000, 98001, 100):
+            report, _ = self.observe(listed=[self.build(buildNumber="x" * padding)], records=records)
+            if not report["timeline_bindings"]:
+                continue
+            container = report["timeline_bindings"][0]
+            expected = [r["id"] for r in container["records"] if "parent_id" in r and "type" in r]
+            self.assertEqual([f["child_id"] for f in container["parent_validation_facts"]], expected)
+            saw_single_child |= len(container["records"]) == 1 and container["records"][0].get("type") == "Job"
+        self.assertTrue(saw_single_child)
+
+    def test_invalid_legacy_default_timeline_response_still_counts_before_projection(self):
+        report, _ = self.observe(ids=[], listed=[self.build(2147483648)], records=[])
+        self.assertEqual(report["timeline_bindings"], [])
+        self.assertEqual(len(report["timelines"]), 1)
+        self.assertEqual(report["binding_coverage"]["timelines"], {"returned_count": 1, "projected_count": 1,
+            "bound_count": 0, "malformed_count": 1, "omitted_count": 0, "upstream_complete": False,
+            "count_capped": False, "byte_capped": False})
+        report, _ = self.observe(ids=[], listed=[self.build(2147483648)], records={"records": None})
+        self.assertEqual(report["binding_coverage"]["timelines"]["returned_count"], 1)
+        self.assertEqual(report["binding_coverage"]["timelines"]["projected_count"], 0)
+        self.assertEqual(report["binding_coverage"]["timelines"]["omitted_count"], 1)
+        self.assertEqual(report["binding_coverage"]["timelines"]["malformed_count"], 1)
+
+    def test_whole_timeline_tail_order_includes_untyped_legacy_default_container(self):
+        listed = [self.build(buildNumber=""), self.build(2147483648)]
+        baseline, _ = self.observe(ids=[], listed=listed, records=[], prs=[])
+        size = baseline["budget"]["reader_bytes"]
+        padding = "x" * (98305 - size - (len(str(98305)) - len(str(size))))
+        listed[0]["buildNumber"] = padding
+        report, _ = self.observe(ids=[], listed=listed, records=[], prs=[])
+        self.assertTrue(report["budget"]["aggregate_truncated"])
+        self.assertEqual([row["build_id"] for row in report["timeline_bindings"]], [9])
+        self.assertEqual([row["build_id"] for row in report["timelines"]], [9])
+        self.assertEqual(report["binding_coverage"]["timelines"]["returned_count"], 2)
+        self.assertEqual(report["binding_coverage"]["timelines"]["projected_count"], 1)
+        self.assertEqual(report["binding_coverage"]["timelines"]["omitted_count"], 1)
+
+    def test_exact_private_byte_boundary_and_fixed_fallback(self):
+        evidence = {"budget": {"reader_bytes": 0}, "padding": ""}
+        size = az._reader_byte_count(evidence)
+        evidence["padding"] = "x" * (98304 - size - (len(str(98304)) - len(str(size))))
+        self.assertEqual(az._reader_byte_count(evidence), 98304)
+        evidence["padding"] += "x"
+        self.assertEqual(az._reader_byte_count(evidence), 98305)
+        fallback = az._minimal_repository_evidence()
+        self.assertIsNone(fallback["budget"]["reader_bytes"])
+        self.assertIsNone(fallback["reported_complete"])
+        self.assertFalse(fallback["bindings_complete"])
+        self.assertTrue(fallback["budget"]["report_omitted"])
+        self.assertLess(az._repository_binding_size(fallback), 98304)
+        for family in fallback["binding_coverage"].values():
+            self.assertIsNone(family["returned_count"])
+            self.assertIsNone(family["omitted_count"])
+        # Non-finite legacy native values cannot leak through allow_nan=False.
+        report, _ = self.observe(listed=[self.build(buildNumber=float("nan"))])
+        self.assertEqual(report, fallback)
+
 
 class EvidenceAndCliTests(unittest.TestCase):
     def test_policy_endpoint_preview_version_skip_and_sanitized_nested_records(self):

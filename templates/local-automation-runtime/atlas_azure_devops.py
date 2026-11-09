@@ -847,14 +847,23 @@ class AzureBoardsProvider:
     def repository_evidence(self, repository: str, *, base_branch: str = "refs/heads/develop",
                             build_ids=(), fresh: bool = True) -> dict:
         """Inspect source-control and pipeline evidence; never qualify deployment."""
+        build_ids = tuple(build_ids) if build_ids else ()
+        requested = sorted({value for value in build_ids if _binding_id(value)})
+        invalid_ids = sum(not _binding_id(value) for value in build_ids)
+        omitted_ids = max(0, len(requested) - 32)
+        requested = requested[:32]
+        native_builds, timeline_bindings, timeline_positions = {}, [], {}
+        fetched_native, timeline_reads_complete = [], True
+        timeline_response_count = timeline_invalid_identity_count = 0
         name = urllib.parse.quote(repository, safe="")
         client, blockers = self.client, []
+        repository_data = None
         try:
             repository_data = client.request("GET", f"_apis/git/repositories/{name}", fresh=fresh)
             if not isinstance(repository_data, dict) or not repository_data.get("id"):
                 raise AzureReadIncomplete("Repository evidence is missing its identity.")
-        except AzureError as error:
-            return {"complete": False, "blockers": [str(error)]}
+        except AzureError:
+            return _unavailable_repository_evidence(build_ids, timestamp(client.clock()), repository_data)
         repo_id = urllib.parse.quote(str(repository_data["id"]), safe="")
         refs = client.paged(f"_apis/git/repositories/{repo_id}/refs",
                             query={"filter": base_branch.removeprefix("refs/")}, fresh=fresh)
@@ -868,24 +877,27 @@ class AzureBoardsProvider:
             if not collection.complete:
                 blockers.extend(collection.blockers)
         for pr in prs.items:
-            if (pr.get("status") not in {"active", "abandoned", "completed"} or type(pr.get("isDraft")) is not bool
+            if (pr.get("status") not in ("active", "abandoned", "completed") or type(pr.get("isDraft")) is not bool
                     or not all(isinstance(pr.get(key), str) and pr[key].startswith("refs/") for key in ("sourceRefName", "targetRefName"))):
                 blockers.append("unknown-or-incomplete-pull-request-state")
         for build in builds.items:
             state, result = build.get("status"), build.get("result")
-            if (state not in {"none", "inProgress", "completed", "cancelling", "postponed", "notStarted"}
-                    or result not in {None, "none", "succeeded", "partiallySucceeded", "failed", "canceled"}
+            if (state not in ("none", "inProgress", "completed", "cancelling", "postponed", "notStarted")
+                    or result not in (None, "none", "succeeded", "partiallySucceeded", "failed", "canceled")
                     or (state == "completed" and result in {None, "none"})
                     or not build.get("sourceVersion")):
                 blockers.append("unknown-or-incomplete-build-state")
         if not any(item.get("name") == base_branch and item.get("objectId") for item in refs.items):
             blockers.append("configured-base-ref-not-observed")
         evaluations = []
-        project_data = repository_data.get("project") or {}
+        policy_reads_complete = True
+        project_data = repository_data.get("project") if isinstance(repository_data.get("project"), dict) else {}
         if len(prs.items) > 50:
+            policy_reads_complete = False
             blockers.append("pull-request-policy-evidence-budget-exhausted")
         for pr in prs.items[:50]:
             if not pr.get("pullRequestId") or not project_data.get("id"):
+                policy_reads_complete = False
                 blockers.append("pull-request-or-project-identity-missing")
                 continue
             artifact = f"vstfs:///CodeReview/CodeReviewId/{project_data['id']}/{pr['pullRequestId']}"
@@ -894,9 +906,13 @@ class AzureBoardsProvider:
             evaluations.extend({"pull_request_id": pr["pullRequestId"], "id": item.get("evaluationId"),
                                 "status": item.get("status")} for item in checks.items)
             if not checks.complete:
+                policy_reads_complete = False
                 blockers.extend(checks.blockers)
         timelines = []
         fetched_builds = []
+        for item in (builds.items if build_ids else builds.items[:10]):
+            if _binding_id(item.get("id")):
+                native_builds.setdefault(item["id"], []).append(item)
         if build_ids:
             build_bindings = []
             build_source_bindings = []
@@ -918,6 +934,8 @@ class AzureBoardsProvider:
                     source_binding = _selected_build_source_binding(None, build_id, repository_data.get("id"))
                     try:
                         native = client.request("GET", f"_apis/build/builds/{build_id}", fresh=True)
+                        fetched_native.append((build_id, native))
+                        native_builds[build_id] = [native]
                         source_binding = _selected_build_source_binding(native, build_id, repository_data.get("id"))
                         row = _selected_build_row(native, build_id, repository_data.get("id"))
                     except AzureError:
@@ -954,21 +972,30 @@ class AzureBoardsProvider:
             try:
                 build_id = numeric_issue_id(client.organization, client.project, build_id)
                 timeline = client.request("GET", f"_apis/build/builds/{build_id}/timeline", fresh=fresh)
+                timeline_response_count += 1
+                if not _binding_id(build_id):
+                    timeline_invalid_identity_count += 1
+                if _binding_id(build_id):
+                    typed, positions = _typed_timeline(timeline, build_id, _timeline_build_bound(
+                        native_builds.get(build_id, []), build_id, repository_data.get("id")))
+                    timeline_bindings.append(typed)
+                    timeline_positions[build_id] = positions
                 records = timeline.get("records") if isinstance(timeline, dict) else None
                 if not isinstance(records, list) or not all(isinstance(record, dict) and record.get("id") for record in records):
                     raise AzureReadIncomplete("Timeline records are missing.")
                 for record in records:
                     state, result = record.get("state"), record.get("result")
-                    if (state not in {"pending", "inProgress", "completed"}
-                            or result not in {None, "succeeded", "succeededWithIssues", "failed", "canceled", "skipped", "abandoned"}
+                    if (state not in ("pending", "inProgress", "completed")
+                            or result not in (None, "succeeded", "succeededWithIssues", "failed", "canceled", "skipped", "abandoned")
                             or (state == "completed" and result is None)):
                         raise AzureReadIncomplete("Timeline state is unknown or incomplete.")
                 timelines.append({"build_id": build_id, "records": [
                     {key: record.get(key) for key in ("id", "parentId", "type", "state", "result", "startTime", "finishTime", "errorCount", "warningCount")}
                     for record in records]})
             except AzureError as error:
+                timeline_reads_complete = False
                 blockers.append(str(error))
-        return {"complete": not blockers, "blockers": sorted(set(blockers)), "observed_at": timestamp(client.clock()),
+        report = {"complete": not blockers, "blockers": sorted(set(blockers)), "observed_at": timestamp(client.clock()),
                 "repository": {key: repository_data.get(key) for key in ("id", "name", "defaultBranch", "webUrl")},
                 "base_refs": [{key: item.get(key) for key in ("name", "objectId")} for item in refs.items],
                 "pull_requests": [{**{key: item.get(key) for key in ("pullRequestId", "status", "isDraft", "sourceRefName", "targetRefName")},
@@ -981,8 +1008,640 @@ class AzureBoardsProvider:
                 "timeline_scope": "explicit-build-ids" if build_ids else "first-ten-listed-builds",
                 **({"build_bindings": build_bindings, "build_source_bindings": build_source_bindings} if build_ids else {}),
                 "deployment_authority": False}
+        return _finish_repository_evidence(
+            report, repository, repository_data, build_ids, requested, invalid_ids, omitted_ids,
+            native_builds, builds, fetched_native, prs, refs, policies, timeline_bindings,
+            timeline_positions, timeline_reads_complete, policy_reads_complete,
+            timeline_response_count, timeline_invalid_identity_count)
 
 
+# Typed private evidence uses only the frozen finite vocabulary. These helpers
+# never acquire data; their inputs are the native objects from this one read.
+_BINDING_LIMIT = 98304
+_BUILD_STATUSES = ("none", "inProgress", "completed", "cancelling", "postponed", "notStarted")
+_BUILD_RESULTS = ("none", "succeeded", "partiallySucceeded", "failed", "canceled")
+_TIMELINE_TYPES = ("Stage", "Phase", "Job", "Task")
+_TIMELINE_STATES = ("pending", "inProgress", "completed")
+_TIMELINE_RESULTS = ("succeeded", "succeededWithIssues", "failed", "canceled", "skipped", "abandoned")
+
+
+def _binding_id(value):
+    return type(value) is int and 0 < value <= 2147483647
+
+
+def _binding_guid(value):
+    return value.lower() if isinstance(value, str) and _PROJECT_GUID.fullmatch(value) else None
+
+
+def _binding_text(value, maximum=256):
+    if not isinstance(value, str) or not value or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+        return None
+    try:
+        encoded = value.encode("utf-8")
+        return encoded if len(encoded) <= maximum else None
+    except UnicodeEncodeError:
+        return None
+
+
+def _binding_hash(value, *, ref=False):
+    encoded = _binding_text(value)
+    if encoded is None or (ref and (not value.startswith("refs/") or len(value) <= 5)):
+        return None
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _binding_timestamp(value):
+    return (_binding_text(value, 64) is not None and re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])", value)
+        is not None and _selected_build_timestamp_valid(value))
+
+
+def _binding_diagnostics(row, missing=(), malformed=()):
+    malformed = set(malformed)
+    row.update(bindings_complete=not missing and not malformed,
+               binding_missing_fields=sorted(set(missing) - malformed),
+               binding_malformed_fields=sorted(malformed))
+    return row
+
+
+def _binding_value(row, key, native, code, validator, missing, malformed, *, required=True):
+    if native is None:
+        if required:
+            missing.add(code)
+    elif validator(native):
+        row[key] = native
+    else:
+        malformed.add(code)
+
+
+def _family_binding(rows, key, number, normalize):
+    normalized = [normalize(item) for item in rows]
+    if not normalized:
+        return normalize(None)
+    if any(item != normalized[0] for item in normalized[1:]):
+        return _binding_diagnostics({key: number}, malformed=["pr.id" if key == "pull_request_id" else "build.id"])
+    return normalized[0]
+
+
+def _build_time_binding(native, build_id, repository_id):
+    row, missing, malformed = {"build_id": build_id}, set(), set()
+    # Apply exactly the source family's same-response identity guards. Failure
+    # leaves no time/state claim attached to a foreign or malformed identity.
+    identity = _selected_build_source_binding(native, build_id, repository_id)
+    for code in identity["binding_missing_fields"]:
+        if code in ("build.id", "build.repository_id"):
+            missing.add(code)
+    for code in identity["binding_malformed_fields"]:
+        if code in ("build.id", "build.repository_id"):
+            malformed.add(code)
+    if missing or malformed:
+        if not isinstance(native, dict):
+            missing.update(("build.status", "build.queue_time"))
+        return _binding_diagnostics(row, missing, malformed)
+    state, result = native.get("status"), native.get("result")
+    _binding_value(row, "status", state, "build.status", lambda v: v in _BUILD_STATUSES, missing, malformed)
+    if result is None or result == "none":
+        if state == "completed":
+            missing.add("build.result")
+        elif state in _BUILD_STATUSES:
+            row["result"] = None if result is None else result
+    else:
+        _binding_value(row, "result", result, "build.result", lambda v: v in _BUILD_RESULTS, missing, malformed)
+    for native_key, key in (("queueTime", "queue_time"), ("startTime", "start_time"), ("finishTime", "finish_time")):
+        required = key == "queue_time" or (key == "start_time" and state in ("completed", "inProgress", "cancelling")) or (key == "finish_time" and state == "completed")
+        _binding_value(row, key, native.get(native_key), "build." + key, _binding_timestamp, missing, malformed, required=required)
+    return _binding_diagnostics(row, missing, malformed)
+
+
+def _pr_binding(native):
+    number = native.get("pullRequestId")
+    if not _binding_id(number):
+        return None
+    row, missing, malformed = {"pull_request_id": number}, set(), set()
+    state = native.get("status")
+    if state is None:
+        missing.add("pr.status")
+    elif state not in ("active", "abandoned", "completed"):
+        malformed.add("pr.status")
+    if native.get("isDraft") is None:
+        missing.add("pr.is_draft")
+    elif type(native["isDraft"]) is not bool:
+        malformed.add("pr.is_draft")
+    for native_key, key in (("lastMergeSourceCommit", "source_commit_sha"), ("lastMergeTargetCommit", "target_commit_sha"), ("lastMergeCommit", "merge_commit_sha")):
+        container = native.get(native_key)
+        code = "pr." + key
+        if container is not None and not isinstance(container, dict):
+            malformed.add(code)
+        else:
+            value = container.get("commitId") if isinstance(container, dict) else None
+            _binding_value(row, key, value, code, lambda v: isinstance(v, str) and re.fullmatch(r"[0-9a-f]{40}", v),
+                           missing, malformed, required=key != "merge_commit_sha" or state == "completed")
+    for native_key, key in (("sourceRefName", "source_ref_sha256"), ("targetRefName", "target_ref_sha256")):
+        value = native.get(native_key)
+        digest = _binding_hash(value, ref=True)
+        if digest:
+            row[key] = digest
+        elif value is None:
+            missing.add("pr." + key)
+        else:
+            malformed.add("pr." + key)
+    return _binding_diagnostics(row, missing, malformed)
+
+
+def _timeline_build_bound(rows, build_id, repository_id):
+    # Family conflicts and absent native identities cannot be repaired from the
+    # sanitized legacy build. Definition/time validity remains a separate family.
+    source = _family_binding(rows, "build_id", build_id,
+                             lambda item: _selected_build_source_binding(item, build_id, repository_id))
+    return source["bindings_complete"]
+
+
+def _parent_type_allowed(child, parent):
+    return (parent in _TIMELINE_TYPES if child == "Stage" else
+            parent in ("Stage", "Phase") if child in ("Phase", "Job") else
+            parent == "Job" if child == "Task" else False)
+
+
+def _compact_binding_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")
+
+
+def _typed_timeline(native, build_id, build_bound):
+    raw = native.get("records") if isinstance(native, dict) else None
+    missing, malformed = set(), set()
+    if not build_bound:
+        malformed.add("timeline.build_id")
+    if not isinstance(raw, list):
+        (missing if raw is None else malformed).add("timeline.records")
+        # No records-list observation: zero retained rows, with explicit refusal.
+        raw = []
+    if any(not isinstance(item, dict) for item in raw):
+        malformed.add("timeline.records")
+    count = len(raw)
+    relation_index, identities = [], {}
+    for position, item in enumerate(raw):
+        item = item if isinstance(item, dict) else {}
+        ident, parent = _binding_guid(item.get("id")), _binding_guid(item.get("parentId"))
+        kind = item.get("type") if item.get("type") in _TIMELINE_TYPES else None
+        relation_index.append({"native_position": position, "id": ident, "type": kind, "parent_id": parent})
+        if ident is not None:
+            identities.setdefault(ident, []).append(position)
+    index_hash = hashlib.sha256(_compact_binding_bytes(relation_index)).hexdigest()
+
+    # Resolve the complete native functional graph iteratively. Memoizing whole
+    # ancestor paths avoids recursion limits and quadratic chain walks. Absence,
+    # duplicates, illegal types and cycles remain different failure categories.
+    relation = {}
+    for start in range(count):
+        if start in relation:
+            continue
+        path, seen, current = [], set(), start
+        while current not in relation and current not in seen:
+            seen.add(current)
+            path.append(current)
+            entry = relation_index[current]
+            item = raw[current] if isinstance(raw[current], dict) else {}
+            ident, kind, parent = entry["id"], entry["type"], entry["parent_id"]
+            if ident is None or kind is None:
+                outcome = ("invalid", False)
+                break
+            if len(identities[ident]) != 1:
+                outcome = ("ambiguous", False)
+                break
+            if item.get("parentId") is None:
+                outcome = ("resolved", True) if kind == "Stage" else ("missing", False)
+                break
+            if parent is None:
+                outcome = ("invalid", False)
+                break
+            parents = identities.get(parent, [])
+            if not parents:
+                outcome = ("missing", False)
+                break
+            if len(parents) != 1:
+                outcome = ("ambiguous", False)
+                break
+            target = parents[0]
+            if not _parent_type_allowed(kind, relation_index[target]["type"]):
+                outcome = ("invalid", False)
+                break
+            current = target
+        else:
+            outcome = relation[current] if current in relation else ("invalid", False)
+        for position in path:
+            relation[position] = outcome
+
+    records, facts, positions = [], [], []
+    states_recognized = True
+    ordered = sorted(range(count), key=lambda i: (
+        relation_index[i]["id"] is None, relation_index[i]["id"] or "",
+        (raw[i].get("attempt") if isinstance(raw[i], dict) and _binding_id(raw[i].get("attempt")) else 0)
+        if relation_index[i]["id"] is not None else 0, i))
+    # All native state/result validity is evaluated even after the retention cap.
+    for item in raw:
+        state, result = (item.get("state"), item.get("result")) if isinstance(item, dict) else (None, None)
+        states_recognized &= state in _TIMELINE_STATES and result in (None, *_TIMELINE_RESULTS) and not (state == "completed" and result is None)
+    for position in ordered:
+        item = raw[position] if isinstance(raw[position], dict) else {}
+        entry = relation_index[position]
+        row, row_missing, row_malformed = {}, set(), set()
+        ident, parent, kind = entry["id"], entry["parent_id"], entry["type"]
+        if ident is not None:
+            row["id"] = ident
+            if len(identities[ident]) != 1:
+                row_malformed.add("timeline.duplicate_id")
+        else:
+            (row_missing if item.get("id") is None else row_malformed).add("timeline.id")
+        if kind is None:
+            (row_missing if item.get("type") is None else row_malformed).add("timeline.type")
+        # Unknown types retain only a safe GUID and diagnostics. Validate all
+        # known fields anyway, so optional native malformed values cannot vanish.
+        safe = {}
+        for key, value, validator, required in (
+                ("type", item.get("type"), lambda v: v in _TIMELINE_TYPES, True),
+                ("state", item.get("state"), lambda v: v in _TIMELINE_STATES, True),
+                ("result", item.get("result"), lambda v: v in _TIMELINE_RESULTS, item.get("state") == "completed"),
+                ("attempt", item.get("attempt"), _binding_id, False)):
+            _binding_value(safe, key, value, "timeline." + key, validator, row_missing, row_malformed, required=required)
+        if parent:
+            safe["parent_id"] = parent
+        elif item.get("parentId") is not None or kind in ("Phase", "Job", "Task"):
+            (row_missing if item.get("parentId") is None else row_malformed).add("timeline.parent_id")
+        digest = _binding_hash(item.get("identifier"))
+        if digest:
+            safe["identifier_sha256"] = digest
+        elif item.get("identifier") is not None or kind in ("Stage", "Job"):
+            (row_missing if item.get("identifier") is None else row_malformed).add("timeline.identifier_sha256")
+        fact = None
+        needs_parent = item.get("parentId") is not None or kind in ("Phase", "Job", "Task")
+        if needs_parent and ident and parent:
+            resolution, acyclic = relation[position]
+            parents = identities.get(parent, [])
+            parent_type = relation_index[parents[0]]["type"] if len(parents) == 1 else None
+            if count <= 2147483647:
+                fact = {"schema_version": "atlas-tools.azure-parent-validation.v1", "build_id": build_id,
+                        "child_id": ident, "parent_id": parent, "parent_type": parent_type,
+                        "child_occurrences": len(identities[ident]), "parent_occurrences": len(parents),
+                        "resolution": resolution, "acyclic": acyclic, "index_sha256": index_hash,
+                        "native_record_count": count}
+            if resolution != "resolved":
+                (row_missing if resolution == "missing" else row_malformed).add("timeline.parent_resolution")
+        elif needs_parent:
+            row_missing.add("timeline.parent_resolution")
+        if kind is not None:
+            row.update(safe)
+        if not build_bound:
+            row_malformed.add("timeline.build_id")
+        if count > 2147483647:
+            row_malformed.add("timeline.parent_resolution")
+        _binding_diagnostics(row, row_missing, row_malformed)
+        missing.update(row["binding_missing_fields"])
+        malformed.update(row["binding_malformed_fields"])
+        # No fact for unknown-type or unknown-ID rows; no invented resolution.
+        if kind is None or not build_bound:
+            fact = None
+        if len(records) < 256 and (fact is None or len(_compact_binding_bytes(fact)) <= 512):
+            records.append(row)
+            positions.append(position)
+            if fact is not None:
+                facts.append(fact)
+    container = {"build_id": build_id, "record_count": count, "returned_record_count": count,
+                 "projected_record_count": len(records), "states_recognized": bool(states_recognized),
+                 "records_truncated": len(records) < count, "records": records,
+                 "native_parent_index_sha256": index_hash, "parent_validation_facts": facts}
+    _binding_diagnostics(container, missing, malformed)
+    if container["records_truncated"]:
+        container["bindings_complete"] = False
+    return container, positions
+
+
+def _repository_binding_size(evidence):
+    return len((json.dumps({"repository_evidence": evidence}, indent=2, sort_keys=True,
+                           ensure_ascii=True, allow_nan=False) + "\n").encode("utf-8"))
+
+
+def _reader_byte_count(evidence, serialize=None):
+    evidence["budget"]["reader_bytes"] = 0
+    for _ in range(7):
+        size = (_repository_binding_size(evidence) if serialize is None else
+                len((serialize({"repository_evidence": evidence}) + "\n").encode("utf-8")))
+        if size == evidence["budget"]["reader_bytes"]:
+            return size
+        evidence["budget"]["reader_bytes"] = size
+    raise ValueError("Nonconvergent evidence accounting")
+
+
+class _PrivatePrettySerializer:
+    """Exact json.dumps(indent=2) bytes, caching only explicitly frozen values.
+
+    Fitting still serializes the whole embedded object at every measurement.
+    Cached rows include their actual nesting whitespace, keys and diagnostics;
+    mutable lists, containers, counters and flags are encoded again each time.
+    Frozen objects stay alive here so object-ID reuse cannot alias a cache entry.
+    """
+    def __init__(self, frozen):
+        self.frozen = {id(value): value for value in frozen}
+        self.cache = {}
+
+    def __call__(self, value, depth=0):
+        key = (id(value), depth)
+        if id(value) in self.frozen:
+            if key not in self.cache:
+                encoded = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False)
+                self.cache[key] = encoded.replace("\n", "\n" + "  " * depth)
+            return self.cache[key]
+        indent, closing = "  " * (depth + 1), "  " * depth
+        if isinstance(value, dict):
+            if not value:
+                return "{}"
+            entries = [indent + json.dumps(key, ensure_ascii=True) + ": " + self(value[key], depth + 1)
+                       for key in sorted(value)]
+            return "{\n" + ",\n".join(entries) + "\n" + closing + "}"
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return "[]"
+            return "[\n" + ",\n".join(indent + self(item, depth + 1) for item in value) + "\n" + closing + "]"
+        return json.dumps(value, ensure_ascii=True, allow_nan=False)
+
+
+def _minimal_repository_evidence():
+    # Exact frozen minimal_repository_fallback, shared by the reader and wrapper
+    # contract. Null counts mean unavailable provenance, never an empty success.
+    evidence = {"base_refs": [], "builds": [], "pull_requests": [], "policies": [], "policy_evaluations": [], "timelines": [],
+            "binding_coverage": {key: {"returned_count": None, "projected_count": 0, "bound_count": 0,
+                "malformed_count": None, "omitted_count": None, "upstream_complete": False,
+                "count_capped": False, "byte_capped": True} for key in ("observation", "pull_requests", "builds", "timelines")},
+            "binding_coverage_complete": False, "binding_missing_fields": ["observation.coverage"],
+            "binding_malformed_fields": [], "bindings_complete": False,
+            "blocker_codes": ["observation-byte-budget-exhausted"], "complete": False, "coverage": {},
+            "deployment_authority": False, "evidence_contract": "atlas-tools.azure-observation.v1",
+            "missing_fields": [], "observed": True, "omitted_fields": [], "projection_complete": False,
+            "reported_complete": None, "repository_matches_profile": False,
+            "request_ids_invalid_count": None, "requested_build_ids": [], "requested_build_ids_omitted_count": None,
+            "selected_build_ids": [], "selected_build_ids_truncated": True,
+            "selected_builds_without_definition": [], "selected_builds_without_metadata": [],
+            "selected_builds_without_repository": [], "selected_builds_without_source": [], "selected_builds_without_timeline": [],
+            "budget": {"aggregate_truncated": True, "public_byte_limit": 98304, "public_bytes": None,
+                       "reader_byte_limit": 98304, "reader_bytes": None, "report_omitted": True}}
+    if _repository_binding_size(evidence) > _BINDING_LIMIT:
+        raise AzureError("Fixed repository omission envelope exceeds its byte budget.")
+    return evidence
+
+
+def _unavailable_repository_evidence(build_ids, observed_at, native_repository=None):
+    evidence = _minimal_repository_evidence()
+    # Repository acquisition failed: retain truthful request/mode provenance in
+    # the ordinary bounded envelope rather than calling it a byte omission.
+    requested = sorted({value for value in build_ids if _binding_id(value)})
+    evidence.update(observed=False, observed_at=observed_at, requested_build_ids=requested[:32],
+                    selected_build_ids=requested[:32], selected_build_ids_truncated=len(requested) > 32,
+                    request_ids_invalid_count=sum(not _binding_id(v) for v in build_ids),
+                    requested_build_ids_omitted_count=max(0, len(requested) - 32),
+                    timeline_scope="explicit-build-ids" if build_ids else "first-ten-listed-builds",
+                    blockers=["repository-evidence-unavailable"], blocker_codes=[],
+                    binding_missing_fields=["observation.coverage", "observation.repository_id"])
+    evidence["budget"].update(aggregate_truncated=False, report_omitted=False)
+    for family in evidence["binding_coverage"].values():
+        family["byte_capped"] = False
+    if (native_repository is not None and not isinstance(native_repository, dict)) or (
+            isinstance(native_repository, dict) and native_repository.get("id") is not None):
+        evidence["binding_missing_fields"] = ["observation.coverage"]
+        evidence["binding_malformed_fields"] = ["observation.repository_id"]
+    if len(requested) > 32:
+        for key in ("builds", "timelines"):
+            evidence["binding_coverage"][key]["count_capped"] = True
+    _reader_byte_count(evidence)
+    return evidence
+
+
+def _finish_repository_evidence(report, configured_repository, repository_data, build_ids, requested,
+                                invalid_ids, omitted_ids, native_builds, builds, fetched_native, prs,
+                                refs, policies, timelines, positions, timeline_reads_complete, policy_reads_complete,
+                                timeline_response_count, timeline_invalid_identity_count):
+    repository_id = _binding_guid(repository_data.get("id"))
+    observation_missing, observation_malformed = set(), set()
+    if repository_id is None:
+        (observation_missing if repository_data.get("id") is None else observation_malformed).add("observation.repository_id")
+    configured_guid = _binding_guid(configured_repository)
+    if configured_guid and repository_id != configured_guid:
+        observation_malformed.add("observation.repository_id")
+    if invalid_ids or omitted_ids:
+        observation_malformed.add("observation.request_ids")
+    if not _binding_timestamp(report.get("observed_at")):
+        observation_malformed.add("observation.observed_at")
+    report.update(evidence_contract="atlas-tools.azure-observation.v1", requested_build_ids=requested,
+                  request_ids_invalid_count=invalid_ids, requested_build_ids_omitted_count=omitted_ids,
+                  selected_build_ids=list(requested), selected_build_ids_truncated=bool(omitted_ids),
+                  timeline_bindings=timelines)
+    if repository_id:
+        report["repository_id"] = repository_id
+    selected_ids = requested if build_ids else sorted({item["id"] for item in builds.items[:10] if _binding_id(item.get("id"))})
+    if not build_ids and any(not _binding_id(item.get("id")) for item in builds.items[:10]):
+        observation_malformed.add("observation.request_ids")
+    time_rows = [_family_binding(native_builds.get(number, []), "build_id", number,
+                                lambda native, number=number: _build_time_binding(native, number, repository_id)) for number in selected_ids]
+    if build_ids:
+        report["build_time_bindings"] = time_rows
+    else:
+        report["default_build_bindings"] = {
+            "repository_definition": [_family_binding(native_builds.get(number, []), "build_id", number,
+                lambda native, number=number: _bounded_build_binding(_selected_build_binding(native, number, repository_id))) for number in selected_ids],
+            "source": [_family_binding(native_builds.get(number, []), "build_id", number,
+                lambda native, number=number: _bounded_build_source_binding(_selected_build_source_binding(native, number, repository_id))) for number in selected_ids],
+            "time": time_rows}
+    pr_ids = sorted({item["pullRequestId"] for item in prs.items if _binding_id(item.get("pullRequestId"))})
+    report["pr_bindings"] = []
+    for number in pr_ids:
+        native_rows = [item for item in prs.items if type(item.get("pullRequestId")) is int and item["pullRequestId"] == number]
+        row = _family_binding(native_rows, "pull_request_id", number, _pr_binding)
+        associations = [(item.get("status") if item.get("status") in ("active", "abandoned", "completed") else None,
+                         item.get("isDraft") if type(item.get("isDraft")) is bool else None) for item in native_rows]
+        if any(item != associations[0] for item in associations[1:]):
+            row = _binding_diagnostics({"pull_request_id": number}, malformed=["pr.id"])
+        report["pr_bindings"].append(row)
+    invalid_prs = sum(not _binding_id(item.get("pullRequestId")) for item in prs.items)
+    if invalid_prs:
+        observation_malformed.add("pr.id")
+    # Preserve native collection cardinalities and original semantic diagnostics
+    # separately from all count/byte fitting below.
+    families = report.get("default_build_bindings") or {"repository_definition": report.get("build_bindings", []),
+                                                       "source": report.get("build_source_bindings", []), "time": time_rows}
+    family_maps = [{row["build_id"]: row for row in families[key]} for key in ("repository_definition", "source", "time")]
+    def build_bound(number):
+        return _binding_id(number) and all(number in rows and rows[number]["bindings_complete"] for rows in family_maps)
+    build_native_count = len(builds.items) + len(fetched_native)
+    def native_build_malformed(item, expected=None):
+        if not isinstance(item, dict) or not _binding_id(item.get("id")):
+            return True
+        number = item["id"] if expected is None else expected
+        # Missing required values and supplied malformed values remain distinct
+        # in both field diagnostics and native malformed-object counters.
+        return any(normalize(item, number, repository_id)["binding_malformed_fields"] for normalize in
+                   (_selected_build_binding, _selected_build_source_binding, _build_time_binding)) or any(
+                       number in rows and rows[number]["binding_malformed_fields"] for rows in family_maps)
+    malformed_builds = sum(native_build_malformed(item) for item in builds.items) + sum(
+        native_build_malformed(item, expected) for expected, item in fetched_native)
+    original_pr_map = {row["pull_request_id"]: row for row in report["pr_bindings"]}
+    malformed_prs = invalid_prs + sum(bool(original_pr_map[item["pullRequestId"]]["binding_malformed_fields"]) for item in prs.items if _binding_id(item.get("pullRequestId")))
+    def native_build_identity_valid(item, expected):
+        if not isinstance(item, dict) or not _binding_id(item.get("id")):
+            return False
+        identity = _selected_build_source_binding(item, expected, repository_id)
+        return not any(code in ("build.id", "build.repository_id") for code in
+                       identity["binding_missing_fields"] + identity["binding_malformed_fields"])
+    native_build_identities_valid = (all(native_build_identity_valid(item, item.get("id")) for item in builds.items)
+                                     and all(native_build_identity_valid(item, expected) for expected, item in fetched_native))
+    native_timeline_count = timeline_response_count
+    malformed_timelines = timeline_invalid_identity_count + sum(bool(row["binding_malformed_fields"]) for row in timelines)
+    coverage = {}
+    for key, returned, malformed_count, upstream in (
+            ("observation", 1, int(bool(observation_malformed)), refs.complete and policies.complete and policy_reads_complete),
+            ("pull_requests", len(prs.items), malformed_prs, prs.complete),
+            ("builds", build_native_count, malformed_builds, builds.complete and len(fetched_native) == len([n for n in requested if n not in {item.get("id") for item in builds.items if _binding_id(item.get("id"))}])),
+            ("timelines", native_timeline_count, malformed_timelines, timeline_reads_complete and not timeline_invalid_identity_count and native_timeline_count == len(selected_ids))):
+        coverage[key] = {"returned_count": returned, "projected_count": 0, "bound_count": 0,
+                         "malformed_count": malformed_count, "omitted_count": returned,
+                         "upstream_complete": bool(upstream), "count_capped": False, "byte_capped": False}
+    coverage["observation"].update(projected_count=1, omitted_count=0)
+    report["binding_coverage"] = coverage
+    report["budget"] = {"reader_bytes": 0, "public_bytes": None, "reader_byte_limit": 98304,
+                        "public_byte_limit": 98304, "aggregate_truncated": False, "report_omitted": False}
+    observation_valid = (not observation_missing and not observation_malformed and not invalid_prs
+                         and not any("pr.id" in row["binding_malformed_fields"] for row in report["pr_bindings"])
+                         and not any("build.id" in row["binding_malformed_fields"] for rows in families.values() for row in rows)
+                         and native_build_identities_valid and not any(
+                             code in ("timeline.id", "timeline.parent_id", "timeline.duplicate_id", "timeline.build_id")
+                             for row in timelines for code in row["binding_missing_fields"] + row["binding_malformed_fields"]))
+    # Preserve all field-level failures even when their native objects leave.
+    all_rows = [*report["pr_bindings"], *(row for rows in families.values() for row in rows), *timelines]
+    for row in all_rows:
+        observation_missing.update(row["binding_missing_fields"])
+        observation_malformed.update(row["binding_malformed_fields"])
+    original_legacy_complete = report["complete"]
+    # Match duplicated raw records to exactly the native positions retained in
+    # the typed projection, without publishing positions as record properties.
+    legacy_by_build = {row["build_id"]: row for row in report["timelines"]}
+    raw_by_position = {number: dict(enumerate(row["records"])) for number, row in legacy_by_build.items()}
+    for row in timelines:
+        if row["records_truncated"]:
+            coverage["timelines"]["count_capped"] = True
+            if row["build_id"] in legacy_by_build:
+                legacy_by_build[row["build_id"]]["records"] = [raw_by_position[row["build_id"]][i] for i in sorted(positions[row["build_id"]])]
+    original_build_ids = {row.get("id") for row in report["builds"] if _binding_id(row.get("id"))}
+    for key in ("base_refs", "pull_requests", "policies", "policy_evaluations", "builds", "timelines"):
+        if len(report[key]) > 32:
+            del report[key][32:]
+            family = key if key in coverage else "observation"
+            coverage[family]["count_capped"] = True
+    if omitted_ids:
+        coverage["builds"]["count_capped"] = coverage["timelines"]["count_capped"] = True
+
+    def refresh():
+        retained_build_ids = {row.get("id") for row in report["builds"] if _binding_id(row.get("id"))}
+        retained_pr_ids = {row.get("pullRequestId") for row in report["pull_requests"] if _binding_id(row.get("pullRequestId"))}
+        report["pr_bindings"][:] = [row for row in report["pr_bindings"] if row["pull_request_id"] in retained_pr_ids]
+        for rows in families.values():
+            # Rejected selected metadata rows are diagnostic provenance, not an
+            # orphan successful object. Keep them until an actual build is cut.
+            rows[:] = [row for row in rows if row["build_id"] in retained_build_ids or row["build_id"] not in original_build_ids]
+        family_maps[:] = [{row["build_id"]: row for row in families[key]}
+                          for key in ("repository_definition", "source", "time")]
+        for row in report["timeline_bindings"]:
+            row["projected_record_count"] = len(row["records"])
+            row["records_truncated"] |= len(row["records"]) < row["returned_record_count"]
+            if row["records_truncated"]:
+                row["bindings_complete"] = False
+        pr_map = {row["pull_request_id"]: row for row in report["pr_bindings"]}
+        current_timelines = report["timeline_bindings"]
+        for key, projected, bound in (
+                ("pull_requests", len(report["pull_requests"]), sum(_binding_id(row.get("pullRequestId")) and row["pullRequestId"] in pr_map and pr_map[row["pullRequestId"]]["bindings_complete"] for row in report["pull_requests"])),
+                ("builds", len(report["builds"]), sum(build_bound(row.get("id")) for row in report["builds"])),
+                ("timelines", len({row["build_id"] for row in current_timelines} | {row["build_id"] for row in report["timelines"]}), sum(row["bindings_complete"] for row in current_timelines))):
+            coverage[key].update(projected_count=projected, bound_count=bound,
+                                 omitted_count=max(0, coverage[key]["returned_count"] - projected))
+        metadata_ids = retained_build_ids
+        timeline_ids = {row["build_id"] for row in current_timelines}
+        report["selected_builds_without_metadata"] = sorted(set(requested) - metadata_ids)
+        report["selected_builds_without_timeline"] = sorted(set(requested) - timeline_ids)
+        for suffix, required, codes in (
+                ("repository", ("repository_id",), ("build.repository_id", "build.id")),
+                ("definition", ("definition_id", "definition_revision"), ("build.definition_id", "build.definition_revision", "build.id")),
+                ("source", ("source_commit_sha", "source_ref_sha256"), ("build.source_commit_sha", "build.source_ref_sha256", "build.repository_id", "build.id"))):
+            rows = family_maps[1 if suffix == "source" else 0]
+            report["selected_builds_without_" + suffix] = [number for number in requested if number not in rows
+                or any(key not in rows[number] for key in required)
+                or any(code in rows[number]["binding_missing_fields"] + rows[number]["binding_malformed_fields"] for code in codes)]
+        globally_covered = (observation_valid and not invalid_ids and not omitted_ids
+                            and all(f["upstream_complete"] and not f["count_capped"] and not f["byte_capped"] and f["omitted_count"] == 0 for f in coverage.values())
+                            and not any(report["selected_builds_without_" + key] for key in ("metadata", "timeline", "repository")))
+        # Semantic field validity and observation coverage are separate claims.
+        report["binding_coverage_complete"] = globally_covered
+        complete = globally_covered and not observation_missing and not observation_malformed and all(f["bound_count"] == f["projected_count"] for key, f in coverage.items() if key != "observation")
+        missing = set(observation_missing)
+        if any(not all(number in rows for rows in family_maps) for number in retained_build_ids):
+            missing.add("observation.build_bindings")
+        if report["selected_builds_without_timeline"]:
+            missing.add("observation.timeline_bindings")
+        if invalid_prs:
+            missing.add("observation.pr_bindings")
+        if not globally_covered:
+            missing.add("observation.coverage")
+        _binding_diagnostics(report, missing, observation_malformed)
+        report["bindings_complete"] = bool(complete and not missing)
+        coverage["observation"].update(projected_count=1, bound_count=int(report["bindings_complete"]), omitted_count=0)
+        report["complete"] = original_legacy_complete and not any(f["count_capped"] or f["byte_capped"] for f in coverage.values())
+        if report["budget"]["aggregate_truncated"]:
+            report["blockers"] = sorted(set(report["blockers"]) | {"observation-byte-budget-exhausted"})
+
+    frozen = [report["repository"]]
+    for key in ("base_refs", "pull_requests", "policies", "policy_evaluations", "builds", "pr_bindings"):
+        frozen.extend(report[key])
+    for rows in families.values():
+        frozen.extend(rows)
+    for row in timelines:
+        frozen.extend(row["records"])
+        frozen.extend(row["parent_validation_facts"])
+    for row in report["timelines"]:
+        frozen.extend(row["records"])
+    serialize = _PrivatePrettySerializer(frozen)
+    refresh()
+    try:
+        while _reader_byte_count(report, serialize) > _BINDING_LIMIT:
+            report["budget"]["aggregate_truncated"] = True
+            record_container = next((row for row in reversed(report["timeline_bindings"]) if row["records"]), None)
+            if record_container is not None:
+                number = record_container["build_id"]
+                record = record_container["records"].pop()
+                positions[number].pop()
+                # Facts have no extra observation slot and leave with the exact
+                # child. Duplicate GUID rows cannot accidentally orphan a fact.
+                if "id" in record and "parent_id" in record and "type" in record and any(f["child_id"] == record["id"] for f in record_container["parent_validation_facts"]):
+                    index = next(i for i in range(len(record_container["parent_validation_facts"]) - 1, -1, -1) if record_container["parent_validation_facts"][i]["child_id"] == record["id"])
+                    record_container["parent_validation_facts"].pop(index)
+                if number in legacy_by_build:
+                    legacy_by_build[number]["records"] = [raw_by_position[number][i] for i in sorted(positions[number])]
+                record_container["records_truncated"] = True
+                coverage["timelines"]["byte_capped"] = True
+            elif report["timeline_bindings"] or report["timelines"]:
+                # Invalid legacy default IDs have no invented typed row, but
+                # their actual legacy container still occupies its native tail.
+                number = max(rows[-1]["build_id"] for rows in (report["timeline_bindings"], report["timelines"]) if rows)
+                report["timeline_bindings"][:] = [row for row in report["timeline_bindings"] if row["build_id"] != number]
+                report["timelines"][:] = [row for row in report["timelines"] if row["build_id"] != number]
+                coverage["timelines"]["byte_capped"] = True
+            else:
+                key = next((key for key in ("policy_evaluations", "policies", "pull_requests", "builds", "base_refs") if report[key]), None)
+                if key is None:
+                    return _minimal_repository_evidence()
+                report[key].pop()
+                coverage[key if key in coverage else "observation"]["byte_capped"] = True
+            refresh()
+        # Verify the exact standard-library representation once more at exit.
+        if _repository_binding_size(report) != report["budget"]["reader_bytes"]:
+            return _minimal_repository_evidence()
+        return report
+    except (TypeError, ValueError, UnicodeEncodeError, OverflowError):
+        return _minimal_repository_evidence()
 
 
 _BUILD_SOURCE_BINDING_FIELDS = ("build.id", "build.repository_id", "build.source_commit_sha", "build.source_ref_sha256")
