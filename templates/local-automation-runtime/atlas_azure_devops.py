@@ -896,10 +896,38 @@ class AzureBoardsProvider:
             if not checks.complete:
                 blockers.extend(checks.blockers)
         timelines = []
-        selected = set(build_ids) or {item["id"] for item in builds.items[:10] if isinstance(item.get("id"), int)}
-        if len(selected) > 50:
-            blockers.append("timeline-evidence-budget-exhausted")
-            selected = set(sorted(selected)[:50])
+        fetched_builds = []
+        if build_ids:
+            selected = set()
+            for build_id in build_ids:
+                if type(build_id) is int and 0 < build_id <= 2**31 - 1:
+                    selected.add(build_id)
+                else:
+                    blockers.append("selected-build-metadata-unavailable")
+            selected = sorted(selected)
+            if len(selected) > 32:
+                blockers.append("selected-build-acquisition-budget-exhausted")
+                selected = selected[:32]
+            listed_ids = {item["id"] for item in builds.items if type(item.get("id")) is int}
+            accepted = []
+            for build_id in selected:
+                if build_id not in listed_ids:
+                    try:
+                        native = client.request("GET", f"_apis/build/builds/{build_id}", fresh=True)
+                        row = _selected_build_row(native, build_id, repository_data.get("id"))
+                    except AzureError:
+                        row = None
+                    if row is None:
+                        blockers.append("selected-build-metadata-unavailable")
+                        continue
+                    fetched_builds.append(row)
+                accepted.append(build_id)
+            selected = accepted
+        else:
+            selected = {item["id"] for item in builds.items[:10] if isinstance(item.get("id"), int)}
+            if len(selected) > 50:
+                blockers.append("timeline-evidence-budget-exhausted")
+                selected = set(sorted(selected)[:50])
         for build_id in sorted(selected):
             try:
                 build_id = numeric_issue_id(client.organization, client.project, build_id)
@@ -927,9 +955,79 @@ class AzureBoardsProvider:
                 "policies": [_policy_summary(item) for item in policies.items],
                 "policy_evaluations": evaluations,
                 "builds": [{key: item.get(key) for key in ("id", "buildNumber", "status", "result", "sourceBranch", "sourceVersion", "queueTime", "startTime", "finishTime")}
-                           for item in builds.items], "timelines": timelines,
+                           for item in builds.items] + fetched_builds, "timelines": timelines,
                 "timeline_scope": "explicit-build-ids" if build_ids else "first-ten-listed-builds",
                 "deployment_authority": False}
+
+
+
+# Published positive UTC insertion dates, IANA leapseconds update 2026-07-06.
+# Later announcements require a reviewed source-data update, never a runtime read.
+_SELECTED_BUILD_LEAP_SECOND_DATES = frozenset({
+    "1972-06-30", "1972-12-31", "1973-12-31", "1974-12-31", "1975-12-31",
+    "1976-12-31", "1977-12-31", "1978-12-31", "1979-12-31", "1981-06-30",
+    "1982-06-30", "1983-06-30", "1985-06-30", "1987-12-31", "1989-12-31",
+    "1990-12-31", "1992-06-30", "1993-06-30", "1994-06-30", "1995-12-31",
+    "1997-06-30", "1998-12-31", "2005-12-31", "2008-12-31", "2012-06-30",
+    "2015-06-30", "2016-12-31",
+})
+
+
+def _selected_build_timestamp_valid(value: str) -> bool:
+    """Validate a grammar-checked optional timestamp without changing its text."""
+    if value[17:19] != "60":
+        return parse_timestamp(value.replace("z", "Z")) is not None
+    try:
+        # Python cannot represent second 60. Second 59 preserves the calendar,
+        # offset and fractional position needed to identify the UTC insertion.
+        ordinary = value[:17] + "59" + value[19:]
+        utc = datetime.fromisoformat(ordinary.replace("z", "Z")).astimezone(timezone.utc)
+        return ((utc.hour, utc.minute, utc.second) == (23, 59, 59)
+                and utc.date().isoformat() in _SELECTED_BUILD_LEAP_SECOND_DATES)
+    except (ValueError, OverflowError):
+        return False
+
+
+def _selected_build_row(native: Any, build_id: int, repository_id: Any) -> dict | None:
+    """Attach only bounded metadata bound to the selected repository and build."""
+    if not isinstance(native, dict) or type(native.get("id")) is not int or native["id"] != build_id:
+        return None
+    repository = native.get("repository")
+    native_repository_id = repository.get("id") if isinstance(repository, dict) else None
+    if (not isinstance(repository_id, str) or not _PROJECT_GUID.fullmatch(repository_id)
+            or not isinstance(native_repository_id, str) or not _PROJECT_GUID.fullmatch(native_repository_id)
+            or native_repository_id.lower() != repository_id.lower()):
+        return None
+    state, result = native.get("status"), native.get("result")
+    if (not isinstance(state, str) or state not in {"none", "inProgress", "completed", "cancelling", "postponed", "notStarted"}
+            or (result is not None and not isinstance(result, str))
+            or result not in {None, "none", "succeeded", "partiallySucceeded", "failed", "canceled"}
+            or (state == "completed" and result in {None, "none"})):
+        return None
+
+    def bounded_text(value, maximum):
+        if not isinstance(value, str) or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+            return False
+        try:
+            return len(value.encode("utf-8")) <= maximum
+        except UnicodeEncodeError:
+            return False
+
+    source = native.get("sourceVersion")
+    branch = native.get("sourceBranch")
+    if (not isinstance(source, str) or not re.fullmatch(r"[0-9a-f]{40}", source)
+            or not bounded_text(branch, 256) or not branch.startswith("refs/") or len(branch) <= 5):
+        return None
+    row = {"id": build_id, "buildNumber": native.get("buildNumber") if bounded_text(native.get("buildNumber"), 128) else None,
+           "status": state, "result": result, "sourceBranch": branch, "sourceVersion": source}
+    for key in ("queueTime", "startTime", "finishTime"):
+        value = native.get(key)
+        valid = (bounded_text(value, 64) and re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])", value)
+            and _selected_build_timestamp_valid(value))
+        row[key] = value if valid else None
+    encoded = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")
+    return row if len(encoded) <= 2048 else None
 
 
 def _policy_summary(item: dict) -> dict:

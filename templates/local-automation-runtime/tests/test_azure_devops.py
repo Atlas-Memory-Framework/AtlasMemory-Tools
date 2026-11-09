@@ -626,6 +626,239 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(az.AzureBoardsProvider(client).inspect([2])["eligible_count"], 0)
 
 
+class SelectedBuildAcquisitionTests(unittest.TestCase):
+    def build(self, number=9, **changes):
+        return {"id": number, "repository": {"id": PROJECT_GUID.upper()},
+                "status": "completed", "result": "succeeded", "sourceVersion": "a" * 40,
+                "sourceBranch": "refs/heads/feature/selected", **changes}
+
+    def inspect(self, ids, *, metadata=None, listed=(), repository_id=PROJECT_GUID,
+                timeline=None, fresh=True):
+        client = types.SimpleNamespace(clock=Clock(), organization="Instablinds", project="Instablinds")
+        def request(method, path, **kwargs):
+            self.assertEqual(method, "GET")
+            if path.startswith("_apis/git/repositories/"):
+                return {"id": repository_id}
+            if path.endswith("/timeline"):
+                response = {"records": []} if timeline is None else timeline
+            else:
+                number = int(path.rsplit("/", 1)[-1])
+                response = self.build(number) if metadata is None else metadata[number]
+            if isinstance(response, Exception):
+                raise response
+            return deepcopy(response)
+        client.request = mock.Mock(side_effect=request)
+        client.paged = mock.Mock(side_effect=[
+            az.ReadCollection(items=[{"name": "refs/heads/develop", "objectId": "a" * 40}]),
+            az.ReadCollection(), az.ReadCollection(), az.ReadCollection(items=list(listed))])
+        report = az.AzureBoardsProvider(client).repository_evidence("Website", build_ids=ids, fresh=fresh)
+        return report, client.request.call_args_list[1:]
+
+    def test_missing_feature_build_is_acquired_fresh_before_timeline(self):
+        report, calls = self.inspect([9], fresh=False)
+        self.assertEqual(calls, [mock.call("GET", "_apis/build/builds/9", fresh=True),
+                                 mock.call("GET", "_apis/build/builds/9/timeline", fresh=False)])
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["builds"], [{"id": 9, "buildNumber": None, "status": "completed",
+            "result": "succeeded", "sourceBranch": "refs/heads/feature/selected", "sourceVersion": "a" * 40,
+            "queueTime": None, "startTime": None, "finishTime": None}])
+        self.assertEqual(report["timelines"], [{"build_id": 9, "records": []}])
+        self.assertEqual(report["timeline_scope"], "explicit-build-ids")
+        self.assertFalse(report["deployment_authority"])
+
+    def test_listed_rows_keep_order_and_shape_and_fetched_rows_append_in_selected_order(self):
+        listed = [self.build(8), self.build(3)]
+        report, calls = self.inspect([9, 3, 7, 9], listed=listed)
+        self.assertTrue(report["complete"])
+        self.assertEqual([row["id"] for row in report["builds"]], [8, 3, 7, 9])
+        self.assertEqual(report["builds"][0]["sourceBranch"], listed[0]["sourceBranch"])
+        self.assertEqual([call.args[1] for call in calls], ["_apis/build/builds/7", "_apis/build/builds/9",
+            "_apis/build/builds/3/timeline", "_apis/build/builds/7/timeline", "_apis/build/builds/9/timeline"])
+
+    def test_failed_build_is_valid_observation_and_survives_timeline_failure(self):
+        metadata = {9: self.build(result="failed")}
+        report, _ = self.inspect([9], metadata=metadata)
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["builds"][0]["result"], "failed")
+        report, _ = self.inspect([9], metadata=metadata, timeline=az.AzureReadIncomplete("timeline unavailable"))
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["builds"][0]["result"], "failed")
+        self.assertEqual(report["timelines"], [])
+
+    def test_malformed_or_foreign_metadata_suppresses_attachment_and_timeline(self):
+        invalid = [None, [], "PRIVATE_SENTINEL", az.AzureError("PRIVATE_SENTINEL"),
+                   self.build(repository=None), self.build(repository={}), self.build(repository=[]),
+                   self.build(repository={"id": "PRIVATE_SENTINEL"}),
+                   self.build(repository={"id": OTHER_PROJECT_GUID}),
+                   self.build(id=10), self.build(id=True), self.build(id=9.0),
+                   self.build(status="PRIVATE_SENTINEL"), self.build(status=[]),
+                   self.build(result="PRIVATE_SENTINEL"), self.build(result={}), self.build(result=None),
+                   self.build(sourceVersion=None), self.build(sourceVersion="A" * 40),
+                   self.build(sourceVersion="a" * 39), self.build(sourceVersion="a" * 40 + "\n"),
+                   self.build(sourceBranch=None), self.build(sourceBranch="refs/"),
+                   self.build(sourceBranch="heads/feature/PRIVATE_SENTINEL"),
+                   self.build(sourceBranch="refs/heads/PRIVATE_SENTINEL\n"),
+                   self.build(sourceBranch="refs/heads/" + "é" * 123),
+                   self.build(sourceBranch="refs/heads/\x85PRIVATE_SENTINEL")]
+        for key in ("id", "repository", "status", "result", "sourceVersion", "sourceBranch"):
+            missing = self.build()
+            del missing[key]
+            invalid.append(missing)
+        for native in invalid:
+            with self.subTest(native=native):
+                report, calls = self.inspect([9], metadata={9: native})
+                self.assertFalse(report["complete"])
+                self.assertEqual(report["blockers"], ["selected-build-metadata-unavailable"])
+                self.assertEqual(report["builds"], [])
+                self.assertEqual(report["timelines"], [])
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report))
+        for repository_id in ("PRIVATE_SENTINEL", 17):
+            with self.subTest(repository_id=repository_id):
+                report, calls = self.inspect([9], repository_id=repository_id)
+                self.assertEqual(report["blockers"], ["selected-build-metadata-unavailable"])
+                self.assertEqual(report["builds"], [])
+                self.assertEqual(len(calls), 1)
+
+    def test_explicit_ids_are_strict_deduplicated_sorted_and_capped(self):
+        report, calls = self.inspect([33, *range(32, 0, -1), 2, True, "9", 0, -1, 2**31, 1.0, {}, []])
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["blockers"], ["selected-build-acquisition-budget-exhausted", "selected-build-metadata-unavailable"])
+        self.assertEqual([row["id"] for row in report["builds"]], list(range(1, 33)))
+        self.assertEqual([row["build_id"] for row in report["timelines"]], list(range(1, 33)))
+        self.assertEqual(len(calls), 64)
+        self.assertTrue(all(call.kwargs["fresh"] for call in calls))
+        self.assertNotIn("_apis/build/builds/33", [call.args[1] for call in calls])
+        report, calls = self.inspect(list(range(33, 0, -1)))
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["blockers"], ["selected-build-acquisition-budget-exhausted"])
+        self.assertEqual(len(report["builds"]), 32)
+        self.assertEqual(len(report["timelines"]), 32)
+        self.assertEqual(len(calls), 64)
+        report, calls = self.inspect([2**31 - 1, 2**31 - 1])
+        self.assertTrue(report["complete"])
+        self.assertEqual(len(calls), 2)
+
+    def test_wholly_invalid_explicit_selection_never_falls_back_to_listed_builds(self):
+        report, calls = self.inspect([False, "9", 0], listed=[self.build()])
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["timeline_scope"], "explicit-build-ids")
+        self.assertEqual(calls, [])
+        report, calls = self.inspect([], listed=[self.build()])
+        self.assertTrue(report["complete"])
+        self.assertEqual(report["timeline_scope"], "first-ten-listed-builds")
+        self.assertEqual(calls, [mock.call("GET", "_apis/build/builds/9/timeline", fresh=True)])
+
+    def test_listed_id_match_requires_native_integer(self):
+        for number in (True, 1.0, "1"):
+            with self.subTest(number=number):
+                report, calls = self.inspect([1], listed=[self.build(number)])
+                self.assertEqual(calls[0], mock.call("GET", "_apis/build/builds/1", fresh=True))
+                self.assertEqual(type(report["builds"][-1]["id"]), int)
+
+    def test_source_branch_and_optional_fields_use_utf8_byte_limits(self):
+        for suffix, accepted in (("a" * 251, True), ("a" * 252, False), ("é" * 125 + "a", True), ("é" * 126, False)):
+            with self.subTest(suffix=suffix):
+                report, calls = self.inspect([9], metadata={9: self.build(sourceBranch="refs/" + suffix)})
+                self.assertEqual(report["complete"], accepted)
+                self.assertEqual(len(calls), 2 if accepted else 1)
+        for number, retained in (("é" * 64, True), ("é" * 65, False)):
+            with self.subTest(number=number):
+                report, _ = self.inspect([9], metadata={9: self.build(buildNumber=number)})
+                self.assertTrue(report["complete"])
+                self.assertEqual(report["builds"][0]["buildNumber"], number if retained else None)
+        for value in ("2026-11-09", "2026-11-09 06:00:00Z", "2026-11-09T06:00:00+00:99",
+                      "2026-11-09T06:00:00." + "1" * 45 + "Z", "2026-11-09T06:00:00Z\n", 17):
+            with self.subTest(timestamp=value):
+                report, _ = self.inspect([9], metadata={9: self.build(queueTime=value)})
+                self.assertTrue(report["complete"])
+                self.assertIsNone(report["builds"][0]["queueTime"])
+
+    def test_leap_second_timestamps_preserve_exact_strings_in_all_optional_fields(self):
+        values = [
+            "1990-12-31T23:59:60Z", "1990-12-31T15:59:60-08:00",
+            "1991-01-01T00:59:60+01:00", "1990-12-31t23:59:60z",
+            "1990-12-31T23:59:60.123456789Z", "1991-01-01t00:59:60.25+01:00",
+            "1990-12-31T23:59:60+00:00", "1990-12-31T23:59:60-00:00",
+            "1991-01-01T23:58:60+23:59", "1990-12-31T00:00:60-23:59",
+            "1972-06-30T23:59:60Z", "2016-12-31T23:59:60Z",
+            "2017-01-01T00:59:60+01:00", "1990-12-31T23:59:60." + "1" * 43 + "Z",
+        ]
+        for value in values:
+            for field in ("queueTime", "startTime", "finishTime"):
+                with self.subTest(value=value, field=field):
+                    report, calls = self.inspect([9], metadata={9: self.build(**{field: value}, private="PRIVATE_SENTINEL")})
+                    self.assertTrue(report["complete"])
+                    self.assertEqual(report["builds"][0][field], value)
+                    self.assertEqual(len(calls), 2)
+                    self.assertFalse(report["deployment_authority"])
+                    self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report))
+                    encoded = json.dumps(report["builds"][0], sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")
+                    self.assertLessEqual(len(encoded), 2048)
+
+    def test_all_frozen_published_insertion_dates_are_observable(self):
+        dates = (
+            "1972-06-30", "1972-12-31", "1973-12-31", "1974-12-31", "1975-12-31",
+            "1976-12-31", "1977-12-31", "1978-12-31", "1979-12-31", "1981-06-30",
+            "1982-06-30", "1983-06-30", "1985-06-30", "1987-12-31", "1989-12-31",
+            "1990-12-31", "1992-06-30", "1993-06-30", "1994-06-30", "1995-12-31",
+            "1997-06-30", "1998-12-31", "2005-12-31", "2008-12-31", "2012-06-30",
+            "2015-06-30", "2016-12-31",
+        )
+        for day in dates:
+            with self.subTest(day=day):
+                value = day + "T23:59:60Z"
+                fields = dict.fromkeys(("queueTime", "startTime", "finishTime"), value)
+                report, _ = self.inspect([9], metadata={9: self.build(**fields)})
+                self.assertTrue(report["complete"])
+                for field in fields:
+                    self.assertEqual(report["builds"][0][field], value)
+
+    def test_invalid_leap_second_timestamps_become_null_without_losing_metadata(self):
+        values = [
+            "1990-12-31T23:59:61Z", "1990-12-31T23:59:99Z",
+            "1990-13-31T23:59:60Z", "1990-12-32T23:59:60Z", "1990-02-29T23:59:60Z",
+            "1990-12-31T24:59:60Z", "1990-12-31T23:60:60Z",
+            "1990-12-31T23:59:60+24:00", "1990-12-31T23:59:60+00:60",
+            "1990-12-31T23:59:60+0000", "1990-12-31T23:59:60",
+            "1990-12-31T23:58:60Z", "1990-12-31T22:59:60Z",
+            "1990-12-31T23:59:60+01:00", "1991-01-01T00:59:60-01:00",
+            "1990-12-30T23:59:60Z", "1971-12-31T23:59:60Z", "2026-06-30T23:59:60Z",
+            "2028-12-31T23:59:60Z", "0001-01-01T00:00:60+23:59", "9999-12-31T23:59:60-23:59",
+            "1990-12-31T23:59:60.Z", "1990-12-31T23:59:60,5Z",
+            "1990-12-31T23:59:60." + "1" * 44 + "Z", "1990-12-31T23:59:60Z\n",
+            "1990-12-31T23:59:60ZPRIVATE_SENTINEL", "1990-12-31T23:59:６０Z", None, 60,
+        ]
+        for value in values:
+            for field in ("queueTime", "startTime", "finishTime"):
+                with self.subTest(value=value, field=field):
+                    report, calls = self.inspect([9], metadata={9: self.build(**{field: value})})
+                    self.assertTrue(report["complete"])
+                    self.assertEqual(report["builds"][0]["id"], 9)
+                    self.assertIsNone(report["builds"][0][field])
+                    self.assertEqual(len(calls), 2)
+                    self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report))
+
+    def test_optional_fields_are_sanitized_without_copying_private_metadata(self):
+        for value in ("PRIVATE_SENTINEL\n", "PRIVATE_SENTINEL" * 10, {"private": "PRIVATE_SENTINEL"}, "\ud800"):
+            with self.subTest(value=value):
+                native = self.build(buildNumber=value, queueTime="PRIVATE_SENTINEL", startTime="2026-01-01T00:00:00",
+                    finishTime="2026-02-30T00:00:00Z", private="PRIVATE_SENTINEL",
+                    definition={"private": "PRIVATE_SENTINEL"})
+                report, _ = self.inspect([9], metadata={9: native})
+                self.assertTrue(report["complete"])
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report))
+                self.assertIsNone(report["builds"][0]["buildNumber"])
+                for key in ("queueTime", "startTime", "finishTime"):
+                    self.assertIsNone(report["builds"][0][key])
+        native = self.build(buildNumber="é" * 64, queueTime="2026-11-09T06:00:00Z",
+            startTime="2026-11-09T01:00:00.1234567-05:00", finishTime="2026-11-09t06:01:00z")
+        report, _ = self.inspect([9], metadata={9: native})
+        for key in ("buildNumber", "queueTime", "startTime", "finishTime"):
+            self.assertEqual(report["builds"][0][key], native[key])
+        encoded = json.dumps(report["builds"][0], sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")
+        self.assertLessEqual(len(encoded), 2048)
+
 class EvidenceAndCliTests(unittest.TestCase):
     def test_policy_endpoint_preview_version_skip_and_sanitized_nested_records(self):
         clock = Clock()
