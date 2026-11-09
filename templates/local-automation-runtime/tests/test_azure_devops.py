@@ -801,6 +801,212 @@ class SelectedBuildAcquisitionTests(unittest.TestCase):
         self.assertTrue(report["complete"])
         self.assertEqual(len(calls), 1)
 
+    def source_build(self, **changes):
+        return self.build(definition={"id": 7, "revision": 3},
+                          sourceBranch="refs/heads/PRIVATE_SENTINEL/é", **changes)
+
+    def source_expected(self, **changes):
+        return {"build_id": 9, "source_commit_sha": "a" * 40,
+                "source_ref_sha256": "d8f2d99dcb8151ef9a5d5aaa0b7445a4507d2cd979934c9dd2784a37fea6bf54",
+                "bindings_complete": True, "binding_missing_fields": [], "binding_malformed_fields": [], **changes}
+
+    def test_source_binding_exact_listed_and_fetched_failed_build_oracle(self):
+        native = self.source_build(result="failed", logs={"url": "PRIVATE_SENTINEL"}, name="PRIVATE_SENTINEL")
+        for listed in (False, True):
+            with self.subTest(listed=listed):
+                report, calls = self.inspect([9], listed=[native] if listed else [], metadata={9: native}, fresh=False)
+                self.assertEqual(report["build_source_bindings"], [self.source_expected()])
+                expected = [mock.call("GET", "_apis/build/builds/9/timeline", fresh=False)]
+                if not listed:
+                    expected.insert(0, mock.call("GET", "_apis/build/builds/9", fresh=True))
+                self.assertEqual(calls, expected)
+                self.assertEqual(report["builds"][0]["result"], "failed")
+                self.assertTrue(report["complete"])
+                self.assertFalse(report["deployment_authority"])
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report["build_source_bindings"]))
+
+    def test_source_binding_commit_and_ref_diagnostics_preserve_valid_sibling(self):
+        for field, code, sibling in (("sourceVersion", "build.source_commit_sha", "source_commit_sha"),
+                                     ("sourceBranch", "build.source_ref_sha256", "source_ref_sha256")):
+            invalid = (["A" * 40, "a" * 39, "a" * 41, "a" * 40 + "\n", "ａ" * 40]
+                       if field == "sourceVersion" else ["refs/", "heads/feature", " refs/heads/x", "REFS/heads/x",
+                           "refs/" + "a" * 252, "refs/" + "é" * 126, "refs/\ud800", "refs/\udfff"])
+            invalid += [True, False, 17, 9.0, {}, []]
+            for absent, value in [(True, None), (False, None), *[(False, v) for v in invalid]]:
+                native = self.source_build()
+                if absent:
+                    native.pop(field)
+                else:
+                    native[field] = value
+                expected = self.source_expected(bindings_complete=False,
+                    binding_missing_fields=[code] if value is None else [],
+                    binding_malformed_fields=[] if value is None else [code])
+                expected.pop(sibling)
+                with self.subTest(field=field, absent=absent, value=value):
+                    for listed in (False, True):
+                        report, calls = self.inspect([9], listed=[native] if listed else [], metadata={9: native})
+                        self.assertEqual(report["build_source_bindings"], [expected])
+                        self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+                        self.assertEqual(len(calls), 1)
+        native = self.source_build(sourceVersion=None)
+        native["sourceBranch"] = False
+        report, _ = self.inspect([9], metadata={9: native})
+        self.assertEqual(report["build_source_bindings"], [{"build_id": 9, "bindings_complete": False,
+            "binding_missing_fields": ["build.source_commit_sha"], "binding_malformed_fields": ["build.source_ref_sha256"]}])
+
+    def test_source_binding_ref_exact_utf8_bytes_fixed_hashes_and_control_refusals(self):
+        vectors = [("refs/" + "a" * 251, "0e8183f72dcec371b52b86b538425921caa526b0c71ed5f6c08d746c797b25a3"),
+                   ("refs/" + "é" * 125 + "a", "d5a44c31e39d691f4b41dce56983cd9d4e1bdacb7f525fa5167a1bc5f6b86463"),
+                   ("refs/heads/e\u0301", "536c33e130b4ec89661daf059a9ed6cc81b31b9ea87ea2342e76668263955f25"),
+                   ("refs/heads/É", "4ad20fb09d7854b06ec2897a10ec4e533ca9cac0bd9f72e240fd9ce0806a0143"),
+                   ("refs/heads/é ", "37680ba3723b4d12e4375f1d81fe1448149925c61829816969fd40bed1b49b4a")]
+        for branch, digest in vectors:
+            with self.subTest(branch=branch):
+                native = self.source_build()
+                native["sourceBranch"] = branch
+                report, _ = self.inspect([9], metadata={9: native})
+                self.assertEqual(report["build_source_bindings"], [self.source_expected(source_ref_sha256=digest)])
+                self.assertEqual(report["builds"][0]["sourceBranch"], branch)
+        for codepoint in [*range(32), *range(127, 160)]:
+            native = self.source_build()
+            native["sourceBranch"] = "refs/heads/" + chr(codepoint)
+            with self.subTest(codepoint=codepoint):
+                report, calls = self.inspect([9], metadata={9: native})
+                expected = self.source_expected(bindings_complete=False, binding_malformed_fields=["build.source_ref_sha256"])
+                expected.pop("source_ref_sha256")
+                self.assertEqual(report["build_source_bindings"], [expected])
+                self.assertEqual(len(calls), 1)
+
+    def test_source_binding_attachment_guards_keep_only_observed_identity_diagnostics(self):
+        cases = [(self.source_build(id=None), ["build.id"], []),
+                 (self.source_build(repository=None), ["build.repository_id"], []),
+                 (self.source_build(repository={}), ["build.repository_id"], []),
+                 (self.source_build(repository={"id": None}), ["build.repository_id"], [])]
+        absent = self.source_build()
+        absent.pop("id")
+        cases.append((absent, ["build.id"], []))
+        cases += [(self.source_build(id=value), [], ["build.id"]) for value in (True, False, 9.0, "9", 0, -1, 10, 2**31)]
+        cases += [(self.source_build(repository=value), [], ["build.repository_id"])
+                  for value in ([], False, "PRIVATE_SENTINEL", {"id": OTHER_PROJECT_GUID}, {"id": 7}, {"id": PROJECT_GUID + "\n"})]
+        for native, missing, malformed in cases:
+            native.pop("sourceVersion")
+            native["sourceBranch"] = "PRIVATE_SENTINEL"
+            with self.subTest(native=native):
+                report, calls = self.inspect([9], metadata={9: native})
+                self.assertEqual(report["build_source_bindings"], [{"build_id": 9, "bindings_complete": False,
+                    "binding_missing_fields": missing, "binding_malformed_fields": malformed}])
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(report["builds"], [])
+        # The selected repository and native repository each contribute causes;
+        # malformed wins when the same repository code is also missing.
+        for selected, repository, missing, malformed in (
+                (None, {"id": PROJECT_GUID}, ["build.repository_id"], []),
+                (None, [], [], ["build.repository_id"]),
+                ("bad", None, [], ["build.repository_id"]),
+                (PROJECT_GUID, None, ["build.repository_id"], []),
+                (7, {"id": PROJECT_GUID}, [], ["build.repository_id"])):
+            with self.subTest(selected=selected, repository=repository):
+                self.assertEqual(az._selected_build_source_binding(self.source_build(repository=repository), 9, selected),
+                    {"build_id": 9, "bindings_complete": False,
+                     "binding_missing_fields": missing, "binding_malformed_fields": malformed})
+
+    def test_source_binding_unavailable_rejected_acquisition_and_other_families_are_independent(self):
+        unavailable = {"build_id": 9, "bindings_complete": False,
+            "binding_missing_fields": ["build.id", "build.repository_id", "build.source_commit_sha", "build.source_ref_sha256"],
+            "binding_malformed_fields": []}
+        for native in (None, [], False, "PRIVATE_SENTINEL", az.AzureError("PRIVATE_SENTINEL")):
+            with self.subTest(native=native):
+                report, calls = self.inspect([9], metadata={9: native})
+                self.assertEqual(report["build_source_bindings"], [unavailable])
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn("PRIVATE_SENTINEL", json.dumps(report))
+        report, _ = self.inspect([9], metadata={9: {"error": "PRIVATE_SENTINEL"}})
+        self.assertEqual(report["build_source_bindings"], [{"build_id": 9, "bindings_complete": False,
+            "binding_missing_fields": ["build.id", "build.repository_id"], "binding_malformed_fields": []}])
+        for field in ("status", "result"):
+            native = self.source_build(**{field: "PRIVATE_SENTINEL"})
+            with self.subTest(field=field):
+                report, calls = self.inspect([9], metadata={9: native})
+                self.assertEqual(report["build_source_bindings"], [self.source_expected()])
+                self.assertTrue(report["build_bindings"][0]["bindings_complete"])
+                self.assertFalse(report["complete"])
+                self.assertEqual(report["builds"], [])
+                self.assertEqual(report["timelines"], [])
+                self.assertEqual(len(calls), 1)
+        native = self.source_build(startTime="PRIVATE_SENTINEL", queueTime="1991-01-01T00:59:60+01:00")
+        native["definition"]["revision"] = "PRIVATE_SENTINEL"
+        report, _ = self.inspect([9], metadata={9: native})
+        self.assertEqual(report["build_source_bindings"], [self.source_expected()])
+        self.assertFalse(report["build_bindings"][0]["bindings_complete"])
+        self.assertTrue(report["complete"])
+        self.assertIsNone(report["builds"][0]["startTime"])
+        self.assertEqual(report["builds"][0]["queueTime"], native["queueTime"])
+
+    def test_source_binding_duplicates_compare_normalized_source_family_only(self):
+        first = self.source_build()
+        irrelevant = self.source_build(repository={"id": PROJECT_GUID.lower(), "url": "PRIVATE_SENTINEL"},
+                                       queueTime="PRIVATE_SENTINEL", result="failed", name="PRIVATE_SENTINEL")
+        irrelevant["definition"] = {"id": 8, "revision": 4}
+        report, calls = self.inspect([9, 9], listed=[first, irrelevant])
+        self.assertEqual(report["build_source_bindings"], [self.source_expected()])
+        self.assertEqual(report["build_bindings"][0]["binding_malformed_fields"], ["build.id"])
+        self.assertEqual(len(calls), 1)
+        for field, value in (("sourceVersion", "b" * 40), ("sourceBranch", "refs/heads/other"),
+                             ("sourceBranch", None), ("repository", {"id": OTHER_PROJECT_GUID})):
+            other = deepcopy(first)
+            other[field] = value
+            for listed in ([first, other], [other, first]):
+                with self.subTest(field=field, value=value, listed=listed):
+                    report, calls = self.inspect([9], listed=listed)
+                    self.assertEqual(report["build_source_bindings"], [{"build_id": 9, "bindings_complete": False,
+                        "binding_missing_fields": [], "binding_malformed_fields": ["build.id"]}])
+                    self.assertEqual(len(calls), 1)
+        first["sourceBranch"], irrelevant["sourceBranch"] = "bad", "different-invalid"
+        report, _ = self.inspect([9], listed=[first, irrelevant])
+        expected = self.source_expected(bindings_complete=False, binding_malformed_fields=["build.source_ref_sha256"])
+        expected.pop("source_ref_sha256")
+        self.assertEqual(report["build_source_bindings"], [expected])
+
+    def test_source_binding_selection_privacy_and_exact_byte_cap(self):
+        metadata = {number: dict(self.source_build(), id=number) for number in range(1, 34)}
+        report, calls = self.inspect([33, *range(32, 0, -1), 9, True, "2", 0, 2**31], metadata=metadata)
+        rows = report["build_source_bindings"]
+        self.assertEqual(rows, [self.source_expected(build_id=number) for number in range(1, 33)])
+        self.assertEqual(len(calls), 64)
+        self.assertNotIn(mock.call("GET", "_apis/build/builds/33", fresh=True), calls)
+        self.assertIn("selected-build-acquisition-budget-exhausted", report["blockers"])
+        def encoded(row):
+            return json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8")
+        self.assertTrue(all(len(encoded(row)) <= 512 for row in rows))
+        self.assertLessEqual(sum(len(encoded(row)) for row in rows), 16384)
+        native = self.source_build(logs={"url": "PRIVATE_SENTINEL" * 10000}, name="PRIVATE_SENTINEL" * 10000)
+        maximum = 2**31 - 1
+        native["id"] = maximum
+        report, _ = self.inspect([maximum], metadata={maximum: native})
+        self.assertEqual(report["build_source_bindings"], [self.source_expected(build_id=maximum)])
+        padded = {"build_id": 9, "padding": ""}
+        padded["padding"] = "x" * (512 - len(encoded(padded)))
+        self.assertEqual(len(encoded(padded)), 512)
+        self.assertEqual(az._bounded_build_source_binding(padded), padded)
+        padded["padding"] += "x"
+        fallback = az._bounded_build_source_binding(padded)
+        self.assertEqual(fallback, {"build_id": 9, "bindings_complete": False,
+            "binding_missing_fields": ["build.id", "build.repository_id", "build.source_commit_sha", "build.source_ref_sha256"],
+            "binding_malformed_fields": []})
+        self.assertLessEqual(len(encoded(fallback)), 512)
+        for listed_id in (True, 9.0, "9"):
+            native = self.source_build()
+            report, calls = self.inspect([9], listed=[dict(native, id=listed_id)], metadata={9: native})
+            self.assertEqual(report["build_source_bindings"], [self.source_expected()])
+            self.assertEqual(len(calls), 2)
+        report, calls = self.inspect([False, "9", 0], listed=[self.source_build()])
+        self.assertEqual(report["build_source_bindings"], [])
+        self.assertEqual(calls, [])
+        self.assertIn("selected-build-metadata-unavailable", report["blockers"])
+        report, calls = self.inspect([], listed=[self.source_build()])
+        self.assertNotIn("build_source_bindings", report)
+        self.assertEqual(len(calls), 1)
+
     def test_missing_feature_build_is_acquired_fresh_before_timeline(self):
         report, calls = self.inspect([9], fresh=False)
         self.assertEqual(calls, [mock.call("GET", "_apis/build/builds/9", fresh=True),

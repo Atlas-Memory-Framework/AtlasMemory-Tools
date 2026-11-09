@@ -899,6 +899,7 @@ class AzureBoardsProvider:
         fetched_builds = []
         if build_ids:
             build_bindings = []
+            build_source_bindings = []
             selected = set()
             for build_id in build_ids:
                 if type(build_id) is int and 0 < build_id <= 2**31 - 1:
@@ -914,17 +915,27 @@ class AzureBoardsProvider:
             for build_id in selected:
                 if build_id not in listed_ids:
                     native = None
+                    source_binding = _selected_build_source_binding(None, build_id, repository_data.get("id"))
                     try:
                         native = client.request("GET", f"_apis/build/builds/{build_id}", fresh=True)
+                        source_binding = _selected_build_source_binding(native, build_id, repository_data.get("id"))
                         row = _selected_build_row(native, build_id, repository_data.get("id"))
                     except AzureError:
                         row = None
+                    build_source_bindings.append(_bounded_build_source_binding(source_binding))
                     build_bindings.append(_bounded_build_binding(_selected_build_binding(native, build_id, repository_data.get("id"))))
                     if row is None:
                         blockers.append("selected-build-metadata-unavailable")
                         continue
                     fetched_builds.append(row)
                 else:
+                    source_rows = [_selected_build_source_binding(item, build_id, repository_data.get("id"))
+                                   for item in builds.items if type(item.get("id")) is int and item["id"] == build_id]
+                    source_binding = source_rows[0]
+                    if any(item != source_binding for item in source_rows[1:]):
+                        source_binding = {"build_id": build_id, "bindings_complete": False,
+                                          "binding_missing_fields": [], "binding_malformed_fields": ["build.id"]}
+                    build_source_bindings.append(_bounded_build_source_binding(source_binding))
                     rows = [_selected_build_binding(item, build_id, repository_data.get("id"))
                             for item in builds.items if type(item.get("id")) is int and item["id"] == build_id]
                     binding = rows[0]
@@ -968,10 +979,76 @@ class AzureBoardsProvider:
                 "builds": [{key: item.get(key) for key in ("id", "buildNumber", "status", "result", "sourceBranch", "sourceVersion", "queueTime", "startTime", "finishTime")}
                            for item in builds.items] + fetched_builds, "timelines": timelines,
                 "timeline_scope": "explicit-build-ids" if build_ids else "first-ten-listed-builds",
-                **({"build_bindings": build_bindings} if build_ids else {}),
+                **({"build_bindings": build_bindings, "build_source_bindings": build_source_bindings} if build_ids else {}),
                 "deployment_authority": False}
 
 
+
+
+_BUILD_SOURCE_BINDING_FIELDS = ("build.id", "build.repository_id", "build.source_commit_sha", "build.source_ref_sha256")
+
+
+def _bounded_build_source_binding(row: dict) -> dict:
+    def size(value):
+        return len(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("utf-8"))
+    if size(row) <= 512:
+        return row
+    fallback = {"build_id": row["build_id"], "bindings_complete": False,
+                "binding_missing_fields": list(_BUILD_SOURCE_BINDING_FIELDS), "binding_malformed_fields": []}
+    assert size(fallback) <= 512
+    return fallback
+
+
+def _selected_build_source_binding(native: Any, build_id: int, repository_id: Any) -> dict:
+    """Bind exact source bytes from the same native response, before sanitization."""
+    row = {"build_id": build_id, "bindings_complete": False,
+           "binding_missing_fields": [], "binding_malformed_fields": []}
+    if not isinstance(native, dict):
+        row["binding_missing_fields"] = list(_BUILD_SOURCE_BINDING_FIELDS)
+        return row
+    missing, malformed = set(), set()
+    native_id = native.get("id")
+    if type(native_id) is not int or native_id != build_id:
+        (missing if native_id is None else malformed).add("build.id")
+    repository = native.get("repository")
+    native_repository_id = repository.get("id") if isinstance(repository, dict) else None
+    if repository is not None and not isinstance(repository, dict):
+        malformed.add("build.repository_id")
+    for value in (repository_id, native_repository_id):
+        if value is None:
+            missing.add("build.repository_id")
+        elif not isinstance(value, str) or not _PROJECT_GUID.fullmatch(value):
+            malformed.add("build.repository_id")
+    if "build.repository_id" not in missing | malformed and native_repository_id.lower() != repository_id.lower():
+        malformed.add("build.repository_id")
+    # Failed attachment guards diagnose only identity; source was not evaluated.
+    if not missing and not malformed:
+        source = native.get("sourceVersion")
+        if source is None:
+            missing.add("build.source_commit_sha")
+        elif isinstance(source, str) and re.fullmatch(r"[0-9a-f]{40}", source):
+            row["source_commit_sha"] = source
+        else:
+            malformed.add("build.source_commit_sha")
+        branch = native.get("sourceBranch")
+        if branch is None:
+            missing.add("build.source_ref_sha256")
+        else:
+            encoded = None
+            if (isinstance(branch, str) and branch.startswith("refs/") and len(branch) > 5
+                    and not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in branch)):
+                try:
+                    encoded = branch.encode("utf-8")
+                except UnicodeEncodeError:
+                    pass
+            if encoded is not None and len(encoded) <= 256:
+                row["source_ref_sha256"] = hashlib.sha256(encoded).hexdigest()
+            else:
+                malformed.add("build.source_ref_sha256")
+    row["binding_missing_fields"] = sorted(missing - malformed)
+    row["binding_malformed_fields"] = sorted(malformed)
+    row["bindings_complete"] = not missing and not malformed
+    return row
 
 
 _BUILD_BINDING_FIELDS = ("build.definition_id", "build.definition_revision", "build.id", "build.repository_id")
