@@ -25,6 +25,10 @@ class DailyEntryTests(unittest.TestCase):
         shutil.copyfile(SOURCE, self.script)
         (self.checkout / ".gitignore").write_text(".atlas-dev.local.json\n")
         self.git("init", "--quiet")
+        # Background maintenance after fixture commits can race the exact
+        # before/after snapshot used to prove that status is read-only.
+        self.git("config", "maintenance.auto", "false")
+        self.git("config", "gc.auto", "0")
         self.git("add", ".")
         self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
                  "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "fixture")
