@@ -16,6 +16,9 @@ import sys
 # Even status must not create interpreter caches in the installed runtime.
 sys.dont_write_bytecode = True
 MAX_INPUT = 65536
+# Reservations contain the full packet plus consumed prior role results.
+# Keep their transport allowance separate from individual untrusted inputs.
+MAX_RESERVATION_INPUT = 1024 * 1024
 TASK_FIELDS = {
     "id", "title", "goal", "acceptance_criteria", "scheduler", "metadata",
     "validation", "labels", "description", "body", "objective", "task",
@@ -61,16 +64,16 @@ class Parser(argparse.ArgumentParser):
         raise CLIError("arguments", message)
 
 
-def bounded_read(path):
+def bounded_read(path, *, max_bytes=MAX_INPUT):
     """Bound the actual opened stream, including files growing after open/stat."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise CLIError("invalid_input", "input must be a regular file")
-            raw = stream.read(MAX_INPUT + 1)
-        if not 1 <= len(raw) <= MAX_INPUT:
-            raise CLIError("invalid_input", "input must contain 1 through 65536 bytes")
+            raw = stream.read(max_bytes + 1)
+        if not 1 <= len(raw) <= max_bytes:
+            raise CLIError("invalid_input", f"input must contain 1 through {max_bytes} bytes")
         return raw
     except OSError:
         raise CLIError("invalid_input", "input file cannot be read") from None
@@ -107,8 +110,8 @@ def strict_object(raw):
         raise CLIError("invalid_json", "input must be a bounded strict JSON object") from None
 
 
-def load_object(path):
-    return strict_object(bounded_read(path))
+def load_object(path, *, max_bytes=MAX_INPUT):
+    return strict_object(bounded_read(path, max_bytes=max_bytes))
 
 
 def full_revision(value):
@@ -311,7 +314,7 @@ def do_prepare(args, api):
 
 def do_import(args, api):
     wi, handoff, sizing, workflows, store, provider, worker = api
-    reservation = load_object(args.reservation)
+    reservation = load_object(args.reservation, max_bytes=MAX_RESERVATION_INPUT)
     receipt = load_object(args.host_receipt)
     raw = bounded_read(args.result)
     strict_object(raw)  # Enforce strict JSON on both first import and accepted replay.

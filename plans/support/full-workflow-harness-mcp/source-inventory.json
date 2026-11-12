@@ -1,0 +1,2869 @@
+{
+  "schema": "mcp-source-operation-inventory.v1",
+  "source_commit": "6edb37cdcabf2af2dfcf9626916aad9b1de27acf",
+  "scope": "All regular root files in templates/local-automation-runtime plus nine explicitly selected operator/interface scripts. Recursive tests/examples/config/team-templates are dependencies or fixtures, not silently discarded executable roots. Imported modules with __main__ are wrapper aliases.",
+  "completeness": "Every root regular file has a disposition and SHA256. Each supported entrypoint lists native argparse subcommands or explicit effect-bearing modes. Literal parser tokens are statically extracted; dynamically generated flags and combinations need implementation contract review. No scripts were executed. This is an entrypoint/mode inventory, not proof of exhaustive flag-combination semantics.",
+  "stage_note": "Remaining lane order is descriptive only; user authorized daily first and all maintained scope, not this document as dispatch policy.",
+  "source_files": [
+    {
+      "path": "templates/local-automation-runtime/.gitignore",
+      "sha256": "28a94e3fc5a78e343f3ca5cccbce386db32b3fc7f8d33f7ca3f62941e32e6ba7",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/AGENTS.md",
+      "sha256": "7a406f774d16e674ee16943e6bc290aa763b28bb384b02326de8e9bedae840ed",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/README.md",
+      "sha256": "edbb5c4558a5f42e78283c6d80b90b71a9137cadb0ba348b369e119d51e7a09b",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/SECURITY.md",
+      "sha256": "ad094ed31ab8bfc31fb02f2ba293faf0bca5d38a628c60b307bcba69b0acfaee",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/SETUP.md",
+      "sha256": "c0159e4b7b0b3fba6e758caf1be81cbcc1fadf2ba354ae0c38ace093160ba8a8",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-admin",
+      "sha256": "904c461beafd13f8a6fa33a28efaa38921e556e6b0957dd32375a44d98541d93",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-approval",
+      "sha256": "a88dcfe628da1bc0830843c03747cebca99ad00fbc0bdfc698717934561715ff",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-dispatch",
+      "sha256": "72ce082cb9ca5762675f17e10c220da77a0bf9a130af691bfebc759dfe42264d",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-inspect",
+      "sha256": "41903b729b3600f006077d7539d89a3999e45129b2944b1213cf2394653e6239",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-intake",
+      "sha256": "e52ab8adb44644ede88b675d5f789196b97ca7ad628b3975094be4c67ae94b47",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-reconcile",
+      "sha256": "07104a475d521fb04a285312c2d7d467786cc60167cd3de06231cc7b4be58d84",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-supervise",
+      "sha256": "404ec3f5f39ab5fb5097c91e28feaf5bedbaad7d4ed584b2d5bedbe337775fbe",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-worker",
+      "sha256": "cfa18d7c38ac8f04fc840d145ed3d6ee21ae172b50f472dfbc9c7ec428b3afbc",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-cleanup",
+      "sha256": "42ab365e9c557ec0b90abc801f191538c2abf42d8f3449cf41c28fbd76aab15b",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-cycle-summary",
+      "sha256": "b5dcbff648a978a7866170ac6146e823ebdd5d8b3fbca001170a6a79de54e9d2",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-delta-review",
+      "sha256": "1466796ef6747cbc4a846de055b3e3c3925d1c7c0bc136bc45c8b56d48544f5f",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-dependency-promote",
+      "sha256": "7a5fe4005903421ef4f71db8946a16df5e2cda6ee47d169235b6e2dea8d42ae3",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-deploy",
+      "sha256": "66d66a6b610e99f4b2dc02eb6dcfa93d4c5559fa4a53ec264de0b9f57dd41193",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-deployed-validate",
+      "sha256": "af663c0d65c921ea58dc96e7a5a9650df5c2fde6f1a8da5d0767d92c9985daff",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-finalize",
+      "sha256": "a1455f992c65ee3ea8690dfc11d8c34e5082d99cfcb67c6d1f0b8e40a5526f94",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-issue-decompose",
+      "sha256": "aa79247d28d7c856f71aca9438020322c9c5c5a0036597328c57ab6a1604dd68",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-local-validate",
+      "sha256": "d897e042ed790da30797019b9f1f320f6759a4667138f0d1494aee2c2a9be725",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-notify",
+      "sha256": "6659f69cdc00a3ce1793be28f80ccfed5abfdf27b9291b7893ec82489218061d",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-orchestrator",
+      "sha256": "b8c7de72939e5aa5f709ef6e14eaaa845211ac2f7e928c1e4a53653abdfe3529",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-plan-queue",
+      "sha256": "5066712b24b66297a5cb012e6722815ada867ea1b2536209f817fb46cddcd8a7",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-pr-repair",
+      "sha256": "b7fcfba10af1ee18b214575b55452d9b4c21f87b00083ffa990926af319ca63c",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-project-reconcile",
+      "sha256": "5dfd470272ee14a7e03957beea5d300a7850dd354ba6ea2791fb0b71b5816b40",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-project-sync",
+      "sha256": "7af37cc16bf0a1482cde5c8e9eedae5f2c22419aec1b29f4c7e04e0df70a990f",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-reconcile",
+      "sha256": "6e2a892a1f91c88f5f5fb6be1c204e113b2d62f80759ef907799254b5cb8dddb",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-review",
+      "sha256": "cd131e14f84e443969aad521d6ad8b01949de3b9b77cb863f281c78cf945881f",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-role-codex",
+      "sha256": "5a53bf776ae9d4bc47daebe7ceac4397911112545188c063047ab40a1d78717e",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-role-fake-codex",
+      "sha256": "8ce7ba04dc57706b0873495d07d30346538d8631f8a3c0a9edc4ba67234ce145",
+      "disposition": "test-double-not-production-operator"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-role-runner",
+      "sha256": "5c223b6f52458788ce70abf6620971ba3399ad746bf1829994cb5fb1f63a7991",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-semantic-review",
+      "sha256": "7af7efbeb3ecdda1939e5797cbb0417eacb57e38ca2a6e5b16578060637ac7ed",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-shift",
+      "sha256": "76c8be0cea57c794a1b1a4c3b7de9a50618ccfb1294514ce7ab698e9654c4a8d",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-throttle-status",
+      "sha256": "1b66f55aaf01037540fdbdf4362e4ccf062349e49f2358659ac6d67c99d1e06d",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-triage",
+      "sha256": "e3b6f74862dd6ed88f5fe00c5e132e6eb79cb5ad406e0d59f2fc4ae580ae401e",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-unattended",
+      "sha256": "6ce4724a7dff71050a1d6a6db0187b5e36274d10af643d45f5f9a392e33c43c9",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-add",
+      "sha256": "298bbbbae596a6160f25d880e9058423636c1999c58d90f3636e99ac1aba1ab7",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-inspect",
+      "sha256": "1fbd1aa8a726234fd5b7f70aa09784471d3d92ddf14bb137365f1932492da42f",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-requeue-stale",
+      "sha256": "0a54dc5cfc2ee26fe479aff0091eb3862768dfa7da98b044a9bc62ee33aeab70",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-rework",
+      "sha256": "2095144faa570a6aa6717a8793617e44ea15fd5fefbe6661eef2c3ae6654942a",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-worker",
+      "sha256": "4572d29cfd970dfd2ecfe9d9d7a2b8d200b0ca63a9c94cc4328c12b66105c1f3",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow",
+      "sha256": "db3274175a4d708bd1c74073d4d84b294a4852cdbf53ae4063f77d394a550b2c",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow-lint",
+      "sha256": "78c8a25ecb6754ea53b17cb32d8cbce9c2250c2c7f974fe71b9b1630a2c4d588",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow-select",
+      "sha256": "a7e04876b1a55b46a0a28fbda7e81050cca66dbf78c5ec8208afe3e4c39fab7d",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow-template-add",
+      "sha256": "a3a81bbd6ed7fb174a2ac916ad22a64e6f82653504b691a2e51aec9721fce99d",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workstream-review",
+      "sha256": "0b640c886909faf36032a893e8913e96e8fcd78022670085e219a8dd89a7b92e",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_agent_common.py",
+      "sha256": "262055940d6d52d6ddcd8ad9539e7b7aa8037f018b54cf50c54ff121ac78903c",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_approval.py",
+      "sha256": "28698c539e5beb946ad1382e5fde70343d2fcb680702f020fed22ced3fc9a471",
+      "disposition": "operator-module-alias-of-wrapper"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_authority.py",
+      "sha256": "6d896e2144196566dc206f6b9830e8319db5bea691949d8a2038c24afa797b30",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_azure_devops.py",
+      "sha256": "65251a98347ebee6dc7a86fcbba299a2de2abffa4c8f18b3956d681c75ad12f7",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_azure_reconcile.py",
+      "sha256": "cdb9dc224178153f5d73a6dc14651a1d0a81e55517ced4e3cb1499043ddd4842",
+      "disposition": "operator-module-alias-of-wrapper"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_azure_worker.py",
+      "sha256": "fbd7f8392d48ce6168c3ddb072d62fca7c08ef244107ff098a12668feebc8c12",
+      "disposition": "operator-module-alias-of-wrapper"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_delta_review.py",
+      "sha256": "74e19acda9f2810211de07d0adf7db42bc50207f876abcfb9cd10f29d0360924",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_dispatch.py",
+      "sha256": "35d8751c29b5763015fe1d9cb1ecfdbb3eb7f42a55acf3c188851ec5f70ad649",
+      "disposition": "operator-module-alias-of-wrapper"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_human_gates.py",
+      "sha256": "95bdb4c73ace2c4b8516f8fff27ecc0035d065e061012dcccac0dee7e7f7c047",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_intake.py",
+      "sha256": "2111dd5a9addde5391c0b0f5a8a9238a49bcaf4284a56228df7075fadd4ed576",
+      "disposition": "operator-module-alias-of-wrapper"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_local_dev.py",
+      "sha256": "6b94a899dac1eb378200a337a0a5cd08ae7aa4a90b299126843f035228737747",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_local_sizing.py",
+      "sha256": "ca02720d885f048f266b5ce7625123c6f5e3d5c7cc08bebcb20488502adf594d",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_routing.py",
+      "sha256": "3a530cfe5afe4aca31caf3f2a57caa14c08adddc6a913a82c9037d6e6e64957b",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_runtime_config.py",
+      "sha256": "e5cc30df00fd40408b1c8faec00405a00237cfd3d056bc3492ccc802a7fe72c3",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_supervised_handoff.py",
+      "sha256": "21b6b138f05d765897033178ece7bca8d867fddac7ba5941cc8ed3f0c1e43280",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_supervisor.py",
+      "sha256": "26a254c6f2aa8723c6eae9c9310d0d1500626d2eadb281cf7bb362ac3bb9d346",
+      "disposition": "operator-module-alias-of-wrapper"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_work_items.py",
+      "sha256": "6b42135dd4f700edad2e35f3902f6d1bfa48c7be54c0a18ab41265844dafb4f5",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_workflows.py",
+      "sha256": "70a23c21343bf2f69b5f0a16344cd55bde658fac8bedcf7e4374f6b86e15f4b0",
+      "disposition": "imported-runtime-library"
+    },
+    {
+      "path": "templates/local-automation-runtime/build_codex_image.sh",
+      "sha256": "345b0ca5b075977a0306964fc6c4cd8668bdd93b67d922ca2bd5b6d809a6e89c",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/check_runtime.sh",
+      "sha256": "61e4ce0106ac99e75f29bf18a5eafa5af7e3de027fe9f60648111c557e2f1332",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/config.env",
+      "sha256": "6fca79221975b75cb2cc7c9648afe6c40566e457692c5f7ecea4212e79fd7823",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/config.env.example",
+      "sha256": "924b08bdb2ccab95da185ab88773690f7cf26257954d0711aaec6cd6b3c2238f",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/default_branches.sh",
+      "sha256": "bd8905857ad1505293ffd3c6e192151fa82f5e7899b40f19af5ca6d28535cfb3",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/list_issues.sh",
+      "sha256": "ddae4c15b18d1e25c37e63dff5ca59564df2fb01e6bdcd88c2e947a0d32ae305",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/local-validation.json",
+      "sha256": "050d83a8c71068e3f0fbfae79bbd81ab8793bc6ca4f21af2762885dac2453965",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/pause_github_agentic.sh",
+      "sha256": "213328c184061484e706210da694c23d1eb8da7dd652cd06e94eadb6173e7ce9",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/projects.example.txt",
+      "sha256": "30d2fefe892600eae81a3b114acf0dd0e9e611474b958e5e0bfe4fec0983c378",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/projects.txt",
+      "sha256": "0d72490094a26c45224a5df6d009fc817d4ccd32c773dfdb970eb287f12a3f46",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/repos.example.txt",
+      "sha256": "30796aef0f2573f5c52be7a35502dfc75380c72c268009549ed89a9336c648d4",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/repos.txt",
+      "sha256": "4941e33e0c6873107cd40760269c66caa0e67a47c2d3b3a9fce332cd66dd5f07",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/required-checks.json",
+      "sha256": "151b2b71a6e18aba81b4c3094d9c44ebb9cb945a14d850d3e750fe77bb05faf0",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/requirements-dev.txt",
+      "sha256": "f942e56f2025a807eb2af924bffa686df86f56a76b62e26d80aff56f74b5a801",
+      "disposition": "configuration-documentation-or-data"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_dry_issue.sh",
+      "sha256": "dfe4b0c143783363c399dc55b0144cda79a8d6f0dbf8a4afb4178f80f866a9cd",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_e2e_chain.sh",
+      "sha256": "d1ba36674e8f98438c05e696a2436cb86aadef474200403bb1884f9f98e800bb",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_issue_publish.sh",
+      "sha256": "2a19aa456f351bf017ecd02de487df0e1a6fff1facf2219484fb7157013dd174",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_parallel_orchestrators.sh",
+      "sha256": "44bb344174f25327b03450de3e45441b54618d48c24a65a14066d2c8d5fe83a3",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/runtime_control.py",
+      "sha256": "5542cf7c00a541195ab144169db3dd14bc30f820279025beb51fd31161028274",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/harness_service.py",
+      "sha256": "9240341b6f001f131889641ddef6129b0d1515ed608014b8141af6c59fa7dbf5",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/harness_remotes.py",
+      "sha256": "c60e5616a01884bad2ae2d8f2c494f73f507dfc0da0be776b625fb0b9b155366",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/setup_harness_interface.py",
+      "sha256": "d904dfab86a72438d73931ca50fde15411a0957b4f469439c1368810c118a16d",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/atlas_daily.py",
+      "sha256": "5804e6fdad930955cf05d1b39712ce41c1c56634627221052e883537c0daddbb",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/install_harness.py",
+      "sha256": "c6e8f35d451fea4ea8e8d187449409c3b9a0912be3e6b738d88b1e99ac1da83a",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/verify_harness.py",
+      "sha256": "a4778379cb39f5d95a3c8caa7d3f4baafac1511cd989c4c70aa3845b55376b25",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/verify_repo.py",
+      "sha256": "600a97f7a8fc8c601ae4cf7a24b93125d1dbe9d449d437f65801332e151bc8ed",
+      "disposition": "supported-operator-entrypoint"
+    },
+    {
+      "path": "scripts/harness_mcp.py",
+      "sha256": "5df58b41338ce396f72ec2fb6103cf51534e19643f8a9a9cb4c706430807cbfd",
+      "disposition": "supported-operator-entrypoint"
+    }
+  ],
+  "entrypoints": [
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-admin",
+      "sha256": "904c461beafd13f8a6fa33a28efaa38921e556e6b0957dd32375a44d98541d93",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-admin",
+      "lane": "operator-controls",
+      "operations": [
+        {
+          "id": "atlas-agent-admin.inspect",
+          "native_mode": "inspect"
+        },
+        {
+          "id": "atlas-agent-admin.clean-labels",
+          "native_mode": "clean-labels"
+        },
+        {
+          "id": "atlas-agent-admin.fix-base",
+          "native_mode": "fix-base"
+        },
+        {
+          "id": "atlas-agent-admin.create-base",
+          "native_mode": "create-base"
+        },
+        {
+          "id": "atlas-agent-admin.allow-policy",
+          "native_mode": "allow-policy"
+        },
+        {
+          "id": "atlas-agent-admin.fix-git-identity",
+          "native_mode": "fix-git-identity"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--base",
+        "--from",
+        "--requeue",
+        "issue"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-operator-controls",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-approval",
+      "sha256": "a88dcfe628da1bc0830843c03747cebca99ad00fbc0bdfc698717934561715ff",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas_approval.py",
+      "lane": "azure-governed",
+      "operations": [
+        {
+          "id": "atlas-agent-azure-approval.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-azure-approval.prepare",
+          "native_mode": "prepare"
+        },
+        {
+          "id": "atlas-agent-azure-approval.reopen",
+          "native_mode": "reopen"
+        },
+        {
+          "id": "atlas-agent-azure-approval.export",
+          "native_mode": "export"
+        },
+        {
+          "id": "atlas-agent-azure-approval.import-response",
+          "native_mode": "import-response"
+        },
+        {
+          "id": "atlas-agent-azure-approval.operator-issue",
+          "native_mode": "operator-issue"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--config",
+        "--decision",
+        "--dry-run",
+        "--export",
+        "--import-response",
+        "--operator-issue",
+        "--prepare",
+        "--reopen",
+        "--request",
+        "--request-id",
+        "--response-file",
+        "--response-text",
+        "--runtime-dir"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-azure-governed",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-dispatch",
+      "sha256": "72ce082cb9ca5762675f17e10c220da77a0bf9a130af691bfebc759dfe42264d",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas_dispatch.py",
+      "lane": "azure-governed",
+      "operations": [
+        {
+          "id": "atlas-agent-azure-dispatch.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-azure-dispatch.assess",
+          "native_mode": "assess"
+        },
+        {
+          "id": "atlas-agent-azure-dispatch.execute",
+          "native_mode": "execute"
+        },
+        {
+          "id": "atlas-agent-azure-dispatch.check-handoff-before",
+          "native_mode": "check-handoff-before"
+        },
+        {
+          "id": "atlas-agent-azure-dispatch.check-handoff-after",
+          "native_mode": "check-handoff-after"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--assess",
+        "--assessment",
+        "--authorization",
+        "--challenge",
+        "--check-handoff",
+        "--context-root",
+        "--dry-run",
+        "--execute",
+        "--handoff-action",
+        "--handoff-stage",
+        "--human-receipts"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-azure-governed",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-inspect",
+      "sha256": "41903b729b3600f006077d7539d89a3999e45129b2944b1213cf2394653e6239",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-azure-inspect",
+      "lane": "azure-governed",
+      "operations": [
+        {
+          "id": "atlas-agent-azure-inspect.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--authority",
+        "--build-ids",
+        "--config",
+        "--dry-run",
+        "--expected-manifest",
+        "--ids",
+        "--json",
+        "--live-read",
+        "--runtime-dir",
+        "--snapshot",
+        "--supplement"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "partial aggregate via harness_prepare/start Azure operations",
+      "stage": "later-azure-governed",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-intake",
+      "sha256": "e52ab8adb44644ede88b675d5f789196b97ca7ad628b3975094be4c67ae94b47",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas_intake.py",
+      "lane": "azure-governed",
+      "operations": [
+        {
+          "id": "atlas-agent-azure-intake.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-azure-intake.live-read",
+          "native_mode": "live-read"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--dry-run",
+        "--live-read",
+        "--previous",
+        "--snapshot"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-azure-governed",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-reconcile",
+      "sha256": "07104a475d521fb04a285312c2d7d467786cc60167cd3de06231cc7b4be58d84",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas_azure_reconcile.py",
+      "lane": "azure-governed",
+      "operations": [
+        {
+          "id": "atlas-agent-azure-reconcile.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-azure-reconcile.apply",
+          "native_mode": "apply"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--authorization",
+        "--authorize-packet-sha256",
+        "--changes",
+        "--config",
+        "--dry-run",
+        "--packet",
+        "--runtime-dir",
+        "--snapshot"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "partial aggregate via harness_prepare/start Azure operations",
+      "stage": "later-azure-governed",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-supervise",
+      "sha256": "404ec3f5f39ab5fb5097c91e28feaf5bedbaad7d4ed584b2d5bedbe337775fbe",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas_supervisor.py",
+      "lane": "azure-governed",
+      "operations": [
+        {
+          "id": "atlas-agent-azure-supervise.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-azure-supervise.observe",
+          "native_mode": "observe"
+        },
+        {
+          "id": "atlas-agent-azure-supervise.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--dry-run",
+        "--observe",
+        "--run"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-azure-governed",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-azure-worker",
+      "sha256": "cfa18d7c38ac8f04fc840d145ed3d6ee21ae172b50f472dfbc9c7ec428b3afbc",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas_azure_worker.py",
+      "lane": "azure-governed",
+      "operations": [
+        {
+          "id": "atlas-agent-azure-worker.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-azure-worker.execute",
+          "native_mode": "execute"
+        },
+        {
+          "id": "atlas-agent-azure-worker.publish",
+          "native_mode": "publish"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--authorization",
+        "--config",
+        "--dry-run",
+        "--execute",
+        "--human-receipts",
+        "--packet",
+        "--publish",
+        "--routing",
+        "--runtime-dir"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "partial aggregate via harness_prepare/start Azure operations",
+      "stage": "later-azure-governed",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-cleanup",
+      "sha256": "42ab365e9c557ec0b90abc801f191538c2abf42d8f3449cf41c28fbd76aab15b",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-cleanup",
+      "lane": "operator-controls",
+      "operations": [
+        {
+          "id": "atlas-agent-cleanup.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-cleanup.apply",
+          "native_mode": "apply"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--active-job-hours",
+        "--apply",
+        "--checkout-max-age-hours",
+        "--codex-home-max-age-hours",
+        "--imported-template-max-age-hours",
+        "--include-dirty-checkouts",
+        "--job-max-age-hours",
+        "--keep-checkouts-per-repo",
+        "--keep-jobs",
+        "--lock-stale-seconds",
+        "--lock-wait-seconds",
+        "--log-max-age-hours",
+        "--max-delete",
+        "--measure-size",
+        "--no-prune-worktree-registrations",
+        "--protect-recent-hours",
+        "--summary",
+        "--target"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "deletion-on-apply"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-operator-controls",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-cycle-summary",
+      "sha256": "b5dcbff648a978a7866170ac6146e823ebdd5d8b3fbca001170a6a79de54e9d2",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-cycle-summary",
+      "lane": "notifications",
+      "operations": [
+        {
+          "id": "atlas-agent-cycle-summary.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--chain-dir",
+        "--cycle",
+        "--output",
+        "--post-teams"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "external-message-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-notifications",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-delta-review",
+      "sha256": "1466796ef6747cbc4a846de055b3e3c3925d1c7c0bc136bc45c8b56d48544f5f",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-delta-review",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-delta-review.freeze",
+          "native_mode": "freeze"
+        },
+        {
+          "id": "atlas-agent-delta-review.plan-checks",
+          "native_mode": "plan-checks"
+        },
+        {
+          "id": "atlas-agent-delta-review.metric",
+          "native_mode": "metric"
+        },
+        {
+          "id": "atlas-agent-delta-review.run-checks",
+          "native_mode": "run-checks"
+        },
+        {
+          "id": "atlas-agent-delta-review.acceptance-check",
+          "native_mode": "acceptance-check"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--snapshot",
+        "base",
+        "candidate",
+        "check_plan",
+        "checks",
+        "checks_result",
+        "event",
+        "output",
+        "repo",
+        "review",
+        "snapshot",
+        "state"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-dependency-promote",
+      "sha256": "7a5fe4005903421ef4f71db8946a16df5e2cda6ee47d169235b6e2dea8d42ae3",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-dependency-promote",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-dependency-promote.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--dry-run",
+        "--limit",
+        "--project-mode",
+        "--projects-file",
+        "--repos-file",
+        "--summary"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-deploy",
+      "sha256": "66d66a6b610e99f4b2dc02eb6dcfa93d4c5559fa4a53ec264de0b9f57dd41193",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-deploy",
+      "lane": "deployment",
+      "operations": [
+        {
+          "id": "atlas-agent-deploy.candidate",
+          "native_mode": "candidate"
+        },
+        {
+          "id": "atlas-agent-deploy.dev-sequence",
+          "native_mode": "dev-sequence"
+        },
+        {
+          "id": "atlas-agent-deploy.functions-code",
+          "native_mode": "functions-code"
+        },
+        {
+          "id": "atlas-agent-deploy.chainlit",
+          "native_mode": "chainlit"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--approval-requirement",
+        "--base-sha",
+        "--candidate-sha",
+        "--classifier-json",
+        "--classifier-path",
+        "--code-deployer",
+        "--control-infra-mode",
+        "--deploy-workers",
+        "--dry-run",
+        "--environment-name",
+        "--location",
+        "--overrides-json",
+        "--parameter-file",
+        "--prefix",
+        "--private-core-repo",
+        "--ref",
+        "--repo",
+        "--target-environment",
+        "--wait",
+        "--workflow"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "deployment"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-deployment",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-deployed-validate",
+      "sha256": "af663c0d65c921ea58dc96e7a5a9650df5c2fde6f1a8da5d0767d92c9985daff",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-deployed-validate",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-deployed-validate.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--commands-file",
+        "pr"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-finalize",
+      "sha256": "a1455f992c65ee3ea8690dfc11d8c34e5082d99cfcb67c6d1f0b8e40a5526f94",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-finalize",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-finalize.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--allow-no-checks",
+        "--apply",
+        "--check-dependencies",
+        "--close-issues",
+        "--issue",
+        "--limit",
+        "--merge",
+        "--merge-method",
+        "--project-snapshot",
+        "--projects-file",
+        "--repos-file",
+        "--require-review-label",
+        "--required-checks-file",
+        "--summary"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-issue-decompose",
+      "sha256": "aa79247d28d7c856f71aca9438020322c9c5c5a0036597328c57ab6a1604dd68",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-issue-decompose",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-issue-decompose.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--candidate-label",
+        "--child-drafts-file",
+        "--create-subissues",
+        "--dry-run",
+        "--issue",
+        "--max",
+        "--max-children",
+        "--project-snapshot",
+        "--projects-file",
+        "--repos-file",
+        "--summary"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-local-validate",
+      "sha256": "d897e042ed790da30797019b9f1f320f6759a4667138f0d1494aee2c2a9be725",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-local-validate",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-local-validate.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--commands-file",
+        "pr"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-notify",
+      "sha256": "6659f69cdc00a3ce1793be28f80ccfed5abfdf27b9291b7893ec82489218061d",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-notify",
+      "lane": "notifications",
+      "operations": [
+        {
+          "id": "atlas-agent-notify.summary",
+          "native_mode": "summary"
+        },
+        {
+          "id": "atlas-agent-notify.teams",
+          "native_mode": "teams"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--artifact-name",
+        "--branch",
+        "--force-send",
+        "--lookback-hours",
+        "--max-items",
+        "--ref",
+        "--repo",
+        "--source-repo",
+        "--source-run-id",
+        "--state-path",
+        "--summary-path",
+        "--tracked-workflows-json",
+        "--wait",
+        "--workflow"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "external-message-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-notifications",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-orchestrator",
+      "sha256": "b8c7de72939e5aa5f709ef6e14eaaa845211ac2f7e928c1e4a53653abdfe3529",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-orchestrator",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-orchestrator.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--agent-registry",
+        "--agent-root",
+        "--atlas-bounded",
+        "--atlas-cycle-pins",
+        "--atlas-cycle-seconds",
+        "--atlas-max-claims",
+        "--atlas-max-roles",
+        "--atlas-max-steps",
+        "--atlas-recoverable",
+        "--atlas-resume-cycle",
+        "--atlas-role-command-config",
+        "--atlas-role-max",
+        "--atlas-stop-file",
+        "--atlas-work-item-command",
+        "--atlas-work-items",
+        "--atlas-worker-termination-grace-seconds",
+        "--atlas-worker-timeout-seconds",
+        "--auto-allow-policy-labels",
+        "--auto-create-missing-base",
+        "--auto-queue-label",
+        "--auto-queue-max",
+        "--auto-queue-skip-open-pr",
+        "--daemon",
+        "--dispatch-deploy-candidates",
+        "--dry-run",
+        "--execution-targets-file",
+        "--inspect-failed",
+        "--lease-stale-seconds",
+        "--limit",
+        "--max-items",
+        "--max-per-repo",
+        "--once",
+        "--publish",
+        "--repos-file",
+        "--require-one-point",
+        "--sleep-seconds",
+        "--team-templates",
+        "--triage-apply-stale",
+        "--triage-approve-review-before-dispatch",
+        "--triage-clean-pause-labels",
+        "--triage-comment",
+        "--triage-needs-human",
+        "--triage-post-teams",
+        "--triage-summary",
+        "--triage-teams-preview",
+        "--worker-notifications",
+        "--write-scope-locks"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-plan-queue",
+      "sha256": "5066712b24b66297a5cb012e6722815ada867ea1b2536209f817fb46cddcd8a7",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-plan-queue",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-plan-queue.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--cycles",
+        "--dry-run",
+        "--max-queue",
+        "--plan",
+        "--project-number",
+        "--project-owner",
+        "--project-url",
+        "--publish",
+        "--queue",
+        "--registry-epic-id",
+        "--registry-project-id",
+        "--registry-root",
+        "--registry-story-id",
+        "--repo",
+        "--run-chain",
+        "--strategy"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-pr-repair",
+      "sha256": "b7fcfba10af1ee18b214575b55452d9b4c21f87b00083ffa990926af319ca63c",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-pr-repair",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-pr-repair.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--dry-run",
+        "pr"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-project-reconcile",
+      "sha256": "5dfd470272ee14a7e03957beea5d300a7850dd354ba6ea2791fb0b71b5816b40",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-project-reconcile",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-project-reconcile.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--audit",
+        "--dry-run",
+        "--hydrate-metadata",
+        "--issue",
+        "--limit",
+        "--owner",
+        "--pr-lookup",
+        "--project-number",
+        "--project-snapshot",
+        "--projects-file",
+        "--summary"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-project-sync",
+      "sha256": "7af37cc16bf0a1482cde5c8e9eedae5f2c22419aec1b29f4c7e04e0df70a990f",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-project-sync",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-project-sync.status",
+          "native_mode": "status"
+        },
+        {
+          "id": "atlas-agent-project-sync.flush",
+          "native_mode": "flush"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--dry-run",
+        "--file",
+        "--json"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-reconcile",
+      "sha256": "6e2a892a1f91c88f5f5fb6be1c204e113b2d62f80759ef907799254b5cb8dddb",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-reconcile",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-reconcile.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--limit",
+        "--repos-file",
+        "--summary"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-review",
+      "sha256": "cd131e14f84e443969aad521d6ad8b01949de3b9b77cb863f281c78cf945881f",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-review",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-review.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--allow-no-checks",
+        "--apply",
+        "--check-dependencies",
+        "--comment",
+        "--detect-overlap",
+        "--limit",
+        "--project-snapshot",
+        "--projects-file",
+        "--repos-file",
+        "--require-semantic-review",
+        "--required-checks-file",
+        "--review-failed-workflows",
+        "--summary"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-role-codex",
+      "sha256": "5a53bf776ae9d4bc47daebe7ceac4397911112545188c063047ab40a1d78717e",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-role-codex",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-role-codex.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-role-codex.execute",
+          "native_mode": "execute"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--allow-execute",
+        "--codex-command",
+        "--execute",
+        "--profile-kind",
+        "--prompt",
+        "--result",
+        "--task",
+        "--timeout-seconds"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-role-runner",
+      "sha256": "5c223b6f52458788ce70abf6620971ba3399ad746bf1829994cb5fb1f63a7991",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-role-runner",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-role-runner.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-role-runner.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--command-config",
+        "--dry-run",
+        "--max-roles",
+        "--results",
+        "--results-dir",
+        "--tasks"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-semantic-review",
+      "sha256": "7af7efbeb3ecdda1939e5797cbb0417eacb57e38ca2a6e5b16578060637ac7ed",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-semantic-review",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-semantic-review.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--soft-fail",
+        "pr"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-shift",
+      "sha256": "76c8be0cea57c794a1b1a4c3b7de9a50618ccfb1294514ce7ab698e9654c4a8d",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-shift",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-shift.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--continue-on-error",
+        "--cycle-timeout-seconds",
+        "--cycles",
+        "--deadline",
+        "--handoff-file",
+        "--heartbeat-file",
+        "--lock-stale-seconds",
+        "--lock-wait-seconds",
+        "--max-minutes",
+        "--no-handoff",
+        "--project-reconcile-every",
+        "--sleep-seconds",
+        "--status-file",
+        "--stop-before-deadline-seconds"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-throttle-status",
+      "sha256": "1b66f55aaf01037540fdbdf4362e4ccf062349e49f2358659ac6d67c99d1e06d",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-throttle-status",
+      "lane": "operator-controls",
+      "operations": [
+        {
+          "id": "atlas-agent-throttle-status.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--json",
+        "--stale-seconds"
+      ],
+      "effects_upper_bound": [
+        "read"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-operator-controls",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-triage",
+      "sha256": "e3b6f74862dd6ed88f5fe00c5e132e6eb79cb5ad406e0d59f2fc4ae580ae401e",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-triage",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-triage.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply-stale",
+        "--approve-review-before-dispatch",
+        "--clean-pause-labels",
+        "--comment",
+        "--force-teams",
+        "--limit",
+        "--max-items",
+        "--post-teams",
+        "--queue-label",
+        "--reminder-hours",
+        "--repos-file",
+        "--summary",
+        "--teams-preview"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "external-message-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-unattended",
+      "sha256": "6ce4724a7dff71050a1d6a6db0187b5e36274d10af643d45f5f9a392e33c43c9",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-unattended",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-unattended.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--allow-no-checks",
+        "--apply",
+        "--auto-queue-label",
+        "--cleanup-max-delete",
+        "--cleanup-measure-size",
+        "--cleanup-mode",
+        "--cleanup-target",
+        "--close-issues",
+        "--cycles",
+        "--decompose-apply",
+        "--decompose-candidate-label",
+        "--decompose-create-subissues",
+        "--decompose-issue",
+        "--decompose-max",
+        "--dependency-promote-apply",
+        "--deployed-validate-concurrency",
+        "--deployed-validate-max",
+        "--deployed-validation-apply",
+        "--deployed-validation-file",
+        "--dispatch-max-per-repo",
+        "--dry-run",
+        "--execution-targets-file",
+        "--limit",
+        "--local-validate-concurrency",
+        "--local-validate-max",
+        "--local-validation-apply",
+        "--local-validation-file",
+        "--max-per-repo",
+        "--merge",
+        "--post-cycle-summary",
+        "--post-triage-teams-per-repo",
+        "--project-item-limit",
+        "--project-number",
+        "--project-owner",
+        "--project-reconcile-apply",
+        "--project-reconcile-every",
+        "--project-snapshot",
+        "--projects-file",
+        "--publish",
+        "--reconcile-apply",
+        "--remote-comments",
+        "--repair-concurrency",
+        "--repair-cooldown-hours",
+        "--repair-dry-run",
+        "--repair-max",
+        "--repos-file",
+        "--require-one-point",
+        "--require-review-approval",
+        "--required-checks-file",
+        "--review-apply",
+        "--review-label",
+        "--semantic-review-apply",
+        "--semantic-review-concurrency",
+        "--semantic-review-max",
+        "--stages",
+        "--stop-on-error",
+        "--worker-notifications",
+        "--workstream-review-apply",
+        "--workstream-review-feedback-file",
+        "--workstream-review-label",
+        "--workstream-review-max"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible",
+        "external-message-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-add",
+      "sha256": "298bbbbae596a6160f25d880e9058423636c1999c58d90f3636e99ac1aba1ab7",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-work-item-add",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-work-item-add.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--actor",
+        "--base-branch",
+        "--blocker",
+        "--combine-policy",
+        "--critical-path-rank",
+        "--depends-on",
+        "--execution-repo",
+        "--id",
+        "--json",
+        "--label",
+        "--parallel-group",
+        "--priority",
+        "--require-template-match",
+        "--required-output",
+        "--select-team-template",
+        "--target-repo",
+        "--team-template",
+        "--team-templates",
+        "--title",
+        "--validation-tier",
+        "--workflow-kind",
+        "--write-scope",
+        "store"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-inspect",
+      "sha256": "1fbd1aa8a726234fd5b7f70aa09784471d3d92ddf14bb137365f1932492da42f",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-work-item-inspect",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-work-item-inspect.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--json",
+        "--limit",
+        "store"
+      ],
+      "effects_upper_bound": [
+        "read"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-requeue-stale",
+      "sha256": "0a54dc5cfc2ee26fe479aff0091eb3862768dfa7da98b044a9bc62ee33aeab70",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-work-item-requeue-stale",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-work-item-requeue-stale.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "atlas-agent-work-item-requeue-stale.apply",
+          "native_mode": "apply"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--actor",
+        "--apply",
+        "--json",
+        "--stale-seconds",
+        "store"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-work-item-rework",
+      "sha256": "2095144faa570a6aa6717a8793617e44ea15fd5fefbe6661eef2c3ae6654942a",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-work-item-rework",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-work-item-rework.rework",
+          "native_mode": "rework"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--evidence",
+        "--id",
+        "--reason",
+        "store"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-worker",
+      "sha256": "4572d29cfd970dfd2ecfe9d9d7a2b8d200b0ca63a9c94cc4328c12b66105c1f3",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-worker",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-worker.once",
+          "native_mode": "once"
+        },
+        {
+          "id": "atlas-agent-worker.loop",
+          "native_mode": "loop"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow",
+      "sha256": "db3274175a4d708bd1c74073d4d84b294a4852cdbf53ae4063f77d394a550b2c",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-workflow",
+      "lane": "github-actions",
+      "operations": [
+        {
+          "id": "atlas-agent-workflow.run",
+          "native_mode": "run"
+        },
+        {
+          "id": "atlas-agent-workflow.list",
+          "native_mode": "list"
+        },
+        {
+          "id": "atlas-agent-workflow.watch",
+          "native_mode": "watch"
+        },
+        {
+          "id": "atlas-agent-workflow.view",
+          "native_mode": "view"
+        },
+        {
+          "id": "atlas-agent-workflow.download",
+          "native_mode": "download"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--download-artifacts",
+        "--limit",
+        "--log",
+        "--log-failed",
+        "--output",
+        "--ref",
+        "--settle-seconds",
+        "--wait",
+        "--workflow",
+        "-f",
+        "repo",
+        "run_id",
+        "workflow"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-github-actions",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow-lint",
+      "sha256": "78c8a25ecb6754ea53b17cb32d8cbce9c2250c2c7f974fe71b9b1630a2c4d588",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-workflow-lint",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-workflow-lint.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--agent-registry",
+        "--agent-root",
+        "--json",
+        "--team-templates"
+      ],
+      "effects_upper_bound": [
+        "read"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow-select",
+      "sha256": "a7e04876b1a55b46a0a28fbda7e81050cca66dbf78c5ec8208afe3e4c39fab7d",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-workflow-select",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-workflow-select.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--json",
+        "--required-output",
+        "--team-template",
+        "--team-templates",
+        "--work-item",
+        "--work-item-id",
+        "--workflow-kind"
+      ],
+      "effects_upper_bound": [
+        "read"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workflow-template-add",
+      "sha256": "a3a81bbd6ed7fb174a2ac916ad22a64e6f82653504b691a2e51aec9721fce99d",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-workflow-template-add",
+      "lane": "local-workflows",
+      "operations": [
+        {
+          "id": "atlas-agent-workflow-template-add.add",
+          "native_mode": "add"
+        },
+        {
+          "id": "atlas-agent-workflow-template-add.force-replace",
+          "native_mode": "force-replace"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--allow-partial-rollup",
+        "--force",
+        "--id",
+        "--json",
+        "--name",
+        "--purpose",
+        "--role-json",
+        "--workflow-kind",
+        "target"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-local-workflows",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas-agent-workstream-review",
+      "sha256": "0b640c886909faf36032a893e8913e96e8fcd78022670085e219a8dd89a7b92e",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas-agent-workstream-review",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "atlas-agent-workstream-review.run",
+          "native_mode": "run"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--feedback-file",
+        "--max",
+        "--projects-file",
+        "--repos-file",
+        "--scan-label",
+        "--summary",
+        "issue"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/atlas_local_dev.py",
+      "sha256": "6b94a899dac1eb378200a337a0a5cd08ae7aa4a90b299126843f035228737747",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/atlas_local_dev.py",
+      "lane": "daily",
+      "operations": [
+        {
+          "id": "atlas_local_dev.add",
+          "native_mode": "add"
+        },
+        {
+          "id": "atlas_local_dev.status",
+          "native_mode": "status"
+        },
+        {
+          "id": "atlas_local_dev.prepare",
+          "native_mode": "prepare"
+        },
+        {
+          "id": "atlas_local_dev.import",
+          "native_mode": "import"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--agent-registry",
+        "--agent-root",
+        "--host-receipt",
+        "--id",
+        "--owner",
+        "--reservation",
+        "--result",
+        "--revision",
+        "--runtime-dir",
+        "--state-dir",
+        "--task"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "daily-first",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/build_codex_image.sh",
+      "sha256": "345b0ca5b075977a0306964fc6c4cd8668bdd93b67d922ca2bd5b6d809a6e89c",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/build_codex_image.sh",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "build_codex_image.build",
+          "native_mode": "build"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-installation",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/check_runtime.sh",
+      "sha256": "61e4ce0106ac99e75f29bf18a5eafa5af7e3de027fe9f60648111c557e2f1332",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/check_runtime.sh",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "check_runtime.check",
+          "native_mode": "check"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-installation",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/default_branches.sh",
+      "sha256": "bd8905857ad1505293ffd3c6e192151fa82f5e7899b40f19af5ca6d28535cfb3",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/default_branches.sh",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "default_branches.list",
+          "native_mode": "list"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "cloud-read-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/list_issues.sh",
+      "sha256": "ddae4c15b18d1e25c37e63dff5ca59564df2fb01e6bdcd88c2e947a0d32ae305",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/list_issues.sh",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "list_issues.list",
+          "native_mode": "list"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "cloud-read-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/pause_github_agentic.sh",
+      "sha256": "213328c184061484e706210da694c23d1eb8da7dd652cd06e94eadb6173e7ce9",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/pause_github_agentic.sh",
+      "lane": "github-actions",
+      "operations": [
+        {
+          "id": "pause_github_agentic.disable",
+          "native_mode": "disable"
+        },
+        {
+          "id": "pause_github_agentic.enable",
+          "native_mode": "enable"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-github-actions",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_dry_issue.sh",
+      "sha256": "dfe4b0c143783363c399dc55b0144cda79a8d6f0dbf8a4afb4178f80f866a9cd",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/run_dry_issue.sh",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "run_dry_issue.dry-worker-with-label-mutations",
+          "native_mode": "dry-worker-with-label-mutations"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_e2e_chain.sh",
+      "sha256": "d1ba36674e8f98438c05e696a2436cb86aadef474200403bb1884f9f98e800bb",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/run_e2e_chain.sh",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "run_e2e_chain.bounded-chain",
+          "native_mode": "bounded-chain"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_issue_publish.sh",
+      "sha256": "2a19aa456f351bf017ecd02de487df0e1a6fff1facf2219484fb7157013dd174",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/run_issue_publish.sh",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "run_issue_publish.publish-worker-with-label-mutations",
+          "native_mode": "publish-worker-with-label-mutations"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "templates/local-automation-runtime/run_parallel_orchestrators.sh",
+      "sha256": "44bb344174f25327b03450de3e45441b54618d48c24a65a14066d2c8d5fe83a3",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "templates/local-automation-runtime/run_parallel_orchestrators.sh",
+      "lane": "github-issue-to-pr",
+      "operations": [
+        {
+          "id": "run_parallel_orchestrators.launch-daemons",
+          "native_mode": "launch-daemons"
+        }
+      ],
+      "literal_argument_tokens": [],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible",
+        "child-process-or-model-possible"
+      ],
+      "current_mcp_coverage": "some actions reachable through bounded github-cycle; no operation-level parity claim",
+      "stage": "later-github-issue-to-pr",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/runtime_control.py",
+      "sha256": "5542cf7c00a541195ab144169db3dd14bc30f820279025beb51fd31161028274",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/runtime_control.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "runtime_control.status",
+          "native_mode": "status"
+        },
+        {
+          "id": "runtime_control.repos",
+          "native_mode": "repos"
+        },
+        {
+          "id": "runtime_control.projects",
+          "native_mode": "projects"
+        },
+        {
+          "id": "runtime_control.models",
+          "native_mode": "models"
+        },
+        {
+          "id": "runtime_control.sync",
+          "native_mode": "sync"
+        },
+        {
+          "id": "runtime_control.plan-preview",
+          "native_mode": "plan-preview"
+        },
+        {
+          "id": "runtime_control.queue",
+          "native_mode": "queue"
+        },
+        {
+          "id": "runtime_control.dry-cycle",
+          "native_mode": "dry-cycle"
+        },
+        {
+          "id": "runtime_control.run-once",
+          "native_mode": "run-once"
+        },
+        {
+          "id": "runtime_control.shift",
+          "native_mode": "shift"
+        },
+        {
+          "id": "runtime_control.review",
+          "native_mode": "review"
+        },
+        {
+          "id": "runtime_control.finalize",
+          "native_mode": "finalize"
+        },
+        {
+          "id": "runtime_control.azure-inspect",
+          "native_mode": "azure-inspect"
+        },
+        {
+          "id": "runtime_control.azure-worker",
+          "native_mode": "azure-worker"
+        },
+        {
+          "id": "runtime_control.azure-reconcile",
+          "native_mode": "azure-reconcile"
+        },
+        {
+          "id": "runtime_control.azure-dispatch",
+          "native_mode": "azure-dispatch"
+        },
+        {
+          "id": "runtime_control.azure-supervise",
+          "native_mode": "azure-supervise"
+        },
+        {
+          "id": "runtime_control.azure-intake",
+          "native_mode": "azure-intake"
+        },
+        {
+          "id": "runtime_control.azure-approval",
+          "native_mode": "azure-approval"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--allow-no-checks",
+        "--apply",
+        "--assess",
+        "--authority",
+        "--authorization",
+        "--authorize-packet-sha256",
+        "--build-ids",
+        "--check",
+        "--check-handoff",
+        "--close-issues",
+        "--config",
+        "--cycles",
+        "--deadline",
+        "--decision",
+        "--dispatch-max-per-repo",
+        "--dry-run",
+        "--execute",
+        "--expected-manifest",
+        "--export",
+        "--handoff-action",
+        "--handoff-stage",
+        "--human-receipts",
+        "--ids",
+        "--import-response",
+        "--json",
+        "--live-read",
+        "--max-cycles",
+        "--max-items",
+        "--max-minutes",
+        "--max-per-repo",
+        "--max-queue",
+        "--max-seconds",
+        "--merge",
+        "--migrate-config",
+        "--observe",
+        "--operator-issue",
+        "--packet",
+        "--plan",
+        "--policy",
+        "--post-cycle-summary",
+        "--prepare",
+        "--previous",
+        "--project-number",
+        "--project-owner",
+        "--provider",
+        "--publish",
+        "--queue",
+        "--readonly",
+        "--reopen",
+        "--repair-max",
+        "--repo",
+        "--request",
+        "--request-id",
+        "--required-checks-file",
+        "--response-file",
+        "--response-text",
+        "--review-apply",
+        "--routing",
+        "--run",
+        "--runtime-dir",
+        "--sleep-seconds",
+        "--snapshot",
+        "--strategy",
+        "--summary",
+        "--supplement",
+        "--yes"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-installation",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/harness_service.py",
+      "sha256": "9240341b6f001f131889641ddef6129b0d1515ed608014b8141af6c59fa7dbf5",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/harness_service.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "harness_service.discover",
+          "native_mode": "discover"
+        },
+        {
+          "id": "harness_service.inspect",
+          "native_mode": "inspect"
+        },
+        {
+          "id": "harness_service.installation-status",
+          "native_mode": "installation-status"
+        },
+        {
+          "id": "harness_service.prepare",
+          "native_mode": "prepare"
+        },
+        {
+          "id": "harness_service.start",
+          "native_mode": "start"
+        },
+        {
+          "id": "harness_service.wait",
+          "native_mode": "wait"
+        },
+        {
+          "id": "harness_service.cancel",
+          "native_mode": "cancel"
+        },
+        {
+          "id": "harness_service.remote-repositories",
+          "native_mode": "remote-repositories"
+        },
+        {
+          "id": "harness_service.configure-remote",
+          "native_mode": "configure-remote"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--authorization-ref",
+        "--base-branch",
+        "--capability",
+        "--checkout",
+        "--cursor",
+        "--cycles",
+        "--expected-profile-sha256",
+        "--harness",
+        "--max-minutes",
+        "--max-per-repo",
+        "--models-file",
+        "--operation",
+        "--options-file",
+        "--proposal-id",
+        "--provider",
+        "--registry",
+        "--remote-id",
+        "--repository-name",
+        "--repository-url",
+        "--runtime-dir",
+        "--target",
+        "--timeout-seconds",
+        "project_url",
+        "run_id",
+        "runtime_id"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "existing-nine-tools; service prepare/start are dynamic parser loop",
+      "stage": "existing-interface-regression",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/harness_remotes.py",
+      "sha256": "c60e5616a01884bad2ae2d8f2c494f73f507dfc0da0be776b625fb0b9b155366",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/harness_remotes.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "harness_remotes.configure",
+          "native_mode": "configure"
+        },
+        {
+          "id": "harness_remotes.rollback",
+          "native_mode": "rollback"
+        },
+        {
+          "id": "harness_remotes.repositories",
+          "native_mode": "repositories"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--base-branch",
+        "--capability",
+        "--checkout",
+        "--expected-profile-sha256",
+        "--models",
+        "--project-url",
+        "--provider",
+        "--receipt",
+        "--registry",
+        "--remote-id",
+        "--repository-name",
+        "--repository-url",
+        "--runtime-dir"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible",
+        "cloud-read-possible",
+        "cloud-write-possible"
+      ],
+      "current_mcp_coverage": "configure and repositories direct; rollback missing",
+      "stage": "existing-interface-regression",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/setup_harness_interface.py",
+      "sha256": "d904dfab86a72438d73931ca50fde15411a0957b4f469439c1368810c118a16d",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/setup_harness_interface.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "setup_harness_interface.preview",
+          "native_mode": "preview"
+        },
+        {
+          "id": "setup_harness_interface.check",
+          "native_mode": "check"
+        },
+        {
+          "id": "setup_harness_interface.apply",
+          "native_mode": "apply"
+        },
+        {
+          "id": "setup_harness_interface.rollback-preview",
+          "native_mode": "rollback-preview"
+        },
+        {
+          "id": "setup_harness_interface.rollback-apply",
+          "native_mode": "rollback-apply"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--apply",
+        "--check",
+        "--home",
+        "--preserve-local",
+        "--provider",
+        "--registry",
+        "--rollback",
+        "--runtime-config",
+        "--runtime-dir",
+        "--runtime-id",
+        "--skills-only"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-installation",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/atlas_daily.py",
+      "sha256": "5804e6fdad930955cf05d1b39712ce41c1c56634627221052e883537c0daddbb",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/atlas_daily.py",
+      "lane": "daily",
+      "operations": [
+        {
+          "id": "atlas_daily.status",
+          "native_mode": "status"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--config",
+        "command"
+      ],
+      "effects_upper_bound": [
+        "read"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "daily-first",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/install_harness.py",
+      "sha256": "c6e8f35d451fea4ea8e8d187449409c3b9a0912be3e6b738d88b1e99ac1da83a",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/install_harness.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "install_harness.install",
+          "native_mode": "install"
+        },
+        {
+          "id": "install_harness.check",
+          "native_mode": "check"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--check",
+        "--harness",
+        "--target"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-installation",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/verify_harness.py",
+      "sha256": "a4778379cb39f5d95a3c8caa7d3f4baafac1511cd989c4c70aa3845b55376b25",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/verify_harness.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "verify_harness.verify",
+          "native_mode": "verify"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--harness",
+        "--target"
+      ],
+      "effects_upper_bound": [
+        "read"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-installation",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/verify_repo.py",
+      "sha256": "600a97f7a8fc8c601ae4cf7a24b93125d1dbe9d449d437f65801332e151bc8ed",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/verify_repo.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "verify_repo.verify",
+          "native_mode": "verify"
+        },
+        {
+          "id": "verify_repo.static-only",
+          "native_mode": "static-only"
+        },
+        {
+          "id": "verify_repo.strict-copy",
+          "native_mode": "strict-copy"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--skip-tests",
+        "--strict-copy"
+      ],
+      "effects_upper_bound": [
+        "read"
+      ],
+      "current_mcp_coverage": "none-direct",
+      "stage": "later-installation",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    },
+    {
+      "path": "scripts/harness_mcp.py",
+      "sha256": "5df58b41338ce396f72ec2fb6103cf51534e19643f8a9a9cb4c706430807cbfd",
+      "disposition": "supported-operator-entrypoint",
+      "implementation_path": "scripts/harness_mcp.py",
+      "lane": "installation",
+      "operations": [
+        {
+          "id": "harness_mcp.serve-stdio",
+          "native_mode": "serve-stdio"
+        }
+      ],
+      "literal_argument_tokens": [
+        "--registry"
+      ],
+      "effects_upper_bound": [
+        "read",
+        "local-write-possible"
+      ],
+      "current_mcp_coverage": "existing-nine-tools; service prepare/start are dynamic parser loop",
+      "stage": "existing-interface-regression",
+      "authority": "preserve native selected-runtime and effect checks; explicit separate authority for cloud writes, model execution, deployment, messaging, deletion or recurrence",
+      "contract_status": "inventory only; per-mode bounded request schema and parity test required"
+    }
+  ],
+  "counts": {
+    "source_files": 93,
+    "entrypoints": 61,
+    "operations": 139
+  }
+}

@@ -1,0 +1,297 @@
+{
+  "schema": "workflow-mcp-delivery-proposal.v1",
+  "authoring_plan": "plans/full-workflow-harness-mcp.plan.md",
+  "authority": "derived proposal only; not runtime intake",
+  "source_baseline": "6edb37cdcabf2af2dfcf9626916aad9b1de27acf",
+  "runtime_selection": null,
+  "authorization": "withheld_by_user",
+  "admitted_items": [],
+  "provisional_total_points": 68,
+  "unestimated": [
+    "MCP-DAILY-D12",
+    "admission/setup",
+    "discovery/decomposition",
+    "policy or template extension if needed"
+  ],
+  "packages": [
+    {
+      "id": "MCP-DAILY-D01",
+      "owner_container": "WS1",
+      "title": "Coverage data",
+      "depends_on": [],
+      "provisional_story_points": 3,
+      "delivery_target_files": [
+        "docs/workflow-mcp-coverage.json",
+        "docs/workflow-mcp-coverage.md"
+      ],
+      "coding_complexity_flags": [],
+      "required_gates": [
+        "G-COVERAGE"
+      ],
+      "status": "candidate",
+      "admitted": false,
+      "future_decomposition_output": null
+    },
+    {
+      "id": "MCP-DAILY-D02",
+      "owner_container": "WS1",
+      "title": "Coverage checker",
+      "depends_on": [
+        "MCP-DAILY-D01"
+      ],
+      "provisional_story_points": 5,
+      "delivery_target_files": [
+        "scripts/check_workflow_mcp_coverage.py",
+        "tests/test_workflow_mcp_coverage.py"
+      ],
+      "coding_complexity_flags": [],
+      "required_gates": [
+        "G-COVERAGE"
+      ],
+      "status": "candidate",
+      "admitted": false,
+      "future_decomposition_output": null
+    },
+    {
+      "id": "MCP-DAILY-D03",
+      "owner_container": "WS2",
+      "title": "Shared selection",
+      "depends_on": [
+        "MCP-DAILY-D01"
+      ],
+      "provisional_story_points": 5,
+      "delivery_target_files": [
+        "scripts/daily_selection.py",
+        "scripts/atlas_daily.py",
+        "tests/test_atlas_daily.py"
+      ],
+      "coding_complexity_flags": [
+        "security_or_authority"
+      ],
+      "required_gates": [
+        "G-SELECTION"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D03-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D04",
+      "owner_container": "WS3",
+      "title": "Native service extraction",
+      "depends_on": [
+        "MCP-DAILY-D01"
+      ],
+      "provisional_story_points": 8,
+      "delivery_target_files": [
+        "templates/local-automation-runtime/atlas_local_dev.py",
+        "templates/local-automation-runtime/atlas_daily_service.py",
+        "templates/local-automation-runtime/tests/test_atlas_local_dev.py"
+      ],
+      "coding_complexity_flags": [
+        "cross_component_protocol"
+      ],
+      "required_gates": [
+        "G-NATIVE"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D04-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D05",
+      "owner_container": "WS3",
+      "title": "Installed bridge",
+      "depends_on": [
+        "MCP-DAILY-D03",
+        "MCP-DAILY-D04"
+      ],
+      "provisional_story_points": 8,
+      "delivery_target_files": [
+        "templates/local-automation-runtime/atlas_daily_bridge.py",
+        "templates/local-automation-runtime/tests/test_atlas_daily_bridge.py"
+      ],
+      "coding_complexity_flags": [
+        "cross_component_protocol",
+        "security_or_authority"
+      ],
+      "required_gates": [
+        "G-BRIDGE"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D05-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D06",
+      "owner_container": "WS4",
+      "title": "MCP service and byte capture",
+      "depends_on": [
+        "MCP-DAILY-D03",
+        "MCP-DAILY-D05"
+      ],
+      "provisional_story_points": 8,
+      "delivery_target_files": [
+        "scripts/harness_daily.py",
+        "tests/test_harness_daily.py"
+      ],
+      "coding_complexity_flags": [
+        "cross_component_protocol",
+        "security_or_authority"
+      ],
+      "required_gates": [
+        "G-DAILY"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D06-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D07",
+      "owner_container": "WS4",
+      "title": "Evidence and pagination",
+      "depends_on": [
+        "MCP-DAILY-D06"
+      ],
+      "provisional_story_points": 8,
+      "delivery_target_files": [
+        "scripts/harness_daily.py",
+        "tests/test_harness_daily.py"
+      ],
+      "coding_complexity_flags": [
+        "security_or_authority"
+      ],
+      "required_gates": [
+        "G-DAILY"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D07-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D08",
+      "owner_container": "WS4",
+      "title": "Five-tool MCP registration",
+      "depends_on": [
+        "MCP-DAILY-D06",
+        "MCP-DAILY-D07"
+      ],
+      "provisional_story_points": 5,
+      "delivery_target_files": [
+        "scripts/harness_mcp.py",
+        "scripts/harness_service.py",
+        "tests/test_harness_mcp.py"
+      ],
+      "coding_complexity_flags": [
+        "cross_component_protocol",
+        "security_or_authority"
+      ],
+      "required_gates": [
+        "G-MCP"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D08-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D09",
+      "owner_container": "WS6",
+      "title": "Independent integration evidence",
+      "depends_on": [
+        "MCP-DAILY-D05",
+        "MCP-DAILY-D06",
+        "MCP-DAILY-D07",
+        "MCP-DAILY-D08"
+      ],
+      "provisional_story_points": 8,
+      "delivery_target_files": [
+        "tests/test_harness_daily_integration.py"
+      ],
+      "coding_complexity_flags": [
+        "cross_component_protocol"
+      ],
+      "required_gates": [
+        "G-INTEGRATION"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D09-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D10",
+      "owner_container": "WS5",
+      "title": "Upgrade integrity tests",
+      "depends_on": [
+        "MCP-DAILY-D05",
+        "MCP-DAILY-D08"
+      ],
+      "provisional_story_points": 5,
+      "delivery_target_files": [
+        "tests/test_sync_runtime_template.py"
+      ],
+      "coding_complexity_flags": [
+        "security_or_authority"
+      ],
+      "required_gates": [
+        "G-UPGRADE"
+      ],
+      "status": "decomposition-only",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D10-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D11",
+      "owner_container": "WS5",
+      "title": "Verifier and release guidance",
+      "depends_on": [
+        "MCP-DAILY-D02",
+        "MCP-DAILY-D08",
+        "MCP-DAILY-D09",
+        "MCP-DAILY-D10"
+      ],
+      "provisional_story_points": 5,
+      "delivery_target_files": [
+        "scripts/verify_repo.py",
+        "docs/daily-development.md",
+        "docs/harness-interface.md",
+        "skills/automation-harness/SKILL.md",
+        ".codex/skills/automation-harness/SKILL.md"
+      ],
+      "coding_complexity_flags": [],
+      "required_gates": [
+        "G-REPO"
+      ],
+      "status": "split-required",
+      "admitted": false,
+      "future_decomposition_output": "plans/support/full-workflow-harness-mcp/specs/D11-admission.spec.md"
+    },
+    {
+      "id": "MCP-DAILY-D12",
+      "owner_container": "WS6",
+      "title": "Actual goal acceptance and installed qualification",
+      "depends_on": [
+        "MCP-DAILY-D01",
+        "MCP-DAILY-D02",
+        "MCP-DAILY-D03",
+        "MCP-DAILY-D04",
+        "MCP-DAILY-D05",
+        "MCP-DAILY-D06",
+        "MCP-DAILY-D07",
+        "MCP-DAILY-D08",
+        "MCP-DAILY-D09",
+        "MCP-DAILY-D10",
+        "MCP-DAILY-D11"
+      ],
+      "provisional_story_points": null,
+      "delivery_target_files": [],
+      "coding_complexity_flags": [],
+      "required_gates": [
+        "G-GOAL",
+        "G-LIVE"
+      ],
+      "status": "manual-blocked",
+      "admitted": false,
+      "future_decomposition_output": null
+    }
+  ]
+}

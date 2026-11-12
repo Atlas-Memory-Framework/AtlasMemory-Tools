@@ -1,0 +1,43 @@
+{
+  "plan": "plans/full-workflow-harness-mcp.plan.md",
+  "results": [
+    {
+      "gate": "IntentModelComplete",
+      "status": "Pass",
+      "messages": []
+    },
+    {
+      "gate": "ProblemDefinitionComplete",
+      "status": "Pass",
+      "messages": []
+    },
+    {
+      "gate": "PlanReadiness",
+      "status": "Pass",
+      "messages": []
+    },
+    {
+      "gate": "AutomationReadiness",
+      "status": "N/A",
+      "messages": []
+    },
+    {
+      "gate": "PlanningReviewsComplete",
+      "status": "Pass",
+      "messages": []
+    },
+    {
+      "gate": "PlanStateSanity",
+      "status": "Pass",
+      "messages": []
+    }
+  ],
+  "reviewed_plan_hash": "sha256:fc89e2dafd14c8b7a87c83531c76a15b476882fe6ae7d6a8e0f941aa84f3be5c",
+  "inventory_hash_mismatches": [],
+  "inventory_counts": {
+    "source_files": 93,
+    "entrypoints": 61,
+    "operations": 139
+  },
+  "whitespace_issues": []
+}

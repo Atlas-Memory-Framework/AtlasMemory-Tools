@@ -500,6 +500,44 @@ assert p.claim(p.project(i)) is not None
             paths[2].write_bytes(raw)
             self.refused(*self.import_args(paths))
 
+    def test_large_generated_reservation_import_and_replay_keep_input_limits(self):
+        _, revision, reservation = self.prepared()
+        # Actual prior role results grow the next native packet beyond 64 KiB.
+        for _ in range(5):
+            paths = self.import_files(reservation)
+            if paths[0].stat().st_size > cli.MAX_INPUT:
+                original_reservation = paths[0].read_bytes()
+                paths[0].write_bytes(original_reservation.ljust(
+                    cli.MAX_RESERVATION_INPUT + 1, b" "))
+                self.refused(*self.import_args(paths), code="invalid_input")
+                paths[0].write_bytes(original_reservation)
+                original_receipt = paths[1].read_bytes()
+                paths[1].write_bytes(original_receipt.ljust(cli.MAX_INPUT + 1, b" "))
+                self.refused(*self.import_args(paths), code="invalid_input")
+                paths[1].write_bytes(original_receipt)
+                original_result = paths[2].read_bytes()
+                paths[2].write_bytes(original_result.ljust(cli.MAX_INPUT + 1, b" "))
+                self.refused(*self.import_args(paths), code="invalid_input")
+                paths[2].write_bytes(original_result)
+                changed = copy.deepcopy(reservation)
+                changed["packet"]["label"] = "tampered large packet"
+                self.write_json("reservation.json", changed)
+                self.refused(*self.import_args(paths), code="reservation")
+                paths[0].write_bytes(original_reservation)
+                accepted = self.ok(*self.import_args(paths))
+                self.assertEqual(accepted["status"], "accepted")
+                self.assertEqual(Path(accepted["original_result_path"]).read_bytes(),
+                                 original_result)
+                self.assertEqual(self.ok(*self.import_args(paths))["status"], "duplicate")
+                self.assertEqual(paths[0].read_bytes(), original_reservation)
+                return
+            payload = json.loads(paths[2].read_text())
+            payload["role_results"][0]["notes"] = "retained role evidence " + "x" * 40000
+            paths[2].write_text(json.dumps(payload))
+            self.assertEqual(self.ok(*self.import_args(paths))["status"], "accepted")
+            reservation = self.ok("prepare", "--id", "WI-CLI", "--revision", revision)
+        self.fail("native consumed results did not generate a large reservation")
+
     def test_live_return_refuses_advanced_head_without_import_writes(self):
         checkout, revision, reservation = self.prepared()
         paths = self.import_files(reservation)
@@ -598,6 +636,19 @@ assert p.claim(p.project(i)) is not None
             with self.assertRaises(cli.CLIError):
                 cli.bounded_read("growing-file.json")
         stream.read.assert_called_once_with(65537)
+
+    def test_reservation_read_bounds_actual_stream_before_parse(self):
+        stream = mock.MagicMock()
+        stream.__enter__.return_value = stream
+        stream.fileno.return_value = 99
+        stream.read.return_value = b"x" * (cli.MAX_RESERVATION_INPUT + 1)
+        with mock.patch.object(cli.os, "open", return_value=99), \
+             mock.patch.object(cli.os, "fdopen", return_value=stream), \
+             mock.patch.object(cli.os, "fstat", return_value=mock.Mock(st_mode=0o100644)):
+            with self.assertRaises(cli.CLIError):
+                cli.load_object("growing-reservation.json",
+                                max_bytes=cli.MAX_RESERVATION_INPUT)
+        stream.read.assert_called_once_with(cli.MAX_RESERVATION_INPUT + 1)
 
     def test_missing_explicit_runtime_cannot_fall_back_to_source_modules(self):
         (self.runtime / "atlas_local_sizing.py").unlink()

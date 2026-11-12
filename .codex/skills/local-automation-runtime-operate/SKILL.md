@@ -1,8 +1,8 @@
 ---
-# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:c014e18613aa52df43e0606ee89bfa93a2c32e75903196079118ae0138401fe8
+# atlas-tools-generated: source=skills/local-automation-runtime-operate/SKILL.md manifest=atlas-tools.v1 checksum=sha256:82165333b47b845db05da4df82c01102ad2d55f14ea032f8700038ecd7be5d62
 # atlas-tools-generated-end
 name: local-automation-runtime-operate
-description: "Operate the local automation runtime: queue issues, run bounded or unattended cycles, long shift supervision, review/validate/repair/finalize PRs, and summarize outcomes. Use when running issue-to-PR automation after setup."
+description: "Operate an installed local automation runtime for local work queues or issue-to-PR campaigns: bounded cycles, continuous outer supervision, recovery, validation, independent review and handoff. Use after runtime selection and setup; unattended operation requires qualification of that exact lane."
 ---
 
 # Local Automation Runtime Operate
@@ -27,12 +27,68 @@ must verify the exact host and route before dispatch. This supervised lane grant
 no unattended or merge authority. Do not continue into the general issue-to-PR
 flow below automatically; it applies only to a separately selected, qualified lane.
 
+## Continuous campaign operating mode
+
+When the user asks to keep operating a campaign, use the selected runtime as the
+outer supervisor: reconcile -> select eligible work -> reserve -> dispatch ->
+observe -> ingest original evidence -> validate/review -> accept or route -> repeat.
+Task or milestone completion returns to work selection within the admitted window;
+it is not by itself a reason to end the campaign turn or request acknowledgment.
+For loop design and qualification, use `continuous-agent-loop` and
+`agent-harness-evals` where available.
+
+Name the actual execution mode: supervised in-app, scheduled bounded runs, or a
+qualified durable supervisor. A chat, subagent, accounting lease or recurring
+schedule alone does not prove continuous runtime operation. Verify the selected
+queue/runtime/owner, installed integrity, exact execution route, recovery,
+nonoverlap and resource enforcement before promoting to a longer or unattended
+mode. A GitHub shift command is not a substitute for an unrelated local lane.
+
+- Recover an owned pending invocation through its original identity before new
+  dispatch. Another controller's lease prevents competing mutation; age alone
+  does not authorize takeover. Observe an already running supervisor rather than
+  starting a duplicate on each scheduled wake.
+- Use the existing qualified launcher and its bounded continuous mode only when
+  the selected lane actually supports them. Preserve original parent deadlines,
+  consumed reservations, phase and wake/shift caps, stable owner and stop gates.
+  Repeated leases, child budgets, waits and restarts must not renew the envelope
+  or bypass a shorter supervision limit. Change cadence or execution mode only
+  through supported controls under applicable authority, with readback.
+- After each accepted item, continue immediately to eligible authorized work
+  while the full next allowance and custody/cleanup fit. Preserve independent
+  review and all complexity/authority flags. A dependent lane failure blocks that
+  action; continue independent useful work. Do not treat an unchanged scope/hash
+  as requiring a new human approval.
+- When continuity is not qualified, identify the exact missing gate and resume
+  condition. Prepare a separately bounded qualification task only within the
+  existing repair authority and limits; do not repeat a closed failed wrapper
+  tranche. Continue permitted direct work and describe it honestly as supervised.
+  If the selected limits cannot support the requested continuous interval,
+  disclose that conflict rather than silently extending them.
+- Measure progress against connected parent acceptance demonstrations. Reuse
+  valid pinned evidence; avoid repeatedly re-admitting unchanged contracts or
+  producing further scaffolding without advancing a dependency. Replan when
+  setup/review/repair overhead consumes the useful execution allowance.
+- End intake for a genuine applicable blocker, unknown invocation outcome,
+  missing authority, exhausted admitted window/envelope, user stop or accepted
+  campaign completion. Distinguish a task stop from a campaign stop. An empty
+  eligible queue needs a concrete dependency/decision, not a generic report.
+
+At exit record the actual supervisor/invocation identity and running/terminal state,
+accepted progress toward the parent outcome, remaining original limits, precise
+stop reason and supported resume route. Report accepted milestones as requested
+without turning them into acknowledgment gates. Notification policy follows the
+user's intent; routine unchanged heartbeats need not create inbox noise.
+
 ## Purpose
 
-When the `atlasmemory_tools` MCP server is available, start with
-`harness_discover` and `harness_inspect` to select the registered runtime and
-establish its operating picture. The commands below remain the provider-level
-operations; do not reconstruct runtime location from memory.
+When the `atlasmemory_tools` MCP server is available, use `harness_discover` to
+compare registered capabilities with the existing explicit runtime selection.
+Inspect a matching selected registered runtime with `harness_inspect`. An
+unrelated registered default must not replace a selected local lane; when that
+lane is not registered, retain its explicit selection and use its supported local
+status route. The commands below remain provider-level operations; do not
+reconstruct runtime location from memory.
 
 Keep agent coordination in local queues and artifacts. The MCP GitHub cycle
 uses `--remote-comments local`. Direct legacy commands retain their old default;
@@ -40,7 +96,7 @@ select local policy explicitly for new automation. Use `cloud-review` only for
 deliberately selected PR-facing summaries, never as worker-to-worker messaging.
 
 Run the local GitHub issue-to-PR lane with explicit bounds, review gates, validation, repair, finalization, and summaries.
-This skill owns operation of the `atlas-agent-shift` terminal program; there is no separate shift skill. The program is the durable supervisor wrapper, while this skill defines when and how an operator may use it.
+For the qualified GitHub lane below, this skill owns operation of `atlas-agent-shift`; there is no separate shift skill. Other selected lanes must use their own actually supported supervisor route.
 Use `repos.txt` to add target repos; use another runtime only for isolation, secrets separation, or intentional concurrent lanes.
 Run these commands from an installed runtime directory. Do not operate from `templates/local-automation-runtime/`
 inside the tools repository; that path is source material and direct execution will create runtime state in the
@@ -91,8 +147,8 @@ template tree.
 ## Guardrails
 
 - Keep cycles bounded with `--cycles`, `--dispatch-max-per-repo`, and per-stage repair/review/validation max and concurrency flags.
-- For multi-hour operation, use `atlas-agent-shift` instead of treating a Codex chat or subagent as the durable supervisor.
-- Do not start a long shift until one real item has passed the full canary. Stop after two consecutive no-progress cycles, the same blocker twice without new evidence, more than one repair of the same item, or any stale/nonterminal supervisor state after reconciliation.
+- For qualified multi-hour GitHub operation, use `atlas-agent-shift`. Other lanes require their selected supported supervisor; a Codex chat or subagent is not a durable substitute.
+- Do not start a long shift until one real item has passed the full canary. Stop new dispatch after two consecutive no-progress cycles, the same blocker twice without new evidence, more than one repair of the same item, or stale, unknown or unreconciled supervisor custody after reconciliation. A healthy known running supervisor is expected: observe it without a competing launch.
 - Stop when harness repair consumes more effort than the remaining direct task path. Preserve the candidate and route a direct supervised takeover instead of automatically refreezing and relaunching.
 - Preserve exact-subject approvals where authority requires them. Do not ask again for an unchanged material decision merely because a wrapper, serialization, or internal hash changed without changing the effect envelope.
 - Treat `Open dependencies:` and `Manual gates remaining:` as the runtime dispatch contract; Project fields are advisory unless they match the issue body.
@@ -104,7 +160,7 @@ template tree.
 ## Subagents
 
 - Delegate bounded side tasks only: inspect one PR, classify one log set, draft one repair plan, or review one handoff/status file.
-- Do not delegate the runtime control loop. `atlas-agent-shift` owns the long-running loop, lock, heartbeat, and handoff.
+- Do not delegate the runtime control loop. The selected qualified supervisor owns its long-running loop, lock, heartbeat and handoff; `atlas-agent-shift` supplies these for the GitHub lane.
 - Require subagents to return changed files, commands run, validation results, blockers, and the next safe command.
 - If a subagent works across more than one runtime cycle, require a handoff note before using its result.
 

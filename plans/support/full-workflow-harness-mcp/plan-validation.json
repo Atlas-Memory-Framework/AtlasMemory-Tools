@@ -1,0 +1,65 @@
+{
+  "plan": "plans/full-workflow-harness-mcp.plan.md",
+  "results": [
+    {
+      "gate": "IntentModelComplete",
+      "status": "Pass",
+      "messages": []
+    },
+    {
+      "gate": "ProblemDefinitionComplete",
+      "status": "Pass",
+      "messages": []
+    },
+    {
+      "gate": "PlanReadiness",
+      "status": "Pass",
+      "messages": []
+    },
+    {
+      "gate": "AutomationReadiness",
+      "status": "N/A",
+      "messages": []
+    },
+    {
+      "gate": "PlanningReviewsComplete",
+      "status": "Fail",
+      "messages": [
+        "Zero-Context Review: ReviewedPlanHash mismatch: expected sha256:5f301965a939f81074d8dbff08f5484ece1408ed5f63fc8647c9f30a4b950e7b.",
+        "Implementer Readiness Review: ReviewedPlanHash mismatch: expected sha256:5f301965a939f81074d8dbff08f5484ece1408ed5f63fc8647c9f30a4b950e7b.",
+        "Security/Privacy Review: ReviewedPlanHash mismatch: expected sha256:5f301965a939f81074d8dbff08f5484ece1408ed5f63fc8647c9f30a4b950e7b.",
+        "Dynamic Specialist Review Roster: ReviewedPlanHash mismatch: expected sha256:5f301965a939f81074d8dbff08f5484ece1408ed5f63fc8647c9f30a4b950e7b.",
+        "Human Readability Review: ReviewedPlanHash mismatch: expected sha256:5f301965a939f81074d8dbff08f5484ece1408ed5f63fc8647c9f30a4b950e7b."
+      ]
+    },
+    {
+      "gate": "PlanStateSanity",
+      "status": "Pass",
+      "messages": []
+    }
+  ],
+  "validator_exit_code": 1,
+  "reviewed_plan_hash": "sha256:5f301965a939f81074d8dbff08f5484ece1408ed5f63fc8647c9f30a4b950e7b",
+  "repair_status": "author-repaired; independent final review and readback pending",
+  "harness_admission": "blocked",
+  "authorization": "withheld_by_user",
+  "runtime_selection": null,
+  "source_refusal_probes": {
+    "fixture_only": true,
+    "cross_component_protocol": "decomposition_required",
+    "five_file_scope": "split_required",
+    "source_planning_template_goal_gate_count": 0
+  },
+  "delivery_validation": {
+    "packages": 12,
+    "story_points": 68,
+    "dependencies_acyclic": true,
+    "all_dependencies_resolve": true,
+    "admitted_by_this_session": 0
+  },
+  "expected_failure": "Prior design-review hashes are stale after material repair; mechanical PlanReadiness Pass is not semantic admission readiness.",
+  "snapshot_before_repair": "/tmp/atlas-mcp-plan-repair-wb8d3_1j/before.plan.md",
+  "generated_at": "2026-11-10T23:15:53.651894+00:00",
+  "whitespace_issues": [],
+  "source_inventory_hash_mismatches": []
+}

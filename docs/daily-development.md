@@ -98,7 +98,7 @@ daily status
 
 A changed context requires a fresh sizing review/hash. An existing operator task using `local-luna-unit-v1` remains compatible: its fixed route is Luna/medium for implementation/validation and Sol/high for review. Its contract omits the v2 model/review fields. Neither policy permits unresolved complexity to become coding work silently. Resolve questions, split oversized scope, or obtain an explicit new sizing decision before dispatch. A reviewed stronger model does not expand write/effect authority.
 
-`add` checks substantive goal/criteria, full scheduler SHA, absolute checkout path, qualification for the selected template roles and current scheduler readiness, then appends one ready item with one creation event under the store lock. Duplicate IDs and caller-owned runtime state are refused. Input files must be strict JSON objects of at most 65,536 bytes; duplicate keys and nonfinite numbers are refused. Errors are JSON with exit code 2.
+`add` checks substantive goal/criteria, full scheduler SHA, absolute checkout path, qualification for the selected template roles and current scheduler readiness, then appends one ready item with one creation event under the store lock. Duplicate IDs and caller-owned runtime state are refused. Task intake, host receipts and worker results must be strict JSON objects of at most 65,536 bytes. The complete prepared reservation may be up to 1,048,576 bytes because it includes consumed prior role results. Both limits apply to the actual opened stream before parsing, including accepted replay; duplicate keys and nonfinite numbers are refused. Errors are JSON with exit code 2.
 
 `status` is read-only: it does not create a directory, queue or lock, claim work or reconcile state. It reports scheduler state/readiness/blockers, pending handoff ID, role, owner and next action. An uninitialized queue is an observation, not an error.
 
@@ -153,6 +153,20 @@ If formatting is refused, preserve the failed original file and refusal evidence
 If status becomes ready for another role, repeat prepare/host dispatch/import using a separate saved reservation, receipt and original result for that invocation. Implementation completion alone is not goal acceptance: validation, independent review, semantic acceptance and rollup must run through the maintained lifecycle. A blocked role requires explicit operator investigation; this CLI has no force, cancellation, requeue or merge command.
 
 ## Stop and recover
+
+If an older adapter refuses its own reservation because it exceeds 65,536 bytes,
+preserve the complete reservation, host receipt, result and original runtime.
+After testing and reviewing the reservation-size compatibility fix, install the
+corrected `atlas_local_dev.py` as a separate versioned adapter entry outside the
+source template. Invoke that installed entry with the **original** explicit
+`--runtime-dir`, state, owner and persona flags to recover the same import. Its
+maintained API modules and packet bindings still come from the pinned runtime;
+do not copy new workflow/policy modules, rewrite source provenance markers or
+normalize the reservation/result. Record source/diff and adapter hashes, tests,
+installed path and exact command in the recovery evidence. This narrow adapter
+replacement changes only the reservation read allowance; it does not qualify a
+new runtime or renew any campaign authority. A reservation above the new 1 MiB
+bound remains refused. Future standalone runtime upgrades remain separate.
 
 Stop by making no further prepare, dispatch or import calls. Preserve queue/jobs, pinned source/runtime/persona files, original reservation, host invocation ID, observed receipt and result bytes. If a claim exists but no reservation was persisted, the same owner can resume prepare. If a reservation exists, reexport it rather than making another one.
 
